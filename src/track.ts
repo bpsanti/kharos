@@ -89,7 +89,7 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
   s.closed_turns = events.filter((e) => e.kind === 'result').length;
   const marks = latestMarks(events);
   if (marks.done) {
-    s.result = { ...s.result, status: marks.done.status, pr: marks.done.pr, branch: marks.done.branch, summary: marks.done.summary };
+    s.result = { ...s.result, status: marks.done.status, pr: marks.done.pr, branch: marks.done.branch, summary: marks.done.summary, sheet: marks.done.sheet };
   }
   s.result.question = marks.question;
 

@@ -46,6 +46,7 @@ export interface Result {
   branch: string | null;
   summary: string | null;
   question: string | null;
+  sheet?: string | null;
 }
 
 export interface Session {

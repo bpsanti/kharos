@@ -68,6 +68,7 @@ test('marks: read the end mark and the question, and refuse a cut or placeholder
     pr: 'https://github.com/example/demo/pull/7',
     branch: 'fix',
     summary: 'done',
+    sheet: null,
   });
   assert.equal(readDoneMark('NUVEM-DONE {"status":"ok|failed","pr":"<url or null>"}'), null);
   assert.equal(readDoneMark('NUVEM-DONE {"status":"ok","pr":null,"summ… [+40 chars]'), null);

@@ -37,6 +37,8 @@ export interface NuvemEvent {
   question?: string;
   /** Only on session.finished: the summary the session wrote, cleaned and cut. */
   summary?: string;
+  /** Only on session.finished of a launch reported to a dedicated firstmate task. */
+  sheet?: string;
 }
 
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
@@ -74,6 +76,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   };
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
+  if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, 600);
   return ev;
 }
 

@@ -138,6 +138,8 @@ export interface DoneMark {
   pr: string | null;
   branch: string | null;
   summary: string | null;
+  /** Only asked of launches reported to a dedicated firstmate task. */
+  sheet: string | null;
 }
 
 export function readDoneMark(text: string): DoneMark | null {
@@ -151,6 +153,7 @@ export function readDoneMark(text: string): DoneMark | null {
     pr: pr && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr) ? pr : null,
     branch: nullableString(m.branch, 200),
     summary: nullableString(m.summary, 200),
+    sheet: nullableString(m.sheet, 600),
   };
 }
 

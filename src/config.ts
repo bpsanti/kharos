@@ -157,7 +157,7 @@ export function parseOutput(v: unknown, where: string): OutputConfig {
     case 'file':
       return { type, path: str(o.path, `${where}.path`), events };
     case 'slack': {
-      const name = str(o.webhook_env, `${where}.webhook_env`);
+      const name = o.webhook_env === undefined ? 'CLAUDE_PLUGIN_OPTION_SLACK_WEBHOOK' : str(o.webhook_env, `${where}.webhook_env`);
       if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) throw new ConfigError(`${where}.webhook_env must name an environment variable; the URL itself never goes in the file`);
       return { type, webhook_env: name, events };
     }
