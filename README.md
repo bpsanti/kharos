@@ -93,6 +93,12 @@ A closed turn is never taken for the end: only the session's own `KHAROS-DONE` m
 `kharos health` exits with 1 when sessions are open and the watcher stopped, for launchd, cron or any other check.
 See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
 
+## Outputs
+
+Events go to the outputs of the configuration: desktop notification, a JSON-lines file, Slack (the webhook URL is kept in the keychain as the plugin's `slack_webhook` option), any command, and the firstmate adapter.
+By default you get a notification when a session needs you or ends, and every event in `~/.local/state/kharos/events.jsonl`.
+See [docs/outputs.md](docs/outputs.md).
+
 ## Files
 
 | Path | Content |

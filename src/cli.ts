@@ -4,13 +4,17 @@
 import fs from 'node:fs';
 import { appendLine, StateError } from './fsutil.ts';
 import * as cmd from './commands.ts';
-import { ConfigError, loadConfig, normalizeRepo } from './config.ts';
+import { ConfigError, loadConfig, normalizeRepo, type OutputConfig } from './config.ts';
 import { formatChecks, realDeps, runDoctor } from './doctor.ts';
 import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, prepare, readInstruction } from './launch.ts';
 import { resolvePaths } from './paths.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
+import { readOutbox } from './events.ts';
+import { deliver, deliveryLine } from './outputs/index.ts';
+import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
+import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 
 const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors']);
@@ -78,6 +82,7 @@ function need(args: Args, i: number, what: string): string {
 
 const USAGE = `usage: kharos <command>
   prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--session id]   (instruction on stdin)
+          [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id
   send <id>   (text on stdin) | result <id> | close <id>
   doctor [--profile p] [--no-remote-tool] | environments --session id
@@ -86,7 +91,7 @@ const USAGE = `usage: kharos <command>
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
-export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): number {
+export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
   const paths = resolvePaths(env);
   const now = Date.now();
   const [command, ...rest] = argv;
@@ -98,7 +103,10 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
     const out = (text: string) => process.stdout.write(text.endsWith('\n') ? text : text + '\n');
     switch (command) {
       case 'prepare': {
+        const extra = launchOutputs(args);
         const s = prepare(paths, {
+          extra_outputs: extra.outputs,
+          footer_lines: extra.footer,
           instruction: readInstruction(flag(args, 'file'), stdin),
           ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
           ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
@@ -184,9 +192,13 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
         out(args.flags.json === true ? JSON.stringify(r, null, 2) : formatReads(r));
         return 0;
       }
-      case 'pass-end':
-        out(passEnd(paths, { watcher: flag(args, 'watcher') ?? null, now }));
+      case 'pass-end': {
+        const report = await deliver({ paths, env, now, platform: process.platform, inHook: false });
+        const line = passEnd(paths, { watcher: flag(args, 'watcher') ?? null, now });
+        const extraLine = deliveryLine(report);
+        out(extraLine ? `${line}; ${extraLine}` : line);
         return 0;
+      }
       case 'health': {
         const h = health(paths, now);
         out(h.line);
@@ -218,6 +230,12 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
   }
 }
 
+/** How long delivery may run inside each hook that delivers, well inside its timeout in hooks.json. */
+const DELIVERY_BUDGET_MS: Record<string, number> = {
+  'post-tool-use': 20_000,
+  'post-tool-use-failure': 10_000,
+};
+
 const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unknown> | null> = {
   'pre-tool-use': preToolUse,
   'post-tool-use': postToolUse,
@@ -230,7 +248,7 @@ const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unkno
  * The pre-tool-use handler denies a kharos launch step itself when kharos state cannot be read.
  * An unknown event exits 1, a non-blocking error, so a hooks.json that names a missing handler shows up.
  */
-export function runHook(event: string, ctx: Ctx, stdin: () => string = readStdin): number {
+export async function runHook(event: string, ctx: Ctx, stdin: () => string = readStdin): Promise<number> {
   const handler = HOOKS[event];
   if (!handler) {
     process.stderr.write(`kharos: unknown hook event "${event}"\n`);
@@ -240,7 +258,15 @@ export function runHook(event: string, ctx: Ctx, stdin: () => string = readStdin
     const raw = stdin();
     if (raw.trim() === '') return 0;
     const out = handler(ctx, JSON.parse(raw) as HookInput);
-    if (out) process.stdout.write(JSON.stringify(out));
+    if (out) {
+      const text = JSON.stringify(out);
+      await new Promise<void>((resolve) => process.stdout.write(text, () => resolve()));
+    }
+    // Events go out right away from the hook, where the plugin's sensitive options are set.
+    const budget = DELIVERY_BUDGET_MS[event];
+    if (budget !== undefined && readOutbox(ctx.paths).length) {
+      await deliver({ paths: ctx.paths, env: ctx.env, now: ctx.now, platform: process.platform, inHook: true, deadline: Date.now() + (ctx.deliveryBudgetMs ?? budget) });
+    }
   } catch (err) {
     try {
       appendLine(`${ctx.paths.state}/hook-errors.log`, `${new Date(ctx.now).toISOString()} ${event}: ${(err as Error).stack ?? String(err)}`);
@@ -251,6 +277,22 @@ export function runHook(event: string, ctx: Ctx, stdin: () => string = readStdin
   return 0;
 }
 
+/** The outputs given to one launch on the command line: today, the firstmate adapter. */
+export function launchOutputs(args: Args): { outputs: OutputConfig[]; footer: string[] } {
+  const kind = flag(args, 'output');
+  if (kind === undefined) return { outputs: [], footer: [] };
+  if (kind !== 'firstmate') throw new cmd.CommandError('--output takes only "firstmate"; other outputs go in the configuration');
+  const status = flag(args, 'status-file');
+  const home = flag(args, 'firstmate-home');
+  if (!status || !home) throw new cmd.CommandError('--output firstmate needs --status-file <home>/state/<task>.status and --firstmate-home <home>');
+  const mode = flag(args, 'firstmate-mode') ?? 'shared';
+  if (mode !== 'shared' && mode !== 'dedicated') throw new cmd.CommandError('--firstmate-mode is shared or dedicated');
+  const target = { status_file: path.resolve(status), home: path.resolve(home), mode } as const;
+  const problem = checkTarget(target);
+  if (problem) throw new cmd.CommandError(problem);
+  return { outputs: [{ type: 'firstmate', ...target, events: ['*'] }], footer: mode === 'dedicated' ? [DEDICATED_FOOTER] : [] };
+}
+
 if (process.argv[1]?.endsWith('/src/cli.ts')) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await main(process.argv.slice(2));
 }

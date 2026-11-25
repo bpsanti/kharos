@@ -21,7 +21,7 @@ export function parkedRunAt(now: number): string {
   return d.toISOString().replace('.000Z', 'Z');
 }
 
-export function footer(): string {
+export function footer(extraLines: readonly string[] = []): string {
   return [
     '',
     '---',
@@ -31,6 +31,7 @@ export function footer(): string {
     `- If you need an answer to go on, send one last message that contains only this line, then stop and wait for the reply:`,
     `${QUESTION_MARK} {"question":"<up to 300 characters>"}`,
     '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.',
+    ...extraLines,
   ].join('\n');
 }
 
@@ -40,6 +41,8 @@ export interface BodyInput {
   instruction: string;
   profile: Profile;
   model: string;
+  /** Extra protocol lines, such as the session sheet a dedicated firstmate task needs. */
+  footerLines?: readonly string[];
   uuid?: string;
   now: number;
 }
@@ -65,7 +68,7 @@ export function buildCreateBody(input: BodyInput): Record<string, unknown> {
               session_id: '',
               type: 'user',
               parent_tool_use_id: null,
-              message: { role: 'user', content: input.instruction + '\n' + footer() },
+              message: { role: 'user', content: input.instruction + '\n' + footer(input.footerLines ?? []) },
             },
           },
         ],
@@ -134,11 +137,20 @@ function gitBranch(b: string | null): string | null {
   return b;
 }
 
+/** The longest session sheet kept: a longer one is treated as missing, never cut, since firstmate parses it. */
+export const SHEET_MAX = 600;
+
 export interface DoneMark {
   status: 'ok' | 'failed';
   pr: string | null;
   branch: string | null;
   summary: string | null;
+  /** Only asked of launches reported to a dedicated firstmate task. */
+  sheet: string | null;
+}
+
+function wholeSheet(sheet: string | null): string | null {
+  return sheet !== null && sheet.length <= SHEET_MAX ? sheet : null;
 }
 
 export function readDoneMark(text: string): DoneMark | null {
@@ -152,6 +164,7 @@ export function readDoneMark(text: string): DoneMark | null {
     pr: pr && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr) ? pr : null,
     branch: gitBranch(nullableString(m.branch, 200)),
     summary: nullableString(m.summary, 200),
+    sheet: wholeSheet(nullableString(m.sheet, Infinity)),
   };
 }
 

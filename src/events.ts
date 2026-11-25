@@ -2,7 +2,7 @@
 // while it lasts, and once when the session goes back to normal; delivery is at least once, and the
 // event id lets a receiver drop a repeat.
 
-import { clean } from './body.ts';
+import { clean, SHEET_MAX } from './body.ts';
 import type { NoticeKind, Verdict } from './classify.ts';
 import { repoSlug } from './config.ts';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
@@ -37,6 +37,8 @@ export interface KharosEvent {
   question?: string;
   /** Only on session.finished: the summary the session wrote, cleaned and cut. */
   summary?: string;
+  /** Only on session.finished of a launch reported to a dedicated firstmate task. */
+  sheet?: string;
 }
 
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
@@ -74,6 +76,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   };
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
+  if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
   return ev;
 }
 
@@ -117,7 +120,7 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
 
 export interface OutboxItem {
   event: KharosEvent;
-  /** Extra outputs given to this launch only; the configured outputs are read at delivery. */
+  /** Failed tries so far, per target key. */
   attempts: Record<string, number>;
   done: string[];
 }

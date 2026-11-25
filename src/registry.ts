@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
+import type { OutputConfig } from './config.ts';
 import type { Paths } from './paths.ts';
 
 /** Where the launch is. Each step is written before the call that depends on it. */
@@ -45,6 +46,7 @@ export interface Result {
   branch: string | null;
   summary: string | null;
   question: string | null;
+  sheet?: string | null;
 }
 
 export interface Session {
@@ -84,6 +86,8 @@ export interface Session {
   pending_cursor: string | null;
   /** Some read reached the start of the session, so a missing init line means it is still provisioning. */
   seen_start: boolean;
+  /** Outputs given to this launch only, such as the firstmate adapter. */
+  extra_outputs: OutputConfig[];
   cursor_reads: number;
   closed_at: string | null;
   error: string | null;
