@@ -29,7 +29,7 @@ Any other destination is a `command`: nothing in the plugin needs to change.
 - An output that fails is tried again on the next delivery, five times at most; after that the event is set aside and `/kharos:list` says so.
 - Inside a hook, delivery has a time budget well inside the hook timeout (20 s after a call, 10 s after a failed call): each output is cut short at the end of the budget, and the outputs left over wait for the next delivery, without counting a failed try.
 - While the configuration cannot be read, every event stays queued and the delivery report names the error.
-- A `command` never receives the plugin's options (`CLAUDE_PLUGIN_OPTION_*`) in its environment.
+- No program kharos starts (a `command`, the notifier, the firstmate ledger script) receives the plugin's options (`CLAUDE_PLUGIN_OPTION_*`) in its environment.
 
 ## Slack
 
