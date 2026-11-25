@@ -299,7 +299,7 @@ test('hooks: a log page that cannot be stored never reaches the model', () => {
 });
 
 test('hooks: with unreadable or wrongly shaped kharos state, answers are hidden and a run is denied', () => {
-  for (const content of ['{"version": 1, "sessions": ', '{}', '[]', '{"version":1}', 'null']) {
+  for (const content of ['{"version": 1, "sessions": ', '{}', '[]', '{"version":1}', 'null', '{"version":1,"next_seq":2,"sessions":{"k-0001":null}}']) {
     const sb = sandbox();
     fs.mkdirSync(sb.paths.state, { recursive: true });
     fs.writeFileSync(sb.paths.registry, content);

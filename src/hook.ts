@@ -99,9 +99,8 @@ function recorded(ctx: Ctx, r: ReturnType<typeof readToolResponse>, id: string, 
  * that cannot be told, so the answer is hidden rather than passed with possible remote text.
  */
 function withRegistry(ctx: Ctx, r: ReturnType<typeof readToolResponse>, fn: (reg: Registry) => HookOutput): HookOutput {
-  let reg: Registry;
   try {
-    reg = loadRegistry(ctx.paths);
+    return fn(loadRegistry(ctx.paths));
   } catch (err) {
     return reshape(
       r.status,
@@ -109,7 +108,6 @@ function withRegistry(ctx: Ctx, r: ReturnType<typeof readToolResponse>, fn: (reg
       `kharos: kharos state could not be read (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). Repair or move that file; until then RemoteTrigger answers are hidden here.`,
     );
   }
-  return fn(reg);
 }
 
 export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {

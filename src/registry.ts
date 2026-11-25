@@ -101,8 +101,11 @@ export function loadRegistry(paths: Paths): Registry {
   if (reg === undefined) return empty();
   const r = reg as Partial<Registry> | null;
   const sessions = r?.sessions;
-  if (typeof r !== 'object' || r === null || Array.isArray(r) || typeof r.next_seq !== 'number' || typeof sessions !== 'object' || sessions === null || Array.isArray(sessions)) {
-    throw new Error(`kharos state could not be read: ${paths.registry} is not a kharos registry (it needs "next_seq" and "sessions")`);
+  if (
+    typeof r !== 'object' || r === null || Array.isArray(r) || typeof r.next_seq !== 'number' || typeof sessions !== 'object' || sessions === null || Array.isArray(sessions) ||
+    Object.values(sessions).some((s) => typeof s !== 'object' || s === null || Array.isArray(s))
+  ) {
+    throw new Error(`kharos state could not be read: ${paths.registry} is not a kharos registry (it needs "next_seq" and "sessions" of objects)`);
   }
   return r as Registry;
 }
