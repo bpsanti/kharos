@@ -1,7 +1,7 @@
 # claude-remote-agent-project
 
 `nuvem` is a plugin for Claude Code.
-It launches cloud sessions of Claude Code (claude.ai/code) from any terminal session, follows their progres, sends them messages mid-run, and tells you when one needs you, is stuck, or is done.
+It launches cloud sessions of Claude Code (claude.ai/code) from any terminal session, follows their progress, sends them messages mid-run, and tells you when one needs you, is stuck, or is done.
 
 It uses only official surfaces: the `RemoteTrigger` tool built into Claude Code and the unmodified `claude` binary.
 It never reads, stores, or relays your claude.ai login or any token.
