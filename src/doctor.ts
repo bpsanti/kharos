@@ -97,7 +97,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     else config = loaded.config;
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
-    add('fail', 'config', err.message, ['Fix the file, or run /kharos:setup to write a new profile.']);
+    add('fail', 'config', err.message, ['Fix or move that file, then run /kharos:setup.']);
   }
   if (!config) return checks;
   const state = <T>(name: string, file: string, read: () => T): T | null => {

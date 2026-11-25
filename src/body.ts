@@ -127,6 +127,13 @@ function nullableString(v: unknown, max: number): string | null {
   return t;
 }
 
+/** A branch name safe to show inside a git command: a plain ref name, or null. */
+function gitBranch(b: string | null): string | null {
+  if (!b || !/^[A-Za-z0-9._/-]{1,200}$/.test(b)) return null;
+  if (b.startsWith('-') || b.includes('..') || b.endsWith('.lock') || b.endsWith('/')) return null;
+  return b;
+}
+
 export interface DoneMark {
   status: 'ok' | 'failed';
   pr: string | null;
@@ -143,7 +150,7 @@ export function readDoneMark(text: string): DoneMark | null {
   return {
     status,
     pr: pr && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr) ? pr : null,
-    branch: nullableString(m.branch, 200),
+    branch: gitBranch(nullableString(m.branch, 200)),
     summary: nullableString(m.summary, 200),
   };
 }

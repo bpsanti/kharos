@@ -184,7 +184,7 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
   }
   if (r.branch) {
     lines.push(`branch: ${r.branch}`);
-    lines.push(`bring it here: git fetch origin ${r.branch} && git switch ${r.branch}`);
+    lines.push(`bring it here: git fetch origin '${r.branch}' && git switch '${r.branch}'`);
   }
   if (s.session_id) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
   if (s.url) lines.push(`session: ${s.url}`);
