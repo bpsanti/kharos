@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { launchOutputs, parseArgs } from '../src/cli.ts';
+import { launchOutputs, parseArgs, runHook } from '../src/cli.ts';
 import { enqueue, readOutbox, type KharosEvent } from '../src/events.ts';
 import { checkTarget, statusLine, writeStatus } from '../src/outputs/firstmate.ts';
-import { deliver, loadUndelivered, matches, MAX_ATTEMPTS, type SendCtx } from '../src/outputs/index.ts';
-import { sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
+import { preToolUse } from '../src/hook.ts';
+import { prepare } from '../src/launch.ts';
+import { deliver, deliveryLine, loadUndelivered, matches, MAX_ATTEMPTS, type SendCtx } from '../src/outputs/index.ts';
+import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 function event(over: Partial<KharosEvent> = {}): KharosEvent {
   return {
@@ -85,6 +87,60 @@ test('outputs: a command that hangs is stopped at its deadline', async () => {
   assert.ok(Date.now() - started < 4000);
 });
 
+test('outputs: a delivery deadline cuts a hanging command short, counts no try, and keeps what was done', async () => {
+  const sb = sandbox();
+  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/events.jsonl', events: ['progress'] }, { type: 'command', argv: ['/bin/sleep', '30'], timeout_s: 60, events: ['needs_you'] }] });
+  enqueue(sb.paths, [event({ id: 'k-0001:opened:1', event: 'session.opened', class: 'progress' }), event()]);
+  const started = Date.now();
+  const r = await deliver(ctx(sb, { deadline: Date.now() + 500 }));
+  assert.ok(Date.now() - started < 3000);
+  assert.deepEqual([r.sent, r.failed], [1, 0]);
+  const left = readOutbox(sb.paths);
+  assert.deepEqual(left.map((x) => [x.event.id, x.done, x.attempts]), [[event().id, [], {}]]);
+});
+
+test('outputs: a hook prints its answer first and keeps delivery inside its budget', async () => {
+  const sb = sandbox();
+  writeConfig(sb, { outputs: [{ type: 'command', argv: ['/bin/sleep', '30'], timeout_s: 60 }] });
+  const id = prepare(sb.paths, { instruction: 'x', claude_session: 'claude-session-1', now: T0, env: sb.env, heads: () => HEADS_OK }).id;
+  const pre = preToolUse(sb.ctx(T0), { hook_event_name: 'PreToolUse', session_id: 'claude-session-1', tool_name: 'RemoteTrigger', tool_input: { action: 'create', body: { kharos_launch: id } } });
+  const input = {
+    hook_event_name: 'PostToolUse', session_id: 'claude-session-1', tool_name: 'RemoteTrigger',
+    tool_input: (pre?.hookSpecificOutput as any).updatedInput,
+    tool_response: response(200, { outcome: 'CREATE_TRIGGER_OUTCOME_CREATED', trigger: { id: 'trig_01TESTROUTINEAAAAAAAAAAA' } }),
+  };
+  enqueue(sb.paths, [event({ session: id })]);
+  const started = Date.now();
+  const r = await captured(() => runHook('post-tool-use', { ...sb.ctx(T0), deliveryBudgetMs: 1000 }, () => JSON.stringify(input)));
+  assert.ok(Date.now() - started < 4000);
+  assert.equal(r.value, 0);
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput.summary, /routine created/);
+  assert.deepEqual(readOutbox(sb.paths).map((x) => [x.done, x.attempts]), [[[], {}]]);
+});
+
+test('outputs: an unreadable configuration keeps every event queued and says why', async () => {
+  const sb = sandbox();
+  fs.mkdirSync(path.dirname(sb.paths.config), { recursive: true });
+  fs.writeFileSync(sb.paths.config, '{"version": 1, "outputs": [],}');
+  enqueue(sb.paths, [event(), event({ id: 'k-0001:finished:1', event: 'session.finished', class: 'terminal' })]);
+  const r = await deliver(ctx(sb));
+  assert.match(r.configError ?? '', /invalid JSON/);
+  assert.match(deliveryLine(r), /stay queued until the configuration can be read/);
+  assert.equal(readOutbox(sb.paths).length, 2);
+});
+
+test('outputs: a command does not receive the plugin options', async () => {
+  const sb = sandbox();
+  const dump = path.join(sb.dir, 'env.txt');
+  writeConfig(sb, { outputs: [{ type: 'command', argv: ['/bin/sh', '-c', `env > "${dump}"`] }] });
+  enqueue(sb.paths, [event()]);
+  const env = { ...sb.env, CLAUDE_PLUGIN_OPTION_SLACK_WEBHOOK: 'https://hooks.slack.com/services/T0/B0/x', CLAUDE_PLUGIN_OPTION_OTHER: 'y' };
+  assert.equal((await deliver(ctx(sb, { env }))).sent, 1);
+  const got = fs.readFileSync(dump, 'utf8');
+  assert.doesNotMatch(got, /CLAUDE_PLUGIN_OPTION_/);
+  assert.match(got, new RegExp(`^KHAROS_HOME=${sb.env.KHAROS_HOME}$`, 'm'));
+});
+
 test('outputs: Slack posts to the webhook from the hook, and waits for a hook when the secret is not here', async () => {
   const sb = sandbox();
   writeConfig(sb, { outputs: [{ type: 'slack' }] });
@@ -133,6 +189,9 @@ test('firstmate: the dedicated mode writes done only with a session sheet', () =
   assert.match(statusLine(event({ event: 'session.finished', summary: 'fixed' }), 'dedicated', T0, sheet) ?? '', /^done \[at=\d+\]: kharos k-0001 finished: fixed no PR FIM faltou=nada/);
   assert.match(statusLine(event({ event: 'session.finished' }), 'dedicated', T0, null) ?? '', /^blocked \[key=kharos-k-0001\] .*finished without the session sheet/);
   assert.match(statusLine(event({ event: 'session.failed' }), 'dedicated', T0, null) ?? '', /^failed \[at=/);
+  const long = `FIM faltou=brief: ${'a'.repeat(140)} ;; refiz=nada: ${'b'.repeat(140)} ;; esperei=ci: ${'c'.repeat(120)}`;
+  assert.ok(long.length >= 450 && long.length <= 600);
+  assert.ok((statusLine(event({ event: 'session.finished', summary: 'fixed' }), 'dedicated', T0, long) ?? '').endsWith(` ${long}`));
 });
 
 test('firstmate: writes one line to the given file only, calls the ledger, and refuses other paths', () => {

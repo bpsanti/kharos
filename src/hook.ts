@@ -36,6 +36,8 @@ export interface Ctx {
   paths: Paths;
   now: number;
   env: NodeJS.ProcessEnv;
+  /** Test seam: how long delivery may run inside a hook. Defaults to a budget well inside the hook timeout. */
+  deliveryBudgetMs?: number;
   /** Test seam: who owns a repository, for the access fix. Defaults to gh. */
   ownerType?: (repo: string) => OwnerType;
 }
