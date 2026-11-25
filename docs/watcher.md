@@ -45,7 +45,7 @@ The rules are checked in this order, and the first that matches wins.
 |---|---|---|
 | `invisible` | two failed reads in a row (HTTP error, the session missing from `list_runs`, an empty log for a session that had events), or the account logged in now is not the one that launched it | yes |
 | `failed` | `KHAROS-DONE` with `failed` | yes, terminal |
-| `finished` | `KHAROS-DONE` with `ok` after the last message from a person, and no work after it | yes, terminal |
+| `finished` | `KHAROS-DONE` with `ok` after the last message from a person, no tool call after it in the same turn, and no `KHAROS-QUESTION` after it; turns that events woke later (an `init` with no `user`, such as pull request activity or CI) keep the mark once the last event is a `result` again | yes, terminal |
 | `waiting_permission` | a `permission prompt` event that is still open: the calls open at that moment do not all have results, and the model has not spoken again since | yes |
 | `waiting_answer` | `KHAROS-QUESTION` in a closed turn, or `AskUserQuestion` as the last event | yes |
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |

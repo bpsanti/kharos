@@ -224,3 +224,26 @@ test('classify: an end mark stands when pull request events wake the session and
   const closed = log([...done, [205, 'tool_result', null, '{"total_count":3}'], [206, 'assistant', null, 'CI still running.'], [207, 'result', null, 'success is_error=false']]);
   assert.equal(at(closed, 300).state, 'finished');
 });
+
+test('classify: a tool call in the same turn after the end mark keeps the session running', () => {
+  const rows: [number, string, string | null, string][] = [
+    ...START,
+    [200, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":null,"branch":"fix","summary":"fixed"}'],
+    [201, 'tool_use', 'Bash', '{"command":"git push"}'],
+  ];
+  assert.equal(at(log(rows), 210).state, 'running');
+  const closed = log([...rows, [205, 'tool_result', null, 'pushed'], [206, 'assistant', null, 'Pushed.'], [207, 'result', null, 'success is_error=false']]);
+  assert.notEqual(at(closed, 300).state, 'finished');
+});
+
+test('classify: a question in a turn that events woke after the end mark is waiting for an answer', () => {
+  const rows: [number, string, string | null, string][] = [
+    ...START,
+    [200, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":"https://github.com/example/demo/pull/4","branch":"fix","summary":"fixed"}'],
+    [201, 'result', null, 'success is_error=false'],
+    [202, 'init', null, 'model=x'],
+    [203, 'assistant', null, 'KHAROS-QUESTION {"question":"CI fails on lint, should I fix it?"}'],
+    [204, 'result', null, 'success is_error=false'],
+  ];
+  assert.equal(at(log(rows), 300).state, 'waiting_answer');
+});

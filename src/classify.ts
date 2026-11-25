@@ -129,13 +129,17 @@ export function classify(input: ClassifyInput): Verdict {
   // failed: the session said so
   if (marks.done?.status === 'failed') return { state: 'failed', notice: 'failed', reason: 'the session reported that it failed' };
 
-  // finished: the end mark after the last message from a person, and no work after it
-  if (marks.done?.status === 'ok') {
+  // finished: the end mark after the last message from a person, no work in its own turn after it,
+  // and no question after it. Events (pull request activity, CI) can wake a finished session with no
+  // message from a person (an `init` with no `user`); once those turns close again, the end mark stands.
+  if (marks.done?.status === 'ok' && marks.questionAt < marks.doneAt) {
     const after = turn.slice(marks.doneAt + 1);
-    if (!after.some((e) => WORK.has(e.kind))) return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark' };
-    // Events (pull request activity, a background command) can wake a finished session with no message
-    // from a person; once those turns close again, the end mark still stands.
-    if (last.kind === 'result') return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark; the turns events woke later closed again' };
+    const woke = after.findIndex((e) => e.kind === 'init');
+    const sameTurn = woke < 0 ? after : after.slice(0, woke);
+    if (!sameTurn.some((e) => WORK.has(e.kind))) {
+      if (woke < 0) return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark' };
+      if (last.kind === 'result') return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark; the turns events woke later closed again' };
+    }
   }
 
   // waiting for a permission answer

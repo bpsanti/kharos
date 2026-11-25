@@ -31,8 +31,8 @@ export function cadence(s: Session, now: number): number {
 }
 
 export function isDue(s: Session, now: number, intervalMin: number): boolean {
-  // No log read yet (a list_runs during the launch does not count): read now.
-  if (!s.last_read_at || s.reads === 0) return true;
+  // A session with no log read yet (a list_runs during the launch does not count): read now.
+  if (!s.last_read_at || (s.session_id && s.reads === 0)) return true;
   if (s.pending_cursor) return true;
   // A /loop pass can come up to half an interval late, so the threshold has that slack.
   const wait = (cadence(s, now) * intervalMin - intervalMin / 2) * MIN;

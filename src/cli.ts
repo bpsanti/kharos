@@ -258,7 +258,13 @@ export async function runHook(event: string, ctx: Ctx, stdin: () => string = rea
     const raw = stdin();
     if (raw.trim() === '') return 0;
     // KHAROS_DEBUG_HOOKS=1 keeps every hook input, to study an answer format that changed.
-    if (ctx.env.KHAROS_DEBUG_HOOKS === '1') appendLine(`${ctx.paths.state}/hook-inputs.jsonl`, JSON.stringify({ at: new Date(ctx.now).toISOString(), event, input: JSON.parse(raw) as unknown }));
+    if (ctx.env.KHAROS_DEBUG_HOOKS === '1') {
+      try {
+        appendLine(`${ctx.paths.state}/hook-inputs.jsonl`, JSON.stringify({ at: new Date(ctx.now).toISOString(), event, input: JSON.parse(raw) as unknown }));
+      } catch {
+        // a debug copy never changes what the hook does
+      }
+    }
     const out = handler(ctx, JSON.parse(raw) as HookInput);
     if (out) {
       const text = JSON.stringify(out);

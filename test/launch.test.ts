@@ -180,6 +180,18 @@ test('hooks: with unreadable kharos state, a run and a kharos create are denied 
   assert.equal((await runPreHook(sb, { action: 'list' })).printed, '');
 });
 
+test('hooks: a debug copy that cannot be written does not change what the hook does', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  fs.mkdirSync(`${sb.paths.state}/hook-inputs.jsonl`, { recursive: true });
+  const ctx = { ...sb.ctx(T0), env: { ...sb.env, KHAROS_DEBUG_HOOKS: '1' } };
+  const r = await captured(() => runHook('pre-tool-use', ctx, () => JSON.stringify(hook({ action: 'create', body: { kharos_launch: id } }))));
+  assert.equal(r.value, 0);
+  const out = JSON.parse(r.stdout).hookSpecificOutput;
+  assert.equal(out.permissionDecision, 'allow');
+  assert.notDeepEqual(out.updatedInput.body, { kharos_launch: id });
+});
+
 test('hooks: a registry lock left by a dead holder is taken over, so a run is not denied', async () => {
   const sb = sandbox();
   const id = prepared(sb);
