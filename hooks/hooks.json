@@ -1,0 +1,23 @@
+{
+  "description": "nuvem: launches through RemoteTrigger get the stored routine body, and answers about routines in the registry are recorded and shortened. Every other RemoteTrigger call passes untouched.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "RemoteTrigger",
+        "hooks": [{ "type": "command", "command": "/bin/sh", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/nuvem", "hook", "pre-tool-use"], "timeout": 30 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "RemoteTrigger",
+        "hooks": [{ "type": "command", "command": "/bin/sh", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/nuvem", "hook", "post-tool-use"], "timeout": 60 }]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "RemoteTrigger",
+        "hooks": [{ "type": "command", "command": "/bin/sh", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/nuvem", "hook", "post-tool-use-failure"], "timeout": 30 }]
+      }
+    ]
+  }
+}

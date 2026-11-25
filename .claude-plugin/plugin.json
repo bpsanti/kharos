@@ -1,0 +1,27 @@
+{
+  "name": "nuvem",
+  "version": "0.1.0",
+  "description": "Launch cloud sessions of Claude Code from the terminal, follow them, message them mid-run, and get notified when one needs you, is stuck, or is done.",
+  "author": {
+    "name": "Bruno Santi"
+  },
+  "homepage": "https://github.com/bpsanti/claude-remote-agent-project#readme",
+  "repository": "https://github.com/bpsanti/claude-remote-agent-project",
+  "license": "MIT",
+  "keywords": [
+    "cloud",
+    "remote",
+    "sessions",
+    "monitor",
+    "notifications"
+  ],
+  "engines": {
+    "claude-code": ">=2.1.323"
+  },
+  "network": {
+    "hosts": [
+      "github.com",
+      "api.github.com"
+    ]
+  }
+}

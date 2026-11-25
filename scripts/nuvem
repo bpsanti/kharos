@@ -1,0 +1,51 @@
+#!/bin/sh
+# Launcher of the nuvem plugin: finds a Node.js that runs TypeScript directly (22.18 or newer) and runs
+# the plugin's CLI with it. Hooks call it as `nuvem hook <event>`, skills as `nuvem <command>`.
+# A Claude Code started from a desktop app may have no `node` on its PATH, so the order is: $NUVEM_NODE,
+# PATH, then the folders Node.js is usually installed in.
+# A hook never holds or fails the session: without Node.js it exits quietly, and only the session start says so.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 0
+cli=$root/src/cli.ts
+home=${HOME:-}
+
+node=
+found() {
+  if [ -z "$node" ] && [ -n "$1" ] && [ -x "$1" ] && [ ! -d "$1" ] &&
+    "$1" -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=18)?0:1)' </dev/null >/dev/null 2>&1; then
+    node=$1
+  fi
+}
+
+found "${NUVEM_NODE:-}"
+if [ -z "$node" ]; then
+  found "$(command -v node 2>/dev/null || :)"
+  for dir in /opt/homebrew/bin /usr/local/bin /usr/bin "$home/.local/bin" "$home/.volta/bin" /snap/bin; do
+    found "$dir/node"
+  done
+  for dir in \
+    "$home/.nvm/versions/node"/*/bin \
+    "$home/.asdf/installs/nodejs"/*/bin \
+    "$home/.local/share/mise/installs/node"/*/bin \
+    "$home/.local/share/fnm/node-versions"/*/installation/bin \
+    "$home/Library/Application Support/fnm/node-versions"/*/installation/bin \
+    "$home/.nodenv/versions"/*/bin; do
+    found "$dir/node"
+  done
+fi
+
+if [ -z "$node" ]; then
+  if [ "${1:-}" != hook ]; then
+    echo 'nuvem: no Node.js 22.18 or newer was found. Install it, or set NUVEM_NODE to its path in "env" of the Claude Code settings.' >&2
+    exit 1
+  fi
+  if [ "${2:-}" = session-start ]; then
+    printf '%s\n' '{"systemMessage":"nuvem: no Node.js 22.18 or newer was found, so the plugin is inactive. Install Node.js, or set NUVEM_NODE in \"env\" of the Claude Code settings."}'
+  fi
+  exit 0
+fi
+
+[ -f "$cli" ] || exit 0
+CLAUDE_PLUGIN_ROOT=$root
+export CLAUDE_PLUGIN_ROOT
+exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"

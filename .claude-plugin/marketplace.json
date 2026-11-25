@@ -1,0 +1,15 @@
+{
+  "name": "nuvem",
+  "owner": {
+    "name": "Bruno Santi"
+  },
+  "description": "Launch and follow cloud sessions of Claude Code from the terminal.",
+  "plugins": [
+    {
+      "name": "nuvem",
+      "source": "./",
+      "description": "Launch cloud sessions from the terminal, follow them, message them mid-run, and get notified when one needs you, is stuck, or is done.",
+      "category": "productivity"
+    }
+  ]
+}
