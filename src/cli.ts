@@ -77,7 +77,7 @@ function need(args: Args, i: number, what: string): string {
 
 const USAGE = `usage: kharos <command>
   prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--session id]   (instruction on stdin)
-  resume <id> | show <id> | list [--all] | log <id> [lines] --session id
+  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id
   send <id>   (text on stdin) | result <id> | close <id>
   doctor [--profile p] [--no-remote-tool] | environments --session id
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
@@ -111,6 +111,9 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
       }
       case 'resume':
         out(cmd.resume(paths, need(args, 0, 'session id')));
+        return 0;
+      case 'rearm':
+        out(cmd.rearm(paths, need(args, 0, 'session id'), now));
         return 0;
       case 'show':
         out(cmd.show(paths, need(args, 0, 'session id'), now));

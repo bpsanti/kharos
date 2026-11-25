@@ -7,7 +7,7 @@ import { main, runHook } from '../src/cli.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import { recordAccess } from '../src/repo.ts';
 import { saveEnvironments } from '../src/state.ts';
-import { HEADS_EMPTY, HEADS_OK, sandbox, T0, writeConfig } from './helpers.ts';
+import { captured, HEADS_EMPTY, HEADS_OK, sandbox, T0, writeConfig } from './helpers.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -58,24 +58,6 @@ test('doctor: no configuration points to setup', () => {
   const sb = sandbox();
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps())), /no configuration .*\n {6}Run \/kharos:setup/);
 });
-
-/** Runs `fn` with stdout and stderr captured. */
-function captured<T>(fn: () => T): { value: T; stderr: string } {
-  const out = process.stdout.write;
-  const err = process.stderr.write;
-  const errs: string[] = [];
-  process.stdout.write = (() => true) as typeof process.stdout.write;
-  process.stderr.write = ((c: string) => {
-    errs.push(String(c));
-    return true;
-  }) as typeof process.stderr.write;
-  try {
-    return { value: fn(), stderr: errs.join('') };
-  } finally {
-    process.stdout.write = out;
-    process.stderr.write = err;
-  }
-}
 
 test('plugin: every hook event in hooks.json has a handler', () => {
   const sb = sandbox();

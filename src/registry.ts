@@ -64,8 +64,8 @@ export interface Session {
   url: string | null;
   created_at: string;
   fired_at: string | null;
-  /** When the PostToolUse of `run` arrived; null while the fire has had no answer. */
-  run_answered_at: string | null;
+  /** When list_runs last came back empty while the launch was firing; a person may re-arm it after that. */
+  runs_seen_empty_at: string | null;
   step: Step;
   state: State;
   state_since: string;

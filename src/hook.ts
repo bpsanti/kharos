@@ -41,9 +41,6 @@ export type HookOutput = Record<string, unknown> | null;
 
 const LAUNCH_NAME_RE = /^kharos (k-\d{4,}): /;
 
-/** How long an unanswered fire must show no session in list_runs before it counts as not having happened. */
-const REARM_AFTER_MS = 2 * 60_000;
-
 function str(v: unknown): string | null {
   return typeof v === 'string' && v !== '' ? v : null;
 }
@@ -121,7 +118,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
       if (s.step === 'routine_created') {
         s.step = 'firing';
         s.fired_at = new Date(ctx.now).toISOString();
-        s.run_answered_at = null;
+        s.runs_seen_empty_at = null;
         return null;
       }
       return deny(
@@ -175,7 +172,6 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
     return updateRegistry(ctx.paths, (reg) => {
       const s = byTrigger(reg, trig);
       if (!s || s.step !== 'firing') return null;
-      s.run_answered_at = new Date(ctx.now).toISOString();
       const err = readError(r);
       const sid = err ? null : readRunSession(r);
       if (sid) {
@@ -207,17 +203,11 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
       const row = s.session_id ? rows.find((x) => x.id === s.session_id) : rows[0];
       if (!s.session_id && row && (s.step === 'firing' || s.step === 'routine_created')) openSession(s, row.id, row.url, ctx.now);
       else if (s.step === 'firing' && !row) {
-        const firedAt = s.fired_at ? Date.parse(s.fired_at) : ctx.now;
-        if (!s.run_answered_at && ctx.now - firedAt >= REARM_AFTER_MS) {
-          // The fire never got an answer (refused at the permission prompt, or the local session died)
-          // and no session showed up since: it did not happen, so it may be fired again.
-          s.step = 'routine_created';
-          return reshape(r.status, { kharos: s.id, step: 'routine_created' }, `kharos: ${s.id} has no session; the fire did not happen. It may be fired once more with RemoteTrigger "run" and trigger_id "${trig}".`);
-        }
+        s.runs_seen_empty_at = new Date(ctx.now).toISOString();
         return reshape(
           r.status,
           { kharos: s.id, step: 'firing' },
-          `kharos: ${s.id} has no session in list_runs yet, but it may exist. Do not run again: check the routine page ${routineUrl(trig)}.`,
+          `kharos: ${s.id} has no session visible yet. Do not run again. Tell the person: if the routine page ${routineUrl(trig)} shows no run and no Claude Code window is still asking to approve the run, they can re-arm it with /kharos:run --rearm ${s.id}, then fire it with /kharos:run --resume ${s.id}.`,
         );
       }
       if (row?.url) s.url = row.url;

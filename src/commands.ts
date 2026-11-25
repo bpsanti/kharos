@@ -76,7 +76,7 @@ export function resume(paths: Paths, ref: string): string {
     case 'routine_created':
       return `${s.id}: call RemoteTrigger with action "run" and trigger_id "${s.trigger_id}", once.`;
     case 'firing':
-      return `${s.id}: it may have been fired. Do not run it again: call RemoteTrigger with action "list_runs" and trigger_id "${s.trigger_id}". If that shows no session, check the routine page ${routineUrl(s.trigger_id ?? '')}.`;
+      return `${s.id}: it may have been fired. Do not run it again: call RemoteTrigger with action "list_runs" and trigger_id "${s.trigger_id}", and show its answer to the person.`;
     case 'open':
       return `${s.id} is open already: ${s.url}`;
     case 'refused':
@@ -84,6 +84,29 @@ export function resume(paths: Paths, ref: string): string {
     case 'closed':
       return `${s.id} is closed.`;
   }
+}
+
+const REARM_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Moves a fire that never produced a session back to 'routine_created', on a person's word only.
+ * It needs a list_runs read empty within REARM_WINDOW_MS, so it acts on what the service showed lately.
+ */
+export function rearm(paths: Paths, ref: string, now: number): string {
+  const id = need(paths, ref).id;
+  return updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id];
+    if (!s || s.step !== 'firing') throw new CommandError(`${id} is not waiting on a fire (step ${s?.step ?? 'unknown'}); there is nothing to re-arm.`);
+    const seen = s.runs_seen_empty_at ? Date.parse(s.runs_seen_empty_at) : NaN;
+    if (!(now - seen <= REARM_WINDOW_MS)) {
+      throw new CommandError(
+        `${id} has no empty list_runs in the last 10 minutes. Run /kharos:run --resume ${id} first; re-arm only if its answer shows no session.`,
+      );
+    }
+    s.step = 'routine_created';
+    s.runs_seen_empty_at = null;
+    return `${id} re-armed. Run /kharos:run --resume ${id} to fire it once.`;
+  });
 }
 
 /** Records that the next get_run_log of this session is for a person, and says what to call. */

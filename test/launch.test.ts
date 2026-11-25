@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import { close, list, logRequest, sendMessage, result, resume, writeProfile } from '../src/commands.ts';
-import { runHook } from '../src/cli.ts';
+import { close, list, logRequest, rearm, sendMessage, result, resume, writeProfile } from '../src/commands.ts';
+import { main, runHook } from '../src/cli.ts';
 import { postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
 import { loadRegistry } from '../src/registry.ts';
 import { loadRepos } from '../src/repo.ts';
 import { addIntent } from '../src/state.ts';
-import { fixture, HEADS_EMPTY, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
+import { captured, fixture, HEADS_EMPTY, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const CLAUDE = 'claude-session-1';
 
@@ -94,28 +94,56 @@ function fired(sb: Sandbox, id: string): string {
 
 const NO_RUNS = response(200, { data: [], next_cursor: null });
 
-test('launch: an empty list_runs re-arms a fire only when it never got an answer and 2 minutes passed', () => {
+test('launch: an empty list_runs keeps the fire and never tells the model to fire again', () => {
   const sb = sandbox();
   const id = prepared(sb);
   const trig = fired(sb, id);
-  const early = postToolUse(sb.ctx(T0 + 30_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
-  assert.match(summaryOf(early), /may exist\. Do not run again: check the routine page https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
-  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
-  const late = postToolUse(sb.ctx(T0 + 3 * 60_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
-  assert.match(summaryOf(late), /may be fired once more/);
-  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'routine_created');
+  assert.match(resume(sb.paths, id), /Do not run it again: call RemoteTrigger with action "list_runs"/);
+  for (const t of [T0 + 30_000, T0 + 60 * 60_000]) {
+    const text = summaryOf(postToolUse(sb.ctx(t), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS)));
+    assert.match(text, /no session visible yet\. Do not run again/);
+    assert.match(text, /https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
+    assert.match(text, /\/kharos:run --rearm k-0001/);
+    assert.doesNotMatch(text, /may be fired|fire it once more/);
+    assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
+  }
+  assert.equal((preToolUse(sb.ctx(T0 + 61 * 60_000), hook({ action: 'run', trigger_id: trig }))?.hookSpecificOutput as any).permissionDecision, 'deny');
 });
 
-test('launch: an empty list_runs never re-arms a fire that got an answer', () => {
+test('rearm: refused without an empty list_runs in the last 10 minutes', () => {
   const sb = sandbox();
   const id = prepared(sb);
   const trig = fired(sb, id);
-  postToolUse(sb.ctx(T0 + 1000), hook({ action: 'run', trigger_id: trig }, response(200, { outcome: 'RUN_TRIGGER_OUTCOME_STARTED' })));
-  assert.match(resume(sb.paths, id), /check the routine page https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
-  const out = postToolUse(sb.ctx(T0 + 60 * 60_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
-  assert.match(summaryOf(out), /Do not run again/);
+  assert.throws(() => rearm(sb.paths, id, T0 + 60_000), /no empty list_runs in the last 10 minutes/);
+  postToolUse(sb.ctx(T0 + 60_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
+  assert.throws(() => rearm(sb.paths, id, T0 + 60_000 + 11 * 60_000), /no empty list_runs in the last 10 minutes/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
-  assert.equal((preToolUse(sb.ctx(T0 + 60 * 60_000), hook({ action: 'run', trigger_id: trig }))?.hookSpecificOutput as any).permissionDecision, 'deny');
+});
+
+test('rearm: refused for a launch that is not firing', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  assert.throws(() => rearm(sb.paths, id, T0), /not waiting on a fire \(step prepared\)/);
+  launch(sb, id);
+  postToolUse(sb.ctx(T0 + 2000), hook({ action: 'list_runs', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, NO_RUNS));
+  assert.throws(() => rearm(sb.paths, id, T0 + 3000), /not waiting on a fire \(step open\)/);
+});
+
+test('rearm: then resume allows exactly one more run', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  // The CLI reads the real clock, so the empty list_runs is recorded now.
+  postToolUse(sb.ctx(Date.now()), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
+  const r = captured(() => main(['rearm', id], sb.env, () => ''));
+  assert.equal(r.value, 0);
+  assert.match(r.stdout, /k-0001 re-armed\. Run \/kharos:run --resume k-0001 to fire it once/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'routine_created');
+  assert.match(resume(sb.paths, id), /action "run" and trigger_id "trig_01TESTROUTINEAAAAAAAAAAA", once/);
+  const now = Date.now();
+  assert.equal(preToolUse(sb.ctx(now), hook({ action: 'run', trigger_id: trig })), null);
+  assert.equal((preToolUse(sb.ctx(now + 1000), hook({ action: 'run', trigger_id: trig }))?.hookSpecificOutput as any).permissionDecision, 'deny');
+  assert.throws(() => rearm(sb.paths, id, now + 2000), /no empty list_runs/);
 });
 
 test('launch: list_runs does not reopen a closed launch', () => {
@@ -131,18 +159,8 @@ test('launch: list_runs does not reopen a closed launch', () => {
 
 /** Runs the pre-tool-use hook the way Claude Code does and returns what it printed. */
 function runPreHook(sb: Sandbox, ti: Record<string, unknown>): { code: number; printed: string } {
-  const chunks: string[] = [];
-  const write = process.stdout.write;
-  process.stdout.write = ((c: string) => {
-    chunks.push(String(c));
-    return true;
-  }) as typeof process.stdout.write;
-  try {
-    const code = runHook('pre-tool-use', sb.ctx(T0), () => JSON.stringify(hook(ti)));
-    return { code, printed: chunks.join('') };
-  } finally {
-    process.stdout.write = write;
-  }
+  const r = captured(() => runHook('pre-tool-use', sb.ctx(T0), () => JSON.stringify(hook(ti))));
+  return { code: r.value, printed: r.stdout };
 }
 
 test('hooks: with unreadable kharos state, a run and a kharos create are denied and other calls pass', () => {
