@@ -1,7 +1,7 @@
 ---
 description: Launch a cloud session of Claude Code with an instruction, on a configured profile, and record it for follow-up.
 disable-model-invocation: true
-argument-hint: '"<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] | --resume <id>'
+argument-hint: '"<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--output firstmate --status-file f --firstmate-home h] | --resume <id>'
 allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" prepare:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume:*)
 ---
 
@@ -10,7 +10,7 @@ Launch one cloud session for this request: $ARGUMENTS
 Each launch spends plan usage, so follow these steps exactly and never fire twice.
 
 1. If the request is `--resume <id>`, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume <id>`, make only the RemoteTrigger call it names, then go to step 6.
-2. Split the request into options (`--profile`, `--model`, `--title`, `--deadline`, `--file`) and the instruction, which is everything else, word for word.
+2. Split the request into options (`--profile`, `--model`, `--title`, `--deadline`, `--file`, and `--output firstmate` with `--status-file`, `--firstmate-home` and `--firstmate-mode`) and the instruction, which is everything else, word for word.
    If the instruction is a batch of independent tasks, or one goal across several repositories, say in one line that Claude Projects fits that better, and go on.
 3. Run this, with the options you found and the instruction unchanged between the markers:
    ```
