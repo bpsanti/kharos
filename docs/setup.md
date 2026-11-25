@@ -22,7 +22,8 @@ Each check that fails comes with its fix, and every fix goes through an official
 | `login` | not logged in, logged in with an API key or a cloud provider, or `ANTHROPIC_API_KEY` is set | `claude auth login` with a claude.ai account; unset `ANTHROPIC_API_KEY` |
 | `plan` | the subscription is not Pro, Max, Team or Enterprise | change the plan |
 | `remote tool` | the session has no `RemoteTrigger` tool | update Claude Code; on Team or Enterprise, an owner allows cloud sessions and scheduled tasks |
-| `config` | no file, or a field is wrong | `/kharos:setup`, or fix the field the message names |
+| `config` | no file, or the file cannot be read, is not valid JSON, or has a wrong field | no file: `/kharos:setup`; otherwise fix or move the file the message names, then run `/kharos:setup` |
+| `repos`, `environments`, `registry`, `watcher` | a kharos state file exists but cannot be read, is not valid JSON, or has the wrong shape | repair or move the file the message names |
 | `repo` | the repository has no commit (fail), or this machine's git cannot read it (warning only: the cloud does not use local credentials) | an initial commit, which setup offers |
 | `revision` | the branch or tag of the profile does not exist | set `revision` to an existing branch |
 | `claude access` | the service answered `repo_access_denied` | see below |
