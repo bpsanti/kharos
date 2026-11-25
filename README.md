@@ -75,7 +75,7 @@ The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}`
 |---|---|
 | `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
-| `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
+| `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session |
 
 `KHAROS_HOME` moves both under one folder, which is how one machine serves several accounts.
 

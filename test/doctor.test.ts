@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { main, runHook } from '../src/cli.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import { recordAccess } from '../src/repo.ts';
 import { saveEnvironments } from '../src/state.ts';
@@ -58,18 +59,50 @@ test('doctor: no configuration points to setup', () => {
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps())), /no configuration .*\n {6}Run \/kharos:setup/);
 });
 
-test('plugin: hooks and skills call commands that exist', () => {
-  const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks/hooks.json'), 'utf8'));
-  const cli = fs.readFileSync(path.join(ROOT, 'src/cli.ts'), 'utf8');
-  for (const entries of Object.values(hooks.hooks) as any[]) {
-    for (const e of entries) for (const h of e.hooks) assert.ok(cli.includes(`'${h.args[2]}':`), `hook ${h.args[2]} is handled`);
+/** Runs `fn` with stdout and stderr captured. */
+function captured<T>(fn: () => T): { value: T; stderr: string } {
+  const out = process.stdout.write;
+  const err = process.stderr.write;
+  const errs: string[] = [];
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  process.stderr.write = ((c: string) => {
+    errs.push(String(c));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    return { value: fn(), stderr: errs.join('') };
+  } finally {
+    process.stdout.write = out;
+    process.stderr.write = err;
   }
+}
+
+test('plugin: every hook event in hooks.json has a handler', () => {
+  const sb = sandbox();
+  const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks/hooks.json'), 'utf8'));
+  const events = (Object.values(hooks.hooks) as any[]).flatMap((entries) => entries.flatMap((e: any) => e.hooks.map((h: any) => h.args[2] as string)));
+  assert.ok(events.length > 0);
+  for (const event of events) {
+    const r = captured(() => runHook(event, sb.ctx(T0), () => '{}'));
+    assert.equal(r.value, 0, `hook ${event} is handled`);
+    assert.doesNotMatch(r.stderr, /unknown hook event/);
+  }
+  assert.equal(captured(() => runHook('not-an-event', sb.ctx(T0), () => '{}')).value, 1);
+});
+
+test('plugin: skills call commands the CLI knows, and the manifest matches the package', () => {
+  const sb = sandbox();
   for (const name of fs.readdirSync(path.join(ROOT, 'skills'))) {
     const text = fs.readFileSync(path.join(ROOT, 'skills', name, 'SKILL.md'), 'utf8');
     assert.match(text, /^---\ndescription: /, `${name} has a description`);
-    for (const m of text.matchAll(/scripts\/kharos" ([a-z-]+)/g)) assert.ok(cli.includes(`case '${m[1]}':`), `${name} calls kharos ${m[1]}`);
+    for (const m of text.matchAll(/scripts\/kharos" ([a-z-]+)/g)) {
+      const command = m[1] as string;
+      const r = captured(() => main([command], sb.env, () => ''));
+      assert.ok(!(r.value === 2 && /unknown command/.test(r.stderr)), `${name} calls kharos ${command}, which the CLI knows`);
+    }
     if (name !== 'kharos' && name !== 'watch') assert.match(text, /disable-model-invocation: true/, `${name} is for the person only`);
   }
+  assert.equal(captured(() => main(['not-a-command'], sb.env, () => '')).value, 2);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin/plugin.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.name, 'kharos');

@@ -3,7 +3,7 @@
 # the plugin's CLI with it. Hooks call it as `kharos hook <event>`, skills as `kharos <command>`.
 # A Claude Code started from a desktop app may have no `node` on its PATH, so the order is: $KHAROS_NODE,
 # PATH, then the folders Node.js is usually installed in.
-# A hook never holds or fails the session: without Node.js it exits quietly, and only the session start says so.
+# A hook never holds or fails the session: without Node.js it exits quietly, and the commands say so.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 0
 cli=$root/src/cli.ts
@@ -35,14 +35,9 @@ if [ -z "$node" ]; then
 fi
 
 if [ -z "$node" ]; then
-  if [ "${1:-}" != hook ]; then
-    echo 'kharos: no Node.js 22.18 or newer was found. Install it, or set KHAROS_NODE to its path in "env" of the Claude Code settings.' >&2
-    exit 1
-  fi
-  if [ "${2:-}" = session-start ]; then
-    printf '%s\n' '{"systemMessage":"kharos: no Node.js 22.18 or newer was found, so the plugin is inactive. Install Node.js, or set KHAROS_NODE in \"env\" of the Claude Code settings."}'
-  fi
-  exit 0
+  [ "${1:-}" = hook ] && exit 0
+  echo 'kharos: no Node.js 22.18 or newer was found. Install it, or set KHAROS_NODE to its path in "env" of the Claude Code settings.' >&2
+  exit 1
 fi
 
 [ -f "$cli" ] || exit 0

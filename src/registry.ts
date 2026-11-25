@@ -2,7 +2,6 @@
 // Every launch step is recorded before the call that depends on it, so a session that dies in the
 // middle can be resumed without firing twice (a repeated `run` creates another paid session).
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { readJson, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { OutputConfig } from './config.ts';
@@ -65,6 +64,8 @@ export interface Session {
   url: string | null;
   created_at: string;
   fired_at: string | null;
+  /** When the PostToolUse of `run` arrived; null while the fire has had no answer. */
+  run_answered_at: string | null;
   step: Step;
   state: State;
   state_since: string;
@@ -161,15 +162,4 @@ export function sessionUrlFromId(sessionId: string): string {
 
 export function routineUrl(triggerId: string): string {
   return `https://claude.ai/code/routines/${triggerId}`;
-}
-
-const LOG_RETENTION_MS = 14 * 24 * 3600_000;
-
-/** Deletes raw logs and stored bodies of sessions closed more than 14 days ago. */
-export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
-  for (const s of Object.values(reg.sessions)) {
-    if (!s.closed_at || now - Date.parse(s.closed_at) < LOG_RETENTION_MS) continue;
-    fs.rmSync(logPath(paths, s.id), { force: true });
-    fs.rmSync(bodyPath(paths, s.id), { force: true });
-  }
 }

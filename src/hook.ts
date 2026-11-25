@@ -8,12 +8,12 @@ import {
   bodyPath,
   byTrigger,
   bySessionId,
-  findSession,
   loadRegistry,
   logPath,
   routineUrl,
   sessionUrlFromId,
   updateRegistry,
+  type Registry,
   type Session,
 } from './registry.ts';
 import { readCreatedTrigger, readEnvironments, readError, readLogHeader, readRunSession, readRuns, readToolResponse } from './remote.ts';
@@ -27,7 +27,6 @@ export interface HookInput {
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   tool_response?: unknown;
-  source?: string;
 }
 
 export interface Ctx {
@@ -42,6 +41,9 @@ export type HookOutput = Record<string, unknown> | null;
 
 const LAUNCH_NAME_RE = /^kharos (k-\d{4,}): /;
 
+/** How long an unanswered fire must show no session in list_runs before it counts as not having happened. */
+const REARM_AFTER_MS = 2 * 60_000;
+
 function str(v: unknown): string | null {
   return typeof v === 'string' && v !== '' ? v : null;
 }
@@ -52,6 +54,21 @@ function rec(v: unknown): Record<string, unknown> | null {
 
 function deny(reason: string): HookOutput {
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } };
+}
+
+/**
+ * Runs a launch check under the registry lock. When kharos state cannot be read, the call is denied:
+ * passing it could fire a launch a second time, which starts another paid session.
+ */
+function launchCheck(ctx: Ctx, action: string, fn: (reg: Registry) => HookOutput): HookOutput {
+  try {
+    return updateRegistry(ctx.paths, fn);
+  } catch (err) {
+    return deny(
+      `kharos: kharos state could not be read (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). ` +
+        `This ${action} was stopped, because without that file kharos cannot tell whether it would start a second paid session. Fix that file, then try again.`,
+    );
+  }
 }
 
 /** Replaces what the model receives from the tool with a short text that carries no remote content. */
@@ -72,7 +89,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (action === 'create') {
     const launch = str(rec(ti.body)?.kharos_launch);
     if (!launch) return null;
-    return updateRegistry(ctx.paths, (reg) => {
+    return launchCheck(ctx, 'create', (reg) => {
       const s = reg.sessions[launch];
       if (!s) return deny(`kharos: there is no prepared launch ${launch}. Run /kharos:run again.`);
       if (s.step !== 'prepared') return deny(`kharos: launch ${launch} is past creation (step ${s.step}); do not create it again.`);
@@ -98,12 +115,13 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (action === 'run') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
-    return updateRegistry(ctx.paths, (reg) => {
+    return launchCheck(ctx, 'run', (reg) => {
       const s = byTrigger(reg, trig);
       if (!s) return null;
       if (s.step === 'routine_created') {
         s.step = 'firing';
         s.fired_at = new Date(ctx.now).toISOString();
+        s.run_answered_at = null;
         return null;
       }
       return deny(
@@ -157,6 +175,7 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
     return updateRegistry(ctx.paths, (reg) => {
       const s = byTrigger(reg, trig);
       if (!s || s.step !== 'firing') return null;
+      s.run_answered_at = new Date(ctx.now).toISOString();
       const err = readError(r);
       const sid = err ? null : readRunSession(r);
       if (sid) {
@@ -186,11 +205,20 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
         return reshape(r.status, { kharos: s.id, read: 'failed' }, `kharos: ${s.id} list_runs could not be read (HTTP ${r.status ?? '?'}).`);
       }
       const row = s.session_id ? rows.find((x) => x.id === s.session_id) : rows[0];
-      if (!s.session_id && row) openSession(s, row.id, row.url, ctx.now);
+      if (!s.session_id && row && (s.step === 'firing' || s.step === 'routine_created')) openSession(s, row.id, row.url, ctx.now);
       else if (s.step === 'firing' && !row) {
-        // The fire created no session: it was refused before one existed, so it may be fired again.
-        s.step = 'routine_created';
-        return reshape(r.status, { kharos: s.id, step: 'routine_created' }, `kharos: ${s.id} has no session; the fire did not happen. It may be fired once more with RemoteTrigger "run" and trigger_id "${trig}".`);
+        const firedAt = s.fired_at ? Date.parse(s.fired_at) : ctx.now;
+        if (!s.run_answered_at && ctx.now - firedAt >= REARM_AFTER_MS) {
+          // The fire never got an answer (refused at the permission prompt, or the local session died)
+          // and no session showed up since: it did not happen, so it may be fired again.
+          s.step = 'routine_created';
+          return reshape(r.status, { kharos: s.id, step: 'routine_created' }, `kharos: ${s.id} has no session; the fire did not happen. It may be fired once more with RemoteTrigger "run" and trigger_id "${trig}".`);
+        }
+        return reshape(
+          r.status,
+          { kharos: s.id, step: 'firing' },
+          `kharos: ${s.id} has no session in list_runs yet, but it may exist. Do not run again: check the routine page ${routineUrl(trig)}.`,
+        );
       }
       if (row?.url) s.url = row.url;
       return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
@@ -293,11 +321,3 @@ function logView(ctx: Ctx, s: Session, lines: number): string {
     ...tail.map((e) => condensedLine(e)),
   ].join('\n');
 }
-
-export function sessionStart(ctx: Ctx, input: HookInput): HookOutput {
-  void input;
-  void ctx;
-  return null;
-}
-
-export { findSession };

@@ -76,7 +76,7 @@ export function resume(paths: Paths, ref: string): string {
     case 'routine_created':
       return `${s.id}: call RemoteTrigger with action "run" and trigger_id "${s.trigger_id}", once.`;
     case 'firing':
-      return `${s.id}: it may have been fired. Do not run it again: call RemoteTrigger with action "list_runs" and trigger_id "${s.trigger_id}".`;
+      return `${s.id}: it may have been fired. Do not run it again: call RemoteTrigger with action "list_runs" and trigger_id "${s.trigger_id}". If that shows no session, check the routine page ${routineUrl(s.trigger_id ?? '')}.`;
     case 'open':
       return `${s.id} is open already: ${s.url}`;
     case 'refused':

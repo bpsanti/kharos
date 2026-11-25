@@ -56,6 +56,8 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
   const marks = latestMarks(events);
   if (marks.done) {
     s.result = { ...s.result, status: marks.done.status, pr: marks.done.pr, branch: marks.done.branch, summary: marks.done.summary };
+  } else {
+    s.result = { ...s.result, status: null, pr: null, branch: null, summary: null };
   }
   s.result.question = marks.question;
   const more = s.pending_cursor ? ` Older events are missing: call RemoteTrigger get_run_log with session_id "${s.session_id}" and cursor "${s.pending_cursor}".` : '';

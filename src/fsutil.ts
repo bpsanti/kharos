@@ -33,8 +33,8 @@ export function appendLine(file: string, line: string, mode = 0o600): void {
   fs.appendFileSync(file, line.endsWith('\n') ? line : line + '\n', { mode });
 }
 
-const LOCK_STALE_MS = 30_000;
-const LOCK_WAIT_MS = 10_000;
+const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 20_000;
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

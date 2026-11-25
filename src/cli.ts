@@ -6,7 +6,7 @@ import { appendLine } from './fsutil.ts';
 import * as cmd from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo } from './config.ts';
 import { formatChecks, realDeps, runDoctor } from './doctor.ts';
-import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
+import { postToolUse, postToolUseFailure, preToolUse, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, prepare, readInstruction } from './launch.ts';
 import { resolvePaths } from './paths.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
@@ -82,14 +82,14 @@ const USAGE = `usage: kharos <command>
   doctor [--profile p] [--no-remote-tool] | environments --session id
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
   repo-init <owner/name>
-  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
+  hook <pre-tool-use|post-tool-use|post-tool-use-failure>`;
 
-export function main(argv: string[], env: NodeJS.ProcessEnv = process.env): number {
+export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): number {
   const paths = resolvePaths(env);
   const now = Date.now();
   const [command, ...rest] = argv;
 
-  if (command === 'hook') return runHook(rest[0] ?? '', { paths, now, env });
+  if (command === 'hook') return runHook(rest[0] ?? '', { paths, now, env }, stdin);
 
   try {
     const args = parseArgs(rest);
@@ -97,7 +97,7 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env): numb
     switch (command) {
       case 'prepare': {
         const s = prepare(paths, {
-          instruction: readInstruction(flag(args, 'file'), readStdin),
+          instruction: readInstruction(flag(args, 'file'), stdin),
           ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
           ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
           ...(flag(args, 'title') !== undefined ? { title: flag(args, 'title') as string } : {}),
@@ -125,7 +125,7 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env): numb
         return 0;
       }
       case 'send':
-        out(cmd.sendMessage(paths, need(args, 0, 'session id'), readStdin(), env));
+        out(cmd.sendMessage(paths, need(args, 0, 'session id'), stdin(), env));
         return 0;
       case 'result':
         out(cmd.result(paths, need(args, 0, 'session id'), env));
@@ -203,13 +203,19 @@ const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unkno
   'pre-tool-use': preToolUse,
   'post-tool-use': postToolUse,
   'post-tool-use-failure': postToolUseFailure,
-  'session-start': sessionStart,
 };
 
-/** A hook never breaks the session: an internal error is logged to the state folder and the call passes. */
+/**
+ * A hook never breaks the session: an internal error is logged to the state folder and the call passes.
+ * The pre-tool-use handler denies a kharos launch step itself when kharos state cannot be read.
+ * An unknown event exits 1, a non-blocking error, so a hooks.json that names a missing handler shows up.
+ */
 export function runHook(event: string, ctx: Ctx, stdin: () => string = readStdin): number {
   const handler = HOOKS[event];
-  if (!handler) return 0;
+  if (!handler) {
+    process.stderr.write(`kharos: unknown hook event "${event}"\n`);
+    return 1;
+  }
   try {
     const raw = stdin();
     if (raw.trim() === '') return 0;

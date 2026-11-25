@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import { close, list, logRequest, sendMessage, result, resume, writeProfile } from '../src/commands.ts';
+import { runHook } from '../src/cli.ts';
 import { postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
 import { loadRegistry } from '../src/registry.ts';
@@ -83,14 +84,94 @@ test('launch: a lost run answer is recovered from list_runs, never by firing aga
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'open');
 });
 
-test('launch: an empty list_runs after an allowed fire means the fire never happened', () => {
-  const sb = sandbox();
-  const id = prepared(sb);
+/** Creates the routine and lets the hook allow its fire, with no answer to the run yet. */
+function fired(sb: Sandbox, id: string): string {
   const pre = preToolUse(sb.ctx(T0), hook({ action: 'create', body: { kharos_launch: id } }));
   postToolUse(sb.ctx(T0), hook((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: 'trig_01TESTROUTINEAAAAAAAAAAA' } })));
-  preToolUse(sb.ctx(T0), hook({ action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }));
-  postToolUse(sb.ctx(T0), hook({ action: 'list_runs', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, response(200, { data: [], next_cursor: null })));
+  assert.equal(preToolUse(sb.ctx(T0), hook({ action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' })), null);
+  return 'trig_01TESTROUTINEAAAAAAAAAAA';
+}
+
+const NO_RUNS = response(200, { data: [], next_cursor: null });
+
+test('launch: an empty list_runs re-arms a fire only when it never got an answer and 2 minutes passed', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  const early = postToolUse(sb.ctx(T0 + 30_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
+  assert.match(summaryOf(early), /may exist\. Do not run again: check the routine page https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
+  const late = postToolUse(sb.ctx(T0 + 3 * 60_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
+  assert.match(summaryOf(late), /may be fired once more/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'routine_created');
+});
+
+test('launch: an empty list_runs never re-arms a fire that got an answer', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  postToolUse(sb.ctx(T0 + 1000), hook({ action: 'run', trigger_id: trig }, response(200, { outcome: 'RUN_TRIGGER_OUTCOME_STARTED' })));
+  assert.match(resume(sb.paths, id), /check the routine page https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
+  const out = postToolUse(sb.ctx(T0 + 60 * 60_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
+  assert.match(summaryOf(out), /Do not run again/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
+  assert.equal((preToolUse(sb.ctx(T0 + 60 * 60_000), hook({ action: 'run', trigger_id: trig }))?.hookSpecificOutput as any).permissionDecision, 'deny');
+});
+
+test('launch: list_runs does not reopen a closed launch', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  close(sb.paths, id, T0 + 1000);
+  postToolUse(sb.ctx(T0 + 2000), hook({ action: 'list_runs', trigger_id: trig }, response(200, { data: [{ id: 'cse_01TESTSESSIONAAAAAAAAAAA', status: 'active' }] })));
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'closed');
+  assert.equal(s.session_id, null);
+});
+
+/** Runs the pre-tool-use hook the way Claude Code does and returns what it printed. */
+function runPreHook(sb: Sandbox, ti: Record<string, unknown>): { code: number; printed: string } {
+  const chunks: string[] = [];
+  const write = process.stdout.write;
+  process.stdout.write = ((c: string) => {
+    chunks.push(String(c));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    const code = runHook('pre-tool-use', sb.ctx(T0), () => JSON.stringify(hook(ti)));
+    return { code, printed: chunks.join('') };
+  } finally {
+    process.stdout.write = write;
+  }
+}
+
+test('hooks: with unreadable kharos state, a run and a kharos create are denied and other calls pass', () => {
+  const sb = sandbox();
+  fs.mkdirSync(sb.paths.state, { recursive: true });
+  fs.writeFileSync(sb.paths.registry, '{"version": 1, "sessions": ');
+  for (const ti of [{ action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, { action: 'create', body: { kharos_launch: 'k-0001' } }]) {
+    const { code, printed } = runPreHook(sb, ti);
+    assert.equal(code, 0);
+    const h = JSON.parse(printed).hookSpecificOutput;
+    assert.equal(h.permissionDecision, 'deny');
+    assert.ok(h.permissionDecisionReason.includes(sb.paths.registry), 'the reason names the state file');
+    assert.match(h.permissionDecisionReason, /kharos state could not be read/);
+  }
+  assert.equal(runPreHook(sb, { action: 'create', body: { name: 'my own routine' } }).printed, '');
+  assert.equal(runPreHook(sb, { action: 'list' }).printed, '');
+});
+
+test('hooks: a registry lock left by a dead holder is taken over, so a run is not denied', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  fs.writeFileSync(sb.paths.registry, fs.readFileSync(sb.paths.registry, 'utf8').replace('"step": "firing"', '"step": "routine_created"'));
+  const lock = `${sb.paths.registry}.lock`;
+  fs.mkdirSync(lock);
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lock, old, old);
+  assert.equal(runPreHook(sb, { action: 'run', trigger_id: trig }).printed, '');
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
 });
 
 test('launch: repo_access_denied stops before any session, with the fix', () => {
@@ -205,6 +286,22 @@ test('commands: list, sendMessage, result and close', () => {
   assert.match(closed, /claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
   assert.match(list(sb.paths, { all: false, now: T0 }), /no open sessions/);
+});
+
+test('result: a session woken by a message loses its old KHAROS-DONE until it writes a new one', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const page = fixture('log-question-background-done.txt');
+  const read = (t: number, text: string) =>
+    postToolUse(sb.ctx(t), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, text)));
+  read(T0 + 400_000, page);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.result.status, 'ok');
+  sendMessage(sb.paths, id, 'Also add a test.', sb.env);
+  read(T0 + 800_000, `${page.trimEnd()}\n[2026-11-25T19:10:00.000000Z] user: Also add a test.\n[2026-11-25T19:10:05.000000Z] assistant: Adding the test now.\n`);
+  const r = loadRegistry(sb.paths).sessions[id]!.result;
+  assert.deepEqual([r.status, r.pr, r.branch, r.summary], [null, null, null, null]);
+  assert.match(result(sb.paths, id, sb.env), /has no KHAROS-DONE mark yet/);
 });
 
 test('commands: send reports a refusal of the binary', () => {

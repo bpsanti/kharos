@@ -117,6 +117,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       url: null,
       created_at: createdAt,
       fired_at: null,
+      run_answered_at: null,
       step: 'prepared',
       state: 'launching',
       state_since: createdAt,
