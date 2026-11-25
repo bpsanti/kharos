@@ -7,8 +7,9 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { clean } from '../body.ts';
+import { clean, SHEET_MAX } from '../body.ts';
 import type { KharosEvent } from '../events.ts';
+import { childEnv } from './env.ts';
 
 export type FirstmateMode = 'shared' | 'dedicated';
 
@@ -37,7 +38,7 @@ export function checkTarget(t: FirstmateTarget): string | null {
 
 /** The extra footer line a dedicated launch adds: firstmate needs a session sheet on every done. */
 export const DEDICATED_FOOTER =
-  '- This session reports to a firstmate task of its own: add to the KHAROS-DONE object a field "sheet" with one line "FIM faltou=<cat>: <text> ;; refiz=<cat>: <text> ;; esperei=<cat>: <text>", where each <cat> is one of ambiente, brief, regra-em-prosa, gerador, decisao-em-aberto, concorrencia, main-vermelha, ferramenta, build-frio, ci, nada.';
+  `- This session reports to a firstmate task of its own: add to the KHAROS-DONE object a field "sheet" with one line of at most ${SHEET_MAX} characters "FIM faltou=<cat>: <text> ;; refiz=<cat>: <text> ;; esperei=<cat>: <text>", where each <cat> is one of ambiente, brief, regra-em-prosa, gerador, decisao-em-aberto, concorrencia, main-vermelha, ferramenta, build-frio, ci, nada.`;
 
 export const LEDGER_TIMEOUT_MS = 10_000;
 
@@ -75,7 +76,7 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
 }
 
 /** Appends the line and tells the fleet ledger, the way firstmate's own workers do; a ledger failure is ignored. */
-export function writeStatus(t: FirstmateTarget, ev: KharosEvent, now: number, sheet: string | null, ledgerTimeoutMs = LEDGER_TIMEOUT_MS): void {
+export function writeStatus(t: FirstmateTarget, ev: KharosEvent, now: number, sheet: string | null, env: NodeJS.ProcessEnv, ledgerTimeoutMs = LEDGER_TIMEOUT_MS): void {
   const problem = checkTarget(t);
   if (problem) throw new Error(problem);
   const line = statusLine(ev, t.mode, now, sheet);
@@ -83,6 +84,6 @@ export function writeStatus(t: FirstmateTarget, ev: KharosEvent, now: number, sh
   fs.appendFileSync(t.status_file, line + '\n');
   const ledger = path.join(t.home, 'config', 'fleet-ledger');
   if (fs.existsSync(ledger)) {
-    spawnSync(path.join(t.home, 'bin', 'fm-fleet-ledger.sh'), ['appended', path.join(t.home, 'config'), t.status_file], { stdio: 'ignore', timeout: ledgerTimeoutMs });
+    spawnSync(path.join(t.home, 'bin', 'fm-fleet-ledger.sh'), ['appended', path.join(t.home, 'config'), t.status_file], { stdio: 'ignore', timeout: ledgerTimeoutMs, env: childEnv(env) });
   }
 }

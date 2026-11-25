@@ -77,6 +77,11 @@ test('marks: read the end mark and the question, and refuse a cut or placeholder
     assert.equal(readDoneMark(`KHAROS-DONE ${JSON.stringify({ status: 'ok', pr: null, branch: bad, summary: null })}`)?.branch, null, bad);
   }
   assert.equal(readDoneMark('KHAROS-DONE {"status":"ok","pr":null,"branch":"feature/fix-1.2_x","summary":null}')?.branch, 'feature/fix-1.2_x');
+  const sheet = (n: number) => `FIM faltou=brief: a ;; refiz=nada: b ;; esperei=ci: ${'c'.repeat(n)}`;
+  const doneWith = (s: string) => readDoneMark(`KHAROS-DONE ${JSON.stringify({ status: 'ok', pr: null, branch: null, summary: null, sheet: s })}`)?.sheet;
+  assert.equal(sheet(548).length, 600);
+  assert.equal(doneWith(sheet(548)), sheet(548));
+  assert.equal(doneWith(sheet(598)), null);
   assert.equal(readQuestionMark('KHAROS-QUESTION {"question":"Which title?"}'), 'Which title?');
   assert.equal(clean('a\u0007b‮c\n d', 50), 'a b c d');
 });

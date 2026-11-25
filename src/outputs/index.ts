@@ -10,6 +10,7 @@ import { oneLine, readOutbox, type KharosEvent, type OutboxItem } from '../event
 import { appendLine, expandHome, isObject, readState, withLock, writeJsonAtomic } from '../fsutil.ts';
 import type { Paths } from '../paths.ts';
 import { loadRegistry } from '../registry.ts';
+import { childEnv } from './env.ts';
 import { LEDGER_TIMEOUT_MS, writeStatus } from './firstmate.ts';
 
 export const MAX_ATTEMPTS = 5;
@@ -65,10 +66,6 @@ function limit(ctx: SendCtx, ownMs: number): { ms: number; cut: () => Error | nu
   return { ms, cut: () => (ms < ownMs ? new Deferred('the delivery deadline came first') : null) };
 }
 
-function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('CLAUDE_PLUGIN_OPTION_')));
-}
-
 function title(ev: KharosEvent): string {
   return `kharos ${ev.session}: ${ev.event.slice('session.'.length).replace(/_/g, ' ')}`;
 }
@@ -79,9 +76,9 @@ function notify(ev: KharosEvent, ctx: SendCtx): void {
   let r;
   if (ctx.platform === 'darwin') {
     // The texts go as arguments, never inside the script.
-    r = spawnSync('osascript', ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', title(ev), body], { timeout: lim.ms });
+    r = spawnSync('osascript', ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', title(ev), body], { timeout: lim.ms, env: childEnv(ctx.env) });
   } else if (ctx.platform === 'linux') {
-    r = spawnSync('notify-send', ['--app-name=kharos', title(ev), body], { timeout: lim.ms });
+    r = spawnSync('notify-send', ['--app-name=kharos', title(ev), body], { timeout: lim.ms, env: childEnv(ctx.env) });
   } else throw new Error(`no desktop notifier for ${ctx.platform}`);
   if (r.error) throw ((r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' && lim.cut()) || r.error;
   if (r.status !== 0) throw new Error(`notifier exited with ${r.status}`);
@@ -149,7 +146,7 @@ export async function send(o: OutputConfig, ev: KharosEvent, ctx: SendCtx): Prom
     case 'command':
       return command(o, ev, ctx);
     case 'firstmate':
-      return writeStatus({ status_file: expandHome(o.status_file, ctx.paths.home), home: expandHome(o.home, ctx.paths.home), mode: o.mode }, ev, ctx.now, ev.sheet ?? null, limit(ctx, LEDGER_TIMEOUT_MS).ms);
+      return writeStatus({ status_file: expandHome(o.status_file, ctx.paths.home), home: expandHome(o.home, ctx.paths.home), mode: o.mode }, ev, ctx.now, ev.sheet ?? null, ctx.env, limit(ctx, LEDGER_TIMEOUT_MS).ms);
   }
 }
 
