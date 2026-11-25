@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import { readAuthStatus } from './account.ts';
 import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256 } from './body.ts';
-import { ConfigError, loadConfig, pickProfile, repoSlug, type Config } from './config.ts';
+import { ConfigError, loadConfig, pickProfile, repoSlug, type Config, type OutputConfig } from './config.ts';
 import { writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, bodyPath, formatId, updateRegistry, type Session } from './registry.ts';
@@ -16,6 +16,10 @@ export interface PrepareOptions {
   model?: string;
   title?: string;
   deadline_min?: number;
+  /** Outputs given to this launch only, such as the firstmate adapter. */
+  extra_outputs?: OutputConfig[];
+  /** Extra lines for the protocol footer, such as the session sheet a dedicated firstmate task needs. */
+  footer_lines?: string[];
   claude_session: string | null;
   now: number;
   env?: NodeJS.ProcessEnv;
@@ -98,7 +102,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
     }
     const id = formatId(reg.next_seq);
     reg.next_seq++;
-    const body = buildCreateBody({ id, title, instruction, profile, model, now: opts.now });
+    const body = buildCreateBody({ id, title, instruction, profile, model, footerLines: opts.footer_lines ?? [], now: opts.now });
     writeJsonAtomic(bodyPath(paths, id), body);
     const s: Session = {
       id,
@@ -132,6 +136,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       result: { status: null, pr: null, branch: null, summary: null, question: null },
       pending_cursor: null,
       seen_start: false,
+      extra_outputs: opts.extra_outputs ?? [],
       cursor_reads: 0,
       closed_at: null,
       error: null,

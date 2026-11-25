@@ -71,7 +71,7 @@ export function response(status: number, json: unknown, summary = ''): Record<st
 export const T0 = Date.parse('2026-11-25T18:57:30Z');
 
 /** Runs `fn` with stdout and stderr captured, the way a hook or command prints them. */
-export function captured<T>(fn: () => T): { value: T; stdout: string; stderr: string } {
+export async function captured<T>(fn: () => T | Promise<T>): Promise<{ value: T; stdout: string; stderr: string }> {
   const out = process.stdout.write;
   const err = process.stderr.write;
   const outs: string[] = [];
@@ -85,7 +85,8 @@ export function captured<T>(fn: () => T): { value: T; stdout: string; stderr: st
     return true;
   }) as typeof process.stderr.write;
   try {
-    return { value: fn(), stdout: outs.join(''), stderr: errs.join('') };
+    const value = await fn();
+    return { value, stdout: outs.join(''), stderr: errs.join('') };
   } finally {
     process.stdout.write = out;
     process.stderr.write = err;
