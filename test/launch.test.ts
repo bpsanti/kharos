@@ -101,7 +101,7 @@ test('launch: an empty list_runs keeps the fire and never tells the model to fir
   assert.match(resume(sb.paths, id), /Do not run it again: call RemoteTrigger with action "list_runs"/);
   for (const t of [T0 + 30_000, T0 + 60 * 60_000]) {
     const text = summaryOf(postToolUse(sb.ctx(t), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS)));
-    assert.match(text, /no session visible yet\. Do not run again/);
+    assert.match(text, /no session is visible yet\. Do not run again/);
     assert.match(text, /https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
     assert.match(text, /\/kharos:run --rearm k-0001/);
     assert.doesNotMatch(text, /may be fired|fire it once more/);
@@ -117,6 +117,7 @@ test('rearm: refused without an empty list_runs in the last 10 minutes', () => {
   assert.throws(() => rearm(sb.paths, id, T0 + 60_000), /no empty list_runs in the last 10 minutes/);
   postToolUse(sb.ctx(T0 + 60_000), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
   assert.throws(() => rearm(sb.paths, id, T0 + 60_000 + 11 * 60_000), /no empty list_runs in the last 10 minutes/);
+  assert.throws(() => rearm(sb.paths, id, T0 + 59_000), /no empty list_runs in the last 10 minutes/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
 });
 
@@ -137,7 +138,7 @@ test('rearm: then resume allows exactly one more run', () => {
   postToolUse(sb.ctx(Date.now()), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
   const r = captured(() => main(['rearm', id], sb.env, () => ''));
   assert.equal(r.value, 0);
-  assert.match(r.stdout, /k-0001 re-armed\. Run \/kharos:run --resume k-0001 to fire it once/);
+  assert.match(r.stdout, /k-0001 re-armed\. To fire it once, type \/kharos:run --resume k-0001/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'routine_created');
   assert.match(resume(sb.paths, id), /action "run" and trigger_id "trig_01TESTROUTINEAAAAAAAAAAA", once/);
   const now = Date.now();

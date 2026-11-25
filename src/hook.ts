@@ -207,7 +207,7 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
         return reshape(
           r.status,
           { kharos: s.id, step: 'firing' },
-          `kharos: ${s.id} has no session visible yet. Do not run again. Tell the person: if the routine page ${routineUrl(trig)} shows no run and no Claude Code window is still asking to approve the run, they can re-arm it with /kharos:run --rearm ${s.id}, then fire it with /kharos:run --resume ${s.id}.`,
+          `kharos: ${s.id}: no session is visible yet. Do not run again; show this to the person. If the routine page ${routineUrl(trig)} shows no run and no Claude Code window still asks to approve the run, you can re-arm it by typing /kharos:run --rearm ${s.id}.`,
         );
       }
       if (row?.url) s.url = row.url;

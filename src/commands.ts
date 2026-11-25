@@ -98,14 +98,14 @@ export function rearm(paths: Paths, ref: string, now: number): string {
     const s = reg.sessions[id];
     if (!s || s.step !== 'firing') throw new CommandError(`${id} is not waiting on a fire (step ${s?.step ?? 'unknown'}); there is nothing to re-arm.`);
     const seen = s.runs_seen_empty_at ? Date.parse(s.runs_seen_empty_at) : NaN;
-    if (!(now - seen <= REARM_WINDOW_MS)) {
+    if (!(now - seen >= 0 && now - seen <= REARM_WINDOW_MS)) {
       throw new CommandError(
-        `${id} has no empty list_runs in the last 10 minutes. Run /kharos:run --resume ${id} first; re-arm only if its answer shows no session.`,
+        `${id} has no empty list_runs in the last 10 minutes. Type /kharos:run --resume ${id} first; if its answer shows no session, you can re-arm it then.`,
       );
     }
     s.step = 'routine_created';
     s.runs_seen_empty_at = null;
-    return `${id} re-armed. Run /kharos:run --resume ${id} to fire it once.`;
+    return `${id} re-armed. To fire it once, type /kharos:run --resume ${id}.`;
   });
 }
 

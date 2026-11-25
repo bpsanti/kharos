@@ -72,17 +72,32 @@ test('plugin: every hook event in hooks.json has a handler', () => {
   assert.equal(captured(() => runHook('not-an-event', sb.ctx(T0), () => '{}')).value, 1);
 });
 
+/** The key/value pairs of a SKILL.md frontmatter block, the part Claude Code reads. */
+function frontmatter(text: string): Record<string, string> {
+  const lines = text.split('\n');
+  assert.equal(lines[0], '---');
+  const end = lines.indexOf('---', 1);
+  assert.ok(end > 0, 'the frontmatter is closed');
+  const out: Record<string, string> = {};
+  for (const line of lines.slice(1, end)) {
+    const i = line.indexOf(':');
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return out;
+}
+
 test('plugin: skills call commands the CLI knows, and the manifest matches the package', () => {
   const sb = sandbox();
   for (const name of fs.readdirSync(path.join(ROOT, 'skills'))) {
     const text = fs.readFileSync(path.join(ROOT, 'skills', name, 'SKILL.md'), 'utf8');
-    assert.match(text, /^---\ndescription: /, `${name} has a description`);
+    const fm = frontmatter(text);
+    assert.ok(fm.description, `${name} has a description`);
     for (const m of text.matchAll(/scripts\/kharos" ([a-z-]+)/g)) {
       const command = m[1] as string;
       const r = captured(() => main([command], sb.env, () => ''));
       assert.ok(!(r.value === 2 && /unknown command/.test(r.stderr)), `${name} calls kharos ${command}, which the CLI knows`);
     }
-    if (name !== 'kharos' && name !== 'watch') assert.match(text, /disable-model-invocation: true/, `${name} is for the person only`);
+    if (name !== 'kharos' && name !== 'watch') assert.equal(fm['disable-model-invocation'], 'true', `${name} is for the person only`);
   }
   assert.equal(captured(() => main(['not-a-command'], sb.env, () => '')).value, 2);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin/plugin.json'), 'utf8'));
