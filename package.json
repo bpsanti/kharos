@@ -1,0 +1,21 @@
+{
+  "name": "kharos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Launch Claude Code cloud sessions from the terminal, follow them, message them mid-run, and get notified when one needs you, is stuck, or is done.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --disable-warning=ExperimentalWarning 'test/**/*.test.ts'",
+    "validate": "claude plugin validate . --strict",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^7.0.2"
+  }
+}

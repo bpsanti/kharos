@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
+import { recordAccess } from '../src/repo.ts';
+import { saveEnvironments } from '../src/state.ts';
+import { HEADS_EMPTY, HEADS_OK, sandbox, T0, writeConfig } from './helpers.ts';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
+  return {
+    claudeVersion: () => '2.1.332 (Claude Code)',
+    auth: () => ({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'pro', account: 'sha256:x' }),
+    heads: () => HEADS_OK,
+    ownerType: () => 'User',
+    ...over,
+  };
+}
+
+test('doctor: a ready profile passes, with the Claude side still to be seen', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  saveEnvironments(sb.paths, [{ id: 'env_01TESTENVIRONMENT', routines: 2, last_used: null }], T0);
+  const checks = runDoctor(sb.paths, { now: T0, env: sb.env }, deps());
+  assert.equal(checks.filter((c) => c.level === 'fail').length, 0);
+  const text = formatChecks(checks);
+  assert.match(text, /demo: claude access: not checked yet/);
+  assert.match(text, /demo: environment: env_01TESTENVIRONMENT \(used by 2/);
+  assert.match(text, /Ready to launch/);
+});
+
+test('doctor: each gap comes with its fix', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  recordAccess(sb.paths, 'https://github.com/example/demo', 'denied', 'repo_access_denied', T0);
+  saveEnvironments(sb.paths, [{ id: 'env_other', routines: 1, last_used: null }], T0);
+  const checks = runDoctor(
+    sb.paths,
+    { now: T0, env: { ...sb.env, ANTHROPIC_API_KEY: 'k' }, noRemoteTool: true },
+    deps({ claudeVersion: () => '2.1.200 (Claude Code)', heads: () => HEADS_EMPTY }),
+  );
+  const text = formatChecks(checks);
+  assert.match(text, /fail {2}claude: .*needs 2\.1\.323/);
+  assert.match(text, /fail {2}login: ANTHROPIC_API_KEY/);
+  assert.match(text, /fail {2}remote tool/);
+  assert.match(text, /fail {2}demo: repo: example\/demo has no commit/);
+  assert.match(text, /fail {2}demo: claude access: .*repo_access_denied/);
+  assert.match(text, /github\.com\/settings\/installations/);
+  assert.match(text, /warn {2}demo: environment/);
+  assert.match(text, /problem\(s\) to fix/);
+});
+
+test('doctor: no configuration points to setup', () => {
+  const sb = sandbox();
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps())), /no configuration .*\n {6}Run \/kharos:setup/);
+});
+
+test('plugin: hooks and skills call commands that exist', () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks/hooks.json'), 'utf8'));
+  const cli = fs.readFileSync(path.join(ROOT, 'src/cli.ts'), 'utf8');
+  for (const entries of Object.values(hooks.hooks) as any[]) {
+    for (const e of entries) for (const h of e.hooks) assert.ok(cli.includes(`'${h.args[2]}':`), `hook ${h.args[2]} is handled`);
+  }
+  for (const name of fs.readdirSync(path.join(ROOT, 'skills'))) {
+    const text = fs.readFileSync(path.join(ROOT, 'skills', name, 'SKILL.md'), 'utf8');
+    assert.match(text, /^---\ndescription: /, `${name} has a description`);
+    for (const m of text.matchAll(/scripts\/kharos" ([a-z-]+)/g)) assert.ok(cli.includes(`case '${m[1]}':`), `${name} calls kharos ${m[1]}`);
+    if (name !== 'kharos' && name !== 'watch') assert.match(text, /disable-model-invocation: true/, `${name} is for the person only`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin/plugin.json'), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(manifest.name, 'kharos');
+  assert.equal(manifest.version, pkg.version);
+});
