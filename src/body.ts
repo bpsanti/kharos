@@ -21,7 +21,7 @@ export function parkedRunAt(now: number): string {
   return d.toISOString().replace('.000Z', 'Z');
 }
 
-export function footer(extraLines: readonly string[] = []): string {
+export function footer(): string {
   return [
     '',
     '---',
@@ -31,7 +31,6 @@ export function footer(extraLines: readonly string[] = []): string {
     `- If you need an answer to go on, send one last message that contains only this line, then stop and wait for the reply:`,
     `${QUESTION_MARK} {"question":"<up to 300 characters>"}`,
     '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.',
-    ...extraLines,
   ].join('\n');
 }
 
@@ -41,7 +40,6 @@ export interface BodyInput {
   instruction: string;
   profile: Profile;
   model: string;
-  footerLines?: readonly string[];
   uuid?: string;
   now: number;
 }
@@ -67,7 +65,7 @@ export function buildCreateBody(input: BodyInput): Record<string, unknown> {
               session_id: '',
               type: 'user',
               parent_tool_use_id: null,
-              message: { role: 'user', content: input.instruction + '\n' + footer(input.footerLines ?? []) },
+              message: { role: 'user', content: input.instruction + '\n' + footer() },
             },
           },
         ],
@@ -120,10 +118,6 @@ export function parseMark(text: string, mark: string): Record<string, unknown> |
     }
   }
   return null;
-}
-
-export function hasMark(text: string, mark: string): boolean {
-  return text.includes(mark + ' {');
 }
 
 function nullableString(v: unknown, max: number): string | null {

@@ -268,6 +268,36 @@ test('log: a read stores the events and answers without remote text; /kharos:log
   assert.equal(fs.readFileSync(`${sb.paths.logs}/${id}.jsonl`, 'utf8').trim().split('\n').length, 23);
 });
 
+test('hooks: an answer about a tracked launch that cannot be recorded becomes one short line', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const pre = preToolUse(sb.ctx(T0), hook({ action: 'create', body: { kharos_launch: id } }));
+  const updated = (pre?.hookSpecificOutput as any).updatedInput;
+  const registry = fs.readFileSync(sb.paths.registry, 'utf8');
+  fs.writeFileSync(sb.paths.registry, '{"version": 1, "sessions": ');
+  const created = postToolUse(sb.ctx(T0), hook(updated, response(200, { trigger: { id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, note: 'REMOTE TEXT' })));
+  const text = summaryOf(created);
+  assert.match(text, /^kharos: k-0001 answer could not be recorded \(/);
+  assert.ok(text.includes(sb.paths.registry), 'the answer names the state file');
+  assert.match(text, /Do not run again; show this to the person\.$/);
+  assert.equal(JSON.stringify(created).includes('REMOTE TEXT'), false);
+  fs.writeFileSync(sb.paths.registry, registry);
+  assert.equal(postToolUse(sb.ctx(T0), hook({ action: 'create', body: { name: 'my own routine' } }, response(200, { trigger: { id: 'trig_z' } }))), null);
+});
+
+test('hooks: a log page that cannot be stored never reaches the model', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  fs.writeFileSync(sb.paths.logs, 'not a folder');
+  const out = postToolUse(
+    sb.ctx(T0 + 400_000),
+    hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, fixture('log-question-background-done.txt'))),
+  );
+  assert.match(summaryOf(out), /^kharos: k-0001 answer could not be recorded/);
+  assert.equal(/BANANA|sleep/.test(JSON.stringify(out)), false);
+});
+
 test('log: a 404 counts as a failed read, and so does a tool failure', () => {
   const sb = sandbox();
   const id = prepared(sb);

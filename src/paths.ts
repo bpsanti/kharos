@@ -13,7 +13,6 @@ export interface Paths {
   intents: string;
   repos: string;
   environments: string;
-  outbox: string;
   bodies: string;
   logs: string;
 }
@@ -38,7 +37,6 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     intents: path.join(state, 'intents.json'),
     repos: path.join(state, 'repos.json'),
     environments: path.join(state, 'environments.json'),
-    outbox: path.join(state, 'outbox.json'),
     bodies: path.join(state, 'bodies'),
     logs: path.join(state, 'logs'),
   };

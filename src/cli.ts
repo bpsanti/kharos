@@ -177,9 +177,6 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
         out(r.ok ? r.detail : `not done: ${r.detail}`);
         return r.ok ? 0 : 1;
       }
-      case 'paths':
-        out(JSON.stringify(paths, null, 2));
-        return 0;
       case undefined:
       case 'help':
       case '--help':

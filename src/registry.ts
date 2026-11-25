@@ -4,7 +4,6 @@
 
 import path from 'node:path';
 import { readJson, withLock, writeJsonAtomic } from './fsutil.ts';
-import type { OutputConfig } from './config.ts';
 import type { Paths } from './paths.ts';
 
 /** Where the launch is. Each step is written before the call that depends on it. */
@@ -80,8 +79,6 @@ export interface Session {
   notice: Notice | null;
   last_notice: Notice | null;
   result: Result;
-  /** Outputs given to this launch only, such as the firstmate adapter. */
-  extra_outputs: OutputConfig[];
   /** A next older page the watcher must read because the newest page did not reach the events it had. */
   pending_cursor: string | null;
   cursor_reads: number;
@@ -131,16 +128,6 @@ export function byTrigger(reg: Registry, triggerId: string): Session | undefined
 
 export function bySessionId(reg: Registry, sessionId: string): Session | undefined {
   return Object.values(reg.sessions).find((s) => s.session_id === sessionId);
-}
-
-/** Sessions the watcher still follows: launched or launching, not terminal, not closed. */
-export function openSessions(reg: Registry): Session[] {
-  return Object.values(reg.sessions).filter(isFollowed);
-}
-
-export function isFollowed(s: Session): boolean {
-  if (s.step === 'closed' || s.step === 'refused' || s.step === 'prepared' || s.step === 'routine_created') return false;
-  return !TERMINAL_STATES.has(s.state);
 }
 
 /** Counts launches that hold a slot against max_open: everything that may run and is not finished. */

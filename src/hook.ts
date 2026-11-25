@@ -78,6 +78,22 @@ function reshape(status: number | null, header: Record<string, unknown>, summary
   };
 }
 
+/**
+ * Records an answer about a launch kharos follows. When that fails, the model still gets one short line
+ * instead of the raw answer, which may carry remote text.
+ */
+function recorded(ctx: Ctx, r: ReturnType<typeof readToolResponse>, id: string, fn: () => HookOutput): HookOutput {
+  try {
+    return fn();
+  } catch (err) {
+    return reshape(
+      r.status,
+      { kharos: id, error: 'state' },
+      `kharos: ${id} answer could not be recorded (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). Do not run again; show this to the person.`,
+    );
+  }
+}
+
 export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (input.tool_name !== 'RemoteTrigger') return null;
   const ti = input.tool_input ?? {};
@@ -141,35 +157,39 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
     const m = str(rec(ti.body)?.name)?.match(LAUNCH_NAME_RE);
     if (!m) return null;
     const id = m[1] as string;
-    const err = readError(r);
-    const trig = err ? null : readCreatedTrigger(r);
-    const outcome = updateRegistry(ctx.paths, (reg) => {
-      const s = reg.sessions[id];
-      if (!s || s.step !== 'prepared') return null;
+    return recorded(ctx, r, id, () => {
+      const err = readError(r);
+      const trig = err ? null : readCreatedTrigger(r);
+      const outcome = updateRegistry(ctx.paths, (reg) => {
+        const s = reg.sessions[id];
+        if (!s || s.step !== 'prepared') return null;
+        if (trig) {
+          s.trigger_id = trig;
+          s.step = 'routine_created';
+        } else {
+          s.step = 'refused';
+          s.error = err ? `${err.status ?? '?'} ${err.reason ?? err.type ?? ''}`.trim() : 'create answered without a routine id';
+        }
+        return { repo: s.repo };
+      });
+      if (!outcome) return null;
       if (trig) {
-        s.trigger_id = trig;
-        s.step = 'routine_created';
-      } else {
-        s.step = 'refused';
-        s.error = err ? `${err.status ?? '?'} ${err.reason ?? err.type ?? ''}`.trim() : 'create answered without a routine id';
+        recordAccess(ctx.paths, outcome.repo, 'ok', null, ctx.now);
+        return reshape(r.status, { kharos: id, step: 'routine_created', trigger_id: trig }, `kharos: ${id} routine created, disabled (${routineUrl(trig)}). Next: call RemoteTrigger with action "run" and trigger_id "${trig}", once.`);
       }
-      return { repo: s.repo };
+      const denied = err?.reason === 'repo_access_denied';
+      if (denied) recordAccess(ctx.paths, outcome.repo, 'denied', err.reason, ctx.now);
+      const fix = refusalFix(err?.reason ?? null, err?.message ?? null, outcome.repo, denied ? (ctx.ownerType ?? ((repo) => readOwnerType(repo, ctx.env)))(outcome.repo) : null);
+      return reshape(r.status, { kharos: id, step: 'refused' }, [`kharos: ${id} was not created; nothing was started and nothing was spent.`, ...fix, 'Stop here and show this to the person.'].join('\n'));
     });
-    if (!outcome) return null;
-    if (trig) {
-      recordAccess(ctx.paths, outcome.repo, 'ok', null, ctx.now);
-      return reshape(r.status, { kharos: id, step: 'routine_created', trigger_id: trig }, `kharos: ${id} routine created, disabled (${routineUrl(trig)}). Next: call RemoteTrigger with action "run" and trigger_id "${trig}", once.`);
-    }
-    const denied = err?.reason === 'repo_access_denied';
-    if (denied) recordAccess(ctx.paths, outcome.repo, 'denied', err.reason, ctx.now);
-    const fix = refusalFix(err?.reason ?? null, err?.message ?? null, outcome.repo, denied ? (ctx.ownerType ?? ((repo) => readOwnerType(repo, ctx.env)))(outcome.repo) : null);
-    return reshape(r.status, { kharos: id, step: 'refused' }, [`kharos: ${id} was not created; nothing was started and nothing was spent.`, ...fix, 'Stop here and show this to the person.'].join('\n'));
   }
 
   if (action === 'run') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
-    return updateRegistry(ctx.paths, (reg) => {
+    const tracked = byTrigger(loadRegistry(ctx.paths), trig);
+    if (!tracked) return null;
+    return recorded(ctx, r, tracked.id, () => updateRegistry(ctx.paths, (reg) => {
       const s = byTrigger(reg, trig);
       if (!s || s.step !== 'firing') return null;
       const err = readError(r);
@@ -185,13 +205,15 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
         return reshape(r.status, { kharos: s.id, step: 'refused' }, [`kharos: ${s.id} was not started.`, ...fix, 'Stop here and show this to the person.'].join('\n'));
       }
       return reshape(r.status, { kharos: s.id, step: 'firing' }, `kharos: the answer to run did not carry a session id. Do not run again: call RemoteTrigger with action "list_runs" and trigger_id "${trig}" to find the session.`);
-    });
+    }));
   }
 
   if (action === 'list_runs') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
-    return updateRegistry(ctx.paths, (reg) => {
+    const tracked = byTrigger(loadRegistry(ctx.paths), trig);
+    if (!tracked) return null;
+    return recorded(ctx, r, tracked.id, () => updateRegistry(ctx.paths, (reg) => {
       const s = byTrigger(reg, trig);
       if (!s) return null;
       const rows = readRuns(r);
@@ -212,7 +234,7 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
       }
       if (row?.url) s.url = row.url;
       return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
-    });
+    }));
   }
 
   if (action === 'get_run_log') {
@@ -220,13 +242,15 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
     if (!sid) return null;
     const tracked = bySessionId(loadRegistry(ctx.paths), sid);
     if (!tracked) return null;
-    const intent = takeIntent(ctx.paths, 'log', claudeSession, (i) => i.id === tracked.id, ctx.now);
-    return updateRegistry(ctx.paths, (reg) => {
-      const s = bySessionId(reg, sid);
-      if (!s) return null;
-      const out = readLogInto(ctx, s, r, ti);
-      if (intent) return reshape(r.status, { kharos: s.id, view: 'log' }, logView(ctx, s, intent.lines));
-      return reshape(r.status, { kharos: s.id, state: s.state }, out);
+    return recorded(ctx, r, tracked.id, () => {
+      const intent = takeIntent(ctx.paths, 'log', claudeSession, (i) => i.id === tracked.id, ctx.now);
+      return updateRegistry(ctx.paths, (reg) => {
+        const s = bySessionId(reg, sid);
+        if (!s) return null;
+        const out = readLogInto(ctx, s, r, ti);
+        if (intent) return reshape(r.status, { kharos: s.id, view: 'log' }, logView(ctx, s, intent.lines));
+        return reshape(r.status, { kharos: s.id, state: s.state }, out);
+      });
     });
   }
 
