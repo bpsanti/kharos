@@ -5,8 +5,8 @@ import { claudeBin, readAuthStatus, type AuthStatus } from './account.ts';
 import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './config.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, loadRegistry } from './registry.ts';
-import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads } from './repo.ts';
-import { loadEnvironments, loadWatch } from './state.ts';
+import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
+import { loadEnvironments, loadWatch, type EnvironmentBook } from './state.ts';
 
 export type Level = 'ok' | 'warn' | 'fail' | 'info';
 
@@ -99,6 +99,16 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     add('fail', 'config', `${paths.config}: ${err.message}`, ['Fix the file, or run /kharos:setup to write a new profile.']);
   }
   if (!config) return checks;
+  const state = <T>(name: string, file: string, read: () => T): T | null => {
+    try {
+      return read();
+    } catch (err) {
+      add('fail', name, `${file}: state could not be read: ${err instanceof Error ? err.message : String(err)}`, ['Repair or move that file.']);
+      return null;
+    }
+  };
+  const repos = state('repos', paths.repos, () => loadRepos(paths));
+  const envs = state('environments', paths.environments, () => loadEnvironments(paths));
   const names = opts.profile ? [opts.profile] : Object.keys(config.profiles);
   if (names.length === 0) add('fail', 'profile', 'the configuration has no profile', ['Run /kharos:setup.']);
   add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})`);
@@ -108,19 +118,28 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
       add('fail', `profile ${name}`, 'does not exist');
       continue;
     }
-    checkProfile(paths, name, p, deps, add);
+    checkProfile(name, p, deps, add, repos ?? {}, envs);
   }
 
-  const reg = loadRegistry(paths);
-  const hourAgo = opts.now - 3600_000;
-  const fires = Object.values(reg.sessions).filter((s) => s.fired_at && Date.parse(s.fired_at) > hourAgo).length;
-  add('info', 'limits', `${activeCount(reg)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
-  const w = loadWatch(paths);
-  add('info', 'watcher', w.last_beat ? `last heartbeat ${w.last_beat}` : 'never ran: start it with /loop 10m /kharos:watch in a separate session');
+  const reg = state('registry', paths.registry, () => loadRegistry(paths));
+  if (reg) {
+    const hourAgo = opts.now - 3600_000;
+    const fires = Object.values(reg.sessions).filter((s) => s.fired_at && Date.parse(s.fired_at) > hourAgo).length;
+    add('info', 'limits', `${activeCount(reg)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
+  }
+  const w = state('watcher', paths.watch, () => loadWatch(paths));
+  if (w) add('info', 'watcher', w.last_beat ? `last heartbeat ${w.last_beat}` : 'never ran: start it with /loop 10m /kharos:watch in a separate session');
   return checks;
 }
 
-function checkProfile(paths: Paths, name: string, p: Profile, deps: DoctorDeps, add: (l: Level, n: string, d: string, f?: string[]) => void): void {
+function checkProfile(
+  name: string,
+  p: Profile,
+  deps: DoctorDeps,
+  add: (l: Level, n: string, d: string, f?: string[]) => void,
+  repos: RepoBook,
+  envs: EnvironmentBook | null,
+): void {
   const slug = repoSlug(p.repo);
   const label = `${name}: repo`;
   const heads = deps.heads(p.repo, p.revision);
@@ -138,7 +157,7 @@ function checkProfile(paths: Paths, name: string, p: Profile, deps: DoctorDeps, 
     ]);
   } else add('ok', label, `${slug}@${p.revision}`);
 
-  const access = loadRepos(paths)[slug];
+  const access = repos[slug];
   if (access?.access === 'ok') add('ok', `${name}: claude access`, `a routine for ${slug} was created on ${access.checked_at.slice(0, 10)}`);
   else if (access?.access === 'denied') add('fail', `${name}: claude access`, `the service answered ${access.reason ?? 'access denied'} on ${access.checked_at.slice(0, 10)}`, accessFix(p.repo, deps.ownerType(p.repo)));
   else {
@@ -147,7 +166,6 @@ function checkProfile(paths: Paths, name: string, p: Profile, deps: DoctorDeps, 
     ]);
   }
 
-  const envs = loadEnvironments(paths);
   const seen = envs?.environments.find((e) => e.id === p.environment);
   if (seen) add('ok', `${name}: environment`, `${p.environment} (used by ${seen.routines} routine(s))`);
   else if (envs) {

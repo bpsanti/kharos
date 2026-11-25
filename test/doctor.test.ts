@@ -54,6 +54,23 @@ test('doctor: each gap comes with its fix', () => {
   assert.match(text, /problem\(s\) to fix/);
 });
 
+test('doctor: an unreadable registry is a failed check, and the other checks still run', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  fs.mkdirSync(path.dirname(sb.paths.registry), { recursive: true });
+  fs.writeFileSync(sb.paths.registry, '{"version":1}');
+  fs.writeFileSync(sb.paths.watch, '{"last_beat": ');
+  const checks = runDoctor(sb.paths, { now: T0, env: sb.env }, deps());
+  const registry = checks.find((c) => c.name === 'registry');
+  assert.equal(registry?.level, 'fail');
+  assert.ok(registry?.detail.startsWith(`${sb.paths.registry}: state could not be read`));
+  assert.deepEqual(registry?.fix, ['Repair or move that file.']);
+  assert.equal(checks.find((c) => c.name === 'watcher')?.level, 'fail');
+  assert.equal(checks.find((c) => c.name === 'demo: repo')?.level, 'ok');
+  assert.equal(checks.find((c) => c.name === 'config')?.level, 'ok');
+  assert.match(formatChecks(checks), /problem\(s\) to fix/);
+});
+
 test('doctor: no configuration points to setup', () => {
   const sb = sandbox();
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps())), /no configuration .*\n {6}Run \/kharos:setup/);

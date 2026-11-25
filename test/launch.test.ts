@@ -174,7 +174,7 @@ test('hooks: with unreadable kharos state, a run and a kharos create are denied 
     const h = JSON.parse(printed).hookSpecificOutput;
     assert.equal(h.permissionDecision, 'deny');
     assert.ok(h.permissionDecisionReason.includes(sb.paths.registry), 'the reason names the state file');
-    assert.match(h.permissionDecisionReason, /kharos state could not be read/);
+    assert.match(h.permissionDecisionReason, /^kharos: state could not be read \(.*\): .*\. Do not run again; show this to the person\.$/);
   }
   assert.equal(runPreHook(sb, { action: 'create', body: { name: 'my own routine' } }).printed, '');
   assert.equal(runPreHook(sb, { action: 'list' }).printed, '');
@@ -313,9 +313,8 @@ test('hooks: with unreadable or wrongly shaped kharos state, answers are hidden 
     for (const input of answers) {
       const out = postToolUse(sb.ctx(T0), input);
       const text = summaryOf(out);
-      assert.match(text, /^kharos: kharos state could not be read \(/);
+      assert.match(text, /^kharos: state could not be read \(.*\): .*\. Do not run again; show this to the person\.$/);
       assert.ok(text.includes(sb.paths.registry), 'the answer names the state file');
-      assert.match(text, /until then RemoteTrigger answers are hidden here\.$/);
       assert.equal(/BANANA|sleep|REMOTE/.test(JSON.stringify(out)), false);
     }
   }

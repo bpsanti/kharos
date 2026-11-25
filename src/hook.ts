@@ -53,18 +53,19 @@ function deny(reason: string): HookOutput {
   return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } };
 }
 
+function stateUnreadable(ctx: Ctx, err: unknown): string {
+  return `kharos: state could not be read (${ctx.paths.registry}): ${err instanceof Error ? err.message : String(err)}. Do not run again; show this to the person.`;
+}
+
 /**
  * Runs a launch check under the registry lock. When kharos state cannot be read, the call is denied:
  * passing it could fire a launch a second time, which starts another paid session.
  */
-function launchCheck(ctx: Ctx, action: string, fn: (reg: Registry) => HookOutput): HookOutput {
+function launchCheck(ctx: Ctx, fn: (reg: Registry) => HookOutput): HookOutput {
   try {
     return updateRegistry(ctx.paths, fn);
   } catch (err) {
-    return deny(
-      `kharos: kharos state could not be read (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). ` +
-        `This ${action} was stopped, because without that file kharos cannot tell whether it would start a second paid session. Fix that file, then try again.`,
-    );
+    return deny(stateUnreadable(ctx, err));
   }
 }
 
@@ -102,11 +103,7 @@ function withRegistry(ctx: Ctx, r: ReturnType<typeof readToolResponse>, fn: (reg
   try {
     return fn(loadRegistry(ctx.paths));
   } catch (err) {
-    return reshape(
-      r.status,
-      { kharos: 'state', error: 'unreadable' },
-      `kharos: kharos state could not be read (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). Repair or move that file; until then RemoteTrigger answers are hidden here.`,
-    );
+    return reshape(r.status, { kharos: 'state', error: 'unreadable' }, stateUnreadable(ctx, err));
   }
 }
 
@@ -118,7 +115,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (action === 'create') {
     const launch = str(rec(ti.body)?.kharos_launch);
     if (!launch) return null;
-    return launchCheck(ctx, 'create', (reg) => {
+    return launchCheck(ctx, (reg) => {
       const s = reg.sessions[launch];
       if (!s) return deny(`kharos: there is no prepared launch ${launch}. Run /kharos:run again.`);
       if (s.step !== 'prepared') return deny(`kharos: launch ${launch} is past creation (step ${s.step}); do not create it again.`);
@@ -144,7 +141,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (action === 'run') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
-    return launchCheck(ctx, 'run', (reg) => {
+    return launchCheck(ctx, (reg) => {
       const s = byTrigger(reg, trig);
       if (!s) return null;
       if (s.step === 'routine_created') {
