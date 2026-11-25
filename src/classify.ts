@@ -57,6 +57,12 @@ function isPermissionAnswer(e: LogEvent): boolean {
 const USAGE_LIMIT_RE = /usage limit|limit reached|rate[_ ]limit[_ ]error|you(?:'|’)ve hit your|out of (?:extra )?usage|plan limit/i;
 const ERROR_RESULT_RE = /\b(?:error|failed|failure|exit code [1-9]\d*|denied|blocked|not found|traceback|exception)\b/i;
 
+/** An error result or a service line (environment, system): text the session did not write itself. */
+function isServiceText(e: LogEvent): boolean {
+  if (e.kind === 'result') return /is_error=true/.test(e.text);
+  return /^(?:env|system)\b/.test(e.kind);
+}
+
 /** The text of an error with numbers, paths and ids taken out, so the same failure compares equal. */
 export function normalizeError(text: string): string {
   return text
@@ -101,17 +107,7 @@ export function classify(input: ClassifyInput): Verdict {
   const turn = sinceLastUser(events);
   const marks = latestMarks(events);
 
-  // usage limit: first, since a turn the limit stopped can close with an error result
-  const tail = turn.slice(-5);
-  if (tail.some((e) => !['assistant', 'tool_result', 'tool_use', 'user'].includes(e.kind) && USAGE_LIMIT_RE.test(e.text))) {
-    return { state: 'usage_limit', notice: 'usage_limit', reason: 'the plan usage limit stopped the session' };
-  }
-
-  // failed: the environment could not start this turn, or the session said so
-  const firstInit = events.findIndex((e) => e.kind === 'init');
-  const turnStart = events.length - turn.length;
-  const envFailed = turn.some((e, i) => /^env\[(?:error|fatal)\]$/.test(e.kind) && (firstInit < 0 || turnStart + i < firstInit));
-  if (envFailed) return { state: 'failed', notice: 'failed', reason: 'the environment reported an error (setup or clone)' };
+  // failed: the session said so
   if (marks.done?.status === 'failed') return { state: 'failed', notice: 'failed', reason: 'the session reported that it failed' };
 
   // finished: the end mark after the last message from a person, and no work after it
@@ -119,9 +115,6 @@ export function classify(input: ClassifyInput): Verdict {
     const after = turn.slice(marks.doneAt + 1);
     if (!after.some((e) => WORK.has(e.kind))) return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark' };
   }
-
-  // a turn that ended with an error: a warning, since a message can wake the session again
-  if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
   // waiting for a permission answer
   const lastPermission = [...events].reverse().findIndex(isPermissionEvent);
@@ -140,6 +133,21 @@ export function classify(input: ClassifyInput): Verdict {
   if (last.kind === 'tool_use' && last.tool === 'AskUserQuestion') {
     return { state: 'waiting_answer', notice: 'waiting_answer', reason: 'the session asked a question and waits for the answer' };
   }
+
+  // usage limit: before the error rules, since a turn the limit stopped closes with an error result.
+  // Only text the service writes counts, never the session's own prose.
+  if (turn.slice(-5).some((e) => isServiceText(e) && USAGE_LIMIT_RE.test(e.text))) {
+    return { state: 'usage_limit', notice: 'usage_limit', reason: 'the plan usage limit stopped the session' };
+  }
+
+  // failed: the environment could not start this turn
+  const firstInit = events.findIndex((e) => e.kind === 'init');
+  const turnStart = events.length - turn.length;
+  const envFailed = turn.some((e, i) => /^env\[(?:error|fatal)\]$/.test(e.kind) && (firstInit < 0 || turnStart + i < firstInit));
+  if (envFailed) return { state: 'failed', notice: 'failed', reason: 'the environment reported an error (setup or clone)' };
+
+  // a turn that ended with an error: a warning, since a message can wake the session again
+  if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
   // past the deadline
   const ageMin = (now - input.createdAt) / MIN;

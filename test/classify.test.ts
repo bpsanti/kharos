@@ -107,7 +107,8 @@ test('classify: failure, permission, deadline, usage limit and provisioning', ()
   assert.equal(at(perm, 400).state, 'waiting_permission');
   assert.equal(at(log([...START, [130, 'tool_use', 'Bash', '{}'], [131, 'permission_request', 'Bash', 'x'], [200, 'tool_result', null, 'ok']]), 210).state, 'running');
   assert.equal(at(log([...START, [130, 'tool_use', 'Bash', '{}']]), 181 * 60).state, 'overdue');
-  assert.equal(at(log([...START, [130, 'result', null, 'error is_error=false — You\'ve hit your usage limit']]), 140).state, 'usage_limit');
+  assert.equal(at(log([...START, [130, 'result', null, 'error is_error=true — You\'ve hit your usage limit']]), 140).state, 'usage_limit');
+  assert.equal(at(log([...START, [130, 'system[api_error]', null, 'rate_limit_error: usage limit reached']]), 140).state, 'usage_limit');
   assert.deepEqual(at(log(START.slice(0, 2)), 60), { state: 'provisioning', notice: null, reason: 'provisioning' });
   assert.equal(at(log(START.slice(0, 2)), 16 * 60).notice, 'provisioning_slow');
   // A page that starts in the middle of a session has no init line, and that does not mean provisioning.
@@ -119,6 +120,15 @@ test('classify: a turn that ended with an error is a warning, and the usage limi
   assert.deepEqual(at(log([...START, [300, 'result', null, 'error_during_execution is_error=true']]), 301), { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' });
   const limited = log([...START, [300, 'assistant', null, 'working'], [301, 'result', null, "error_during_execution is_error=true — You've hit your usage limit"]]);
   assert.equal(at(limited, 310).state, 'usage_limit');
+});
+
+test('classify: a usage limit the session writes about is its own text, not the plan limit', () => {
+  const done = log([...START, [300, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":null,"branch":"limits","summary":"Add a per-user usage limit to the API"}'], [301, 'result', null, 'success is_error=false — KHAROS-DONE {"status":"ok","pr":null,"branch":"limits","summary":"Add a per-user usage limit to the API"}']]);
+  assert.equal(at(done, 310).state, 'finished');
+  const question = log([...START, [300, 'result', null, 'success is_error=false — KHAROS-QUESTION {"question":"Should the plan limit be per org? The usage limit reached today was per user."}']]);
+  assert.equal(at(question, 310).state, 'waiting_answer');
+  const prose = log([...START, [300, 'result', null, 'success is_error=false — documented what happens when the usage limit is reached']]);
+  assert.equal(at(prose, 310).state, 'turn_closed');
 });
 
 test('classify: a message after an error wakes the session; it reads as running and can finish', () => {

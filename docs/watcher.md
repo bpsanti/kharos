@@ -44,12 +44,13 @@ The rules are checked in this order, and the first that matches wins.
 | State | Rule | Notice |
 |---|---|---|
 | `invisible` | two failed reads in a row (HTTP error, the session missing from `list_runs`, an empty log for a session that had events), or the account logged in now is not the one that launched it | yes |
-| `usage_limit` | a plan usage limit in the last events of the turn, seen on two reads, even when the turn closed with an error result | yes |
-| `failed` | an environment error (setup or clone) in the current turn before the first `init`, or `KHAROS-DONE` with `failed` | yes, terminal |
+| `failed` | `KHAROS-DONE` with `failed` | yes, terminal |
 | `finished` | `KHAROS-DONE` with `ok` after the last message from a person, and no work after it | yes, terminal |
-| `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
 | `waiting_permission` | a permission request with no answer or denial after it | yes |
 | `waiting_answer` | `KHAROS-QUESTION` in a closed turn, or `AskUserQuestion` as the last event | yes |
+| `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
+| `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
+| `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
 | `overdue` | running for longer than the profile's `deadline_min` | yes |
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
