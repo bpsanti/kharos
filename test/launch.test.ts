@@ -298,6 +298,25 @@ test('hooks: a log page that cannot be stored never reaches the model', () => {
   assert.equal(/BANANA|sleep/.test(JSON.stringify(out)), false);
 });
 
+test('hooks: with unreadable kharos state, run, list_runs and get_run_log answers are hidden', () => {
+  const sb = sandbox();
+  fs.mkdirSync(sb.paths.state, { recursive: true });
+  fs.writeFileSync(sb.paths.registry, '{"version": 1, "sessions": ');
+  const answers = [
+    hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, fixture('log-question-background-done.txt'))),
+    hook({ action: 'list_runs', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, response(200, { data: [{ id: 'cse_REMOTE', title: 'REMOTE TEXT' }] })),
+    hook({ action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, response(200, { session_id: 'cse_REMOTE', note: 'REMOTE TEXT' })),
+  ];
+  for (const input of answers) {
+    const out = postToolUse(sb.ctx(T0), input);
+    const text = summaryOf(out);
+    assert.match(text, /^kharos: kharos state could not be read \(/);
+    assert.ok(text.includes(sb.paths.registry), 'the answer names the state file');
+    assert.match(text, /until then RemoteTrigger answers are hidden here\.$/);
+    assert.equal(/BANANA|sleep|REMOTE/.test(JSON.stringify(out)), false);
+  }
+});
+
 test('log: a 404 counts as a failed read, and so does a tool failure', () => {
   const sb = sandbox();
   const id = prepared(sb);

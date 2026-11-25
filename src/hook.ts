@@ -94,6 +94,24 @@ function recorded(ctx: Ctx, r: ReturnType<typeof readToolResponse>, id: string, 
   }
 }
 
+/**
+ * Reads the registry to tell answers about followed launches from the rest. When it cannot be read,
+ * that cannot be told, so the answer is hidden rather than passed with possible remote text.
+ */
+function withRegistry(ctx: Ctx, r: ReturnType<typeof readToolResponse>, fn: (reg: Registry) => HookOutput): HookOutput {
+  let reg: Registry;
+  try {
+    reg = loadRegistry(ctx.paths);
+  } catch (err) {
+    return reshape(
+      r.status,
+      { kharos: 'state', error: 'unreadable' },
+      `kharos: kharos state could not be read (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). Repair or move that file; until then RemoteTrigger answers are hidden here.`,
+    );
+  }
+  return fn(reg);
+}
+
 export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (input.tool_name !== 'RemoteTrigger') return null;
   const ti = input.tool_input ?? {};
@@ -187,69 +205,75 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (action === 'run') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
-    const tracked = byTrigger(loadRegistry(ctx.paths), trig);
-    if (!tracked) return null;
-    return recorded(ctx, r, tracked.id, () => updateRegistry(ctx.paths, (reg) => {
-      const s = byTrigger(reg, trig);
-      if (!s || s.step !== 'firing') return null;
-      const err = readError(r);
-      const sid = err ? null : readRunSession(r);
-      if (sid) {
-        openSession(s, sid, null, ctx.now);
-        return reshape(r.status, { kharos: s.id, step: 'open', session_id: sid }, `kharos: ${s.id} is open: ${s.url}`);
-      }
-      if (err && err.status !== null && err.status >= 400 && err.status < 500) {
-        s.step = 'refused';
-        s.error = `${err.status} ${err.reason ?? err.type ?? ''}`.trim();
-        const fix = refusalFix(err.reason, err.message, s.repo, null);
-        return reshape(r.status, { kharos: s.id, step: 'refused' }, [`kharos: ${s.id} was not started.`, ...fix, 'Stop here and show this to the person.'].join('\n'));
-      }
-      return reshape(r.status, { kharos: s.id, step: 'firing' }, `kharos: the answer to run did not carry a session id. Do not run again: call RemoteTrigger with action "list_runs" and trigger_id "${trig}" to find the session.`);
-    }));
+    return withRegistry(ctx, r, (current) => {
+      const tracked = byTrigger(current, trig);
+      if (!tracked) return null;
+      return recorded(ctx, r, tracked.id, () => updateRegistry(ctx.paths, (reg) => {
+        const s = byTrigger(reg, trig);
+        if (!s || s.step !== 'firing') return null;
+        const err = readError(r);
+        const sid = err ? null : readRunSession(r);
+        if (sid) {
+          openSession(s, sid, null, ctx.now);
+          return reshape(r.status, { kharos: s.id, step: 'open', session_id: sid }, `kharos: ${s.id} is open: ${s.url}`);
+        }
+        if (err && err.status !== null && err.status >= 400 && err.status < 500) {
+          s.step = 'refused';
+          s.error = `${err.status} ${err.reason ?? err.type ?? ''}`.trim();
+          const fix = refusalFix(err.reason, err.message, s.repo, null);
+          return reshape(r.status, { kharos: s.id, step: 'refused' }, [`kharos: ${s.id} was not started.`, ...fix, 'Stop here and show this to the person.'].join('\n'));
+        }
+        return reshape(r.status, { kharos: s.id, step: 'firing' }, `kharos: the answer to run did not carry a session id. Do not run again: call RemoteTrigger with action "list_runs" and trigger_id "${trig}" to find the session.`);
+      }));
+    });
   }
 
   if (action === 'list_runs') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
-    const tracked = byTrigger(loadRegistry(ctx.paths), trig);
-    if (!tracked) return null;
-    return recorded(ctx, r, tracked.id, () => updateRegistry(ctx.paths, (reg) => {
-      const s = byTrigger(reg, trig);
-      if (!s) return null;
-      const rows = readRuns(r);
-      s.last_read_at = new Date(ctx.now).toISOString();
-      if (rows === null) {
-        s.read_failures++;
-        return reshape(r.status, { kharos: s.id, read: 'failed' }, `kharos: ${s.id} list_runs could not be read (HTTP ${r.status ?? '?'}).`);
-      }
-      const row = s.session_id ? rows.find((x) => x.id === s.session_id) : rows[0];
-      if (!s.session_id && row && (s.step === 'firing' || s.step === 'routine_created')) openSession(s, row.id, row.url, ctx.now);
-      else if (s.step === 'firing' && !row) {
-        s.runs_seen_empty_at = new Date(ctx.now).toISOString();
-        return reshape(
-          r.status,
-          { kharos: s.id, step: 'firing' },
-          `kharos: ${s.id}: no session is visible yet. Do not run again; show this to the person. If the routine page ${routineUrl(trig)} shows no run and no Claude Code window still asks to approve the run, you can re-arm it by typing /kharos:run --rearm ${s.id}.`,
-        );
-      }
-      if (row?.url) s.url = row.url;
-      return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
-    }));
+    return withRegistry(ctx, r, (current) => {
+      const tracked = byTrigger(current, trig);
+      if (!tracked) return null;
+      return recorded(ctx, r, tracked.id, () => updateRegistry(ctx.paths, (reg) => {
+        const s = byTrigger(reg, trig);
+        if (!s) return null;
+        const rows = readRuns(r);
+        s.last_read_at = new Date(ctx.now).toISOString();
+        if (rows === null) {
+          s.read_failures++;
+          return reshape(r.status, { kharos: s.id, read: 'failed' }, `kharos: ${s.id} list_runs could not be read (HTTP ${r.status ?? '?'}).`);
+        }
+        const row = s.session_id ? rows.find((x) => x.id === s.session_id) : rows[0];
+        if (!s.session_id && row && (s.step === 'firing' || s.step === 'routine_created')) openSession(s, row.id, row.url, ctx.now);
+        else if (s.step === 'firing' && !row) {
+          s.runs_seen_empty_at = new Date(ctx.now).toISOString();
+          return reshape(
+            r.status,
+            { kharos: s.id, step: 'firing' },
+            `kharos: ${s.id}: no session is visible yet. Do not run again; show this to the person. If the routine page ${routineUrl(trig)} shows no run and no Claude Code window still asks to approve the run, you can re-arm it by typing /kharos:run --rearm ${s.id}.`,
+          );
+        }
+        if (row?.url) s.url = row.url;
+        return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
+      }));
+    });
   }
 
   if (action === 'get_run_log') {
     const sid = str(ti.session_id);
     if (!sid) return null;
-    const tracked = bySessionId(loadRegistry(ctx.paths), sid);
-    if (!tracked) return null;
-    return recorded(ctx, r, tracked.id, () => {
-      const intent = takeIntent(ctx.paths, 'log', claudeSession, (i) => i.id === tracked.id, ctx.now);
-      return updateRegistry(ctx.paths, (reg) => {
-        const s = bySessionId(reg, sid);
-        if (!s) return null;
-        const out = readLogInto(ctx, s, r, ti);
-        if (intent) return reshape(r.status, { kharos: s.id, view: 'log' }, logView(ctx, s, intent.lines));
-        return reshape(r.status, { kharos: s.id, state: s.state }, out);
+    return withRegistry(ctx, r, (current) => {
+      const tracked = bySessionId(current, sid);
+      if (!tracked) return null;
+      return recorded(ctx, r, tracked.id, () => {
+        const intent = takeIntent(ctx.paths, 'log', claudeSession, (i) => i.id === tracked.id, ctx.now);
+        return updateRegistry(ctx.paths, (reg) => {
+          const s = bySessionId(reg, sid);
+          if (!s) return null;
+          const out = readLogInto(ctx, s, r, ti);
+          if (intent) return reshape(r.status, { kharos: s.id, view: 'log' }, logView(ctx, s, intent.lines));
+          return reshape(r.status, { kharos: s.id, state: s.state }, out);
+        });
       });
     });
   }

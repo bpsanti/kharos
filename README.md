@@ -74,6 +74,7 @@ The re-arm is accepted only within 10 minutes of an empty `list_runs`, asks for 
 
 The one-run guard covers only launches kharos knows.
 Calling RemoteTrigger `run` by hand on a routine id read elsewhere (the routine page, /schedule) starts another paid session, and the service has no fire-once flag.
+While the registry file cannot be read, every `run`, `list_runs` and `get_run_log` answer is hidden behind one line that names the file, because kharos cannot tell its own launches from others.
 
 The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}` line when it is truly finished, or a `KHAROS-QUESTION {...}` line when it needs an answer, and pushes work in progress every 30 minutes.
 
