@@ -3,7 +3,7 @@
 // middle can be resumed without firing twice (a repeated `run` creates another paid session).
 
 import path from 'node:path';
-import { readJson, withLock, writeJsonAtomic } from './fsutil.ts';
+import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 
 /** Where the launch is. Each step is written before the call that depends on it. */
@@ -97,17 +97,8 @@ function empty(): Registry {
 }
 
 export function loadRegistry(paths: Paths): Registry {
-  const reg = readJson<unknown>(paths.registry);
-  if (reg === undefined) return empty();
-  const r = reg as Partial<Registry> | null;
-  const sessions = r?.sessions;
-  if (
-    typeof r !== 'object' || r === null || Array.isArray(r) || typeof r.next_seq !== 'number' || typeof sessions !== 'object' || sessions === null || Array.isArray(sessions) ||
-    Object.values(sessions).some((s) => typeof s !== 'object' || s === null || Array.isArray(s))
-  ) {
-    throw new Error('it is not a kharos registry (it needs "next_seq" and "sessions" of objects)');
-  }
-  return r as Registry;
+  const valid = (v: unknown) => isObject(v) && typeof v.next_seq === 'number' && isObject(v.sessions) && Object.values(v.sessions).every(isObject);
+  return readState<Registry>(paths.registry, valid, 'a kharos registry (it needs "next_seq" and "sessions" of objects)') ?? empty();
 }
 
 /** Reads, changes and writes the registry under its lock. */

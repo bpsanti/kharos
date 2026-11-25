@@ -63,12 +63,37 @@ test('doctor: an unreadable registry is a failed check, and the other checks sti
   const checks = runDoctor(sb.paths, { now: T0, env: sb.env }, deps());
   const registry = checks.find((c) => c.name === 'registry');
   assert.equal(registry?.level, 'fail');
-  assert.ok(registry?.detail.startsWith(`${sb.paths.registry}: state could not be read`));
+  assert.ok(registry?.detail.startsWith(`state could not be read (${sb.paths.registry}): `));
   assert.deepEqual(registry?.fix, ['Repair or move that file.']);
   assert.equal(checks.find((c) => c.name === 'watcher')?.level, 'fail');
   assert.equal(checks.find((c) => c.name === 'demo: repo')?.level, 'ok');
   assert.equal(checks.find((c) => c.name === 'config')?.level, 'ok');
   assert.match(formatChecks(checks), /problem\(s\) to fix/);
+});
+
+test('doctor: wrongly shaped environments and repos files are failed checks, not a crash', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  fs.mkdirSync(path.dirname(sb.paths.environments), { recursive: true });
+  fs.writeFileSync(sb.paths.environments, '{}');
+  fs.writeFileSync(sb.paths.repos, 'null');
+  const checks = runDoctor(sb.paths, { now: T0, env: sb.env }, deps());
+  for (const [name, file] of [['environments', sb.paths.environments], ['repos', sb.paths.repos]] as const) {
+    const c = checks.find((x) => x.name === name);
+    assert.equal(c?.level, 'fail', `${name} fails`);
+    assert.ok(c?.detail.startsWith(`state could not be read (${file}): `));
+  }
+  assert.equal(checks.find((c) => c.name === 'demo: repo')?.level, 'ok');
+});
+
+test('cli: a wrongly shaped registry prints one line naming the file and exits 1', () => {
+  const sb = sandbox();
+  fs.mkdirSync(path.dirname(sb.paths.registry), { recursive: true });
+  fs.writeFileSync(sb.paths.registry, '{"version":1}');
+  const r = captured(() => main(['list'], sb.env, () => ''));
+  assert.equal(r.value, 1);
+  assert.equal(r.stderr, `kharos: state could not be read (${sb.paths.registry}): it is not a kharos registry (it needs "next_seq" and "sessions" of objects). Do not run again; show this to the person.\n`);
+  assert.equal(r.stdout, '');
 });
 
 test('doctor: no configuration points to setup', () => {

@@ -4,7 +4,7 @@
 // repo_access_denied before any session exists.
 
 import { spawnSync } from 'node:child_process';
-import { readJson, withLock, writeJsonAtomic } from './fsutil.ts';
+import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import { repoSlug } from './config.ts';
 import type { Paths } from './paths.ts';
 
@@ -19,7 +19,7 @@ export interface RepoRecord {
 export type RepoBook = Record<string, RepoRecord>;
 
 export function loadRepos(paths: Paths): RepoBook {
-  return readJson<RepoBook>(paths.repos) ?? {};
+  return readState<RepoBook>(paths.repos, (v) => isObject(v) && Object.values(v).every(isObject), 'an object of repositories') ?? {};
 }
 
 export function recordAccess(paths: Paths, repo: string, access: Access, reason: string | null, now: number): void {

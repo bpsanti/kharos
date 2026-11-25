@@ -1,7 +1,7 @@
 // Small state files besides the registry: intents (what a command asked the next RemoteTrigger answer
 // to be turned into), the environments seen in the account's routines, and the watcher heartbeat.
 
-import { readJson, withLock, writeJsonAtomic } from './fsutil.ts';
+import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { EnvironmentUse } from './remote.ts';
 import type { Paths } from './paths.ts';
 
@@ -16,7 +16,7 @@ export type Intent =
 const INTENT_TTL_MS = 10 * 60_000;
 
 function loadIntents(paths: Paths, now: number): Intent[] {
-  return (readJson<Intent[]>(paths.intents) ?? []).filter((i) => i.expires_at > now);
+  return (readState<Intent[]>(paths.intents, (v) => Array.isArray(v) && v.every(isObject), 'a list of intents') ?? []).filter((i) => i.expires_at > now);
 }
 
 type WithoutExpiry<T> = T extends unknown ? Omit<T, 'expires_at'> : never;
@@ -53,7 +53,7 @@ export interface EnvironmentBook {
 }
 
 export function loadEnvironments(paths: Paths): EnvironmentBook | null {
-  return readJson<EnvironmentBook>(paths.environments) ?? null;
+  return readState<EnvironmentBook>(paths.environments, (v) => isObject(v) && Array.isArray(v.environments), 'an object with an "environments" list') ?? null;
 }
 
 export function saveEnvironments(paths: Paths, environments: EnvironmentUse[], now: number): void {
@@ -66,5 +66,5 @@ export interface WatchState {
 }
 
 export function loadWatch(paths: Paths): WatchState {
-  return readJson<WatchState>(paths.watch) ?? { last_beat: null, interval_min: null };
+  return readState<WatchState>(paths.watch, isObject, 'an object') ?? { last_beat: null, interval_min: null };
 }

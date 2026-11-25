@@ -2,7 +2,7 @@
 // credential; the skills drive RemoteTrigger, and the hooks (`kharos hook <event>`) read its answers.
 
 import fs from 'node:fs';
-import { appendLine } from './fsutil.ts';
+import { appendLine, StateError } from './fsutil.ts';
 import * as cmd from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo } from './config.ts';
 import { formatChecks, realDeps, runDoctor } from './doctor.ts';
@@ -189,6 +189,10 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
   } catch (err) {
     if (err instanceof LaunchError) {
       process.stdout.write(`not launched:\n${err.lines.map((l) => '  ' + l).join('\n')}\n`);
+      return 1;
+    }
+    if (err instanceof StateError) {
+      process.stderr.write(`${err.message}\n`);
       return 1;
     }
     if (err instanceof cmd.CommandError || err instanceof ConfigError) {

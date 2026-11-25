@@ -15,6 +15,40 @@ export function readJson<T>(file: string): T | undefined {
   return JSON.parse(text) as T;
 }
 
+/** A kharos state file that exists but cannot be read, parsed, or has the wrong shape. */
+export class StateError extends Error {
+  readonly file: string;
+  readonly reason: string;
+  constructor(file: string, reason: string) {
+    super(`kharos: state could not be read (${file}): ${reason}. Do not run again; show this to the person.`);
+    this.file = file;
+    this.reason = reason;
+  }
+}
+
+/** Reads a state file; a missing file is undefined, anything unreadable or wrongly shaped is a StateError. */
+export function readState<T>(file: string, valid: (v: unknown) => boolean, shape: string): T | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new StateError(file, (err as Error).message);
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (err) {
+    throw new StateError(file, `invalid JSON (${(err as Error).message})`);
+  }
+  if (!valid(value)) throw new StateError(file, `it is not ${shape}`);
+  return value as T;
+}
+
+export function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 /** Writes through a temporary file and a rename, so a reader never sees half a file. */
 export function writeJsonAtomic(file: string, value: unknown, mode = 0o600): void {
   writeTextAtomic(file, JSON.stringify(value, null, 2) + '\n', mode);

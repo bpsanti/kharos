@@ -2,6 +2,7 @@
 // answers a kharos command asked for; every other use of the tool (such as /schedule) passes untouched.
 
 import fs from 'node:fs';
+import { StateError } from './fsutil.ts';
 import { condensedLine, mergePage, parseLog } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import {
@@ -54,7 +55,7 @@ function deny(reason: string): HookOutput {
 }
 
 function stateUnreadable(ctx: Ctx, err: unknown): string {
-  return `kharos: state could not be read (${ctx.paths.registry}): ${err instanceof Error ? err.message : String(err)}. Do not run again; show this to the person.`;
+  return (err instanceof StateError ? err : new StateError(ctx.paths.registry, err instanceof Error ? err.message : String(err))).message;
 }
 
 /**
@@ -90,7 +91,9 @@ function recorded(ctx: Ctx, r: ReturnType<typeof readToolResponse>, id: string, 
     return reshape(
       r.status,
       { kharos: id, error: 'state' },
-      `kharos: ${id} answer could not be recorded (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). Do not run again; show this to the person.`,
+      err instanceof StateError
+        ? `kharos: ${id} answer could not be recorded (${err.file}: ${err.reason}). Do not run again; show this to the person.`
+        : `kharos: ${id} answer could not be recorded (${ctx.paths.registry}: ${err instanceof Error ? err.message : String(err)}). Do not run again; show this to the person.`,
     );
   }
 }

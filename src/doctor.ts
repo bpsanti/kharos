@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { claudeBin, readAuthStatus, type AuthStatus } from './account.ts';
 import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './config.ts';
+import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
@@ -103,7 +104,8 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     try {
       return read();
     } catch (err) {
-      add('fail', name, `${file}: state could not be read: ${err instanceof Error ? err.message : String(err)}`, ['Repair or move that file.']);
+      const [where, why] = err instanceof StateError ? [err.file, err.reason] : [file, err instanceof Error ? err.message : String(err)];
+      add('fail', name, `state could not be read (${where}): ${why}`, ['Repair or move that file.']);
       return null;
     }
   };
