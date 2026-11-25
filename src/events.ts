@@ -2,7 +2,7 @@
 // while it lasts, and once when the session goes back to normal; delivery is at least once, and the
 // event id lets a receiver drop a repeat.
 
-import { clean } from './body.ts';
+import { clean, SHEET_MAX } from './body.ts';
 import type { NoticeKind, Verdict } from './classify.ts';
 import { repoSlug } from './config.ts';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
@@ -76,7 +76,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   };
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
-  if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, 600);
+  if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
   return ev;
 }
 

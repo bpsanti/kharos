@@ -31,7 +31,7 @@ function fmHome(sb: Sandbox, ledger = true): { home: string; status: string } {
   const status = path.join(home, 'state', 'task.status');
   fs.writeFileSync(status, '');
   if (ledger) fs.writeFileSync(path.join(home, 'config', 'fleet-ledger'), '');
-  fs.writeFileSync(path.join(home, 'bin', 'fm-fleet-ledger.sh'), `#!/bin/sh\necho "$@" >> "${home}/ledger-calls"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(home, 'bin', 'fm-fleet-ledger.sh'), `#!/bin/sh\necho "$@" >> "${home}/ledger-calls"\nenv > "${home}/ledger-env"\n`, { mode: 0o755 });
   return { home, status };
 }
 
@@ -197,9 +197,12 @@ test('firstmate: the dedicated mode writes done only with a session sheet', () =
 test('firstmate: writes one line to the given file only, calls the ledger, and refuses other paths', () => {
   const sb = sandbox();
   const { home, status } = fmHome(sb);
-  writeStatus({ status_file: status, home, mode: 'shared' }, event(), T0, null);
+  writeStatus({ status_file: status, home, mode: 'shared' }, event(), T0, null, { ...sb.env, CLAUDE_PLUGIN_OPTION_SLACK_WEBHOOK: 'https://hooks.slack.com/services/T0/B0/x' });
   assert.equal(fs.readFileSync(status, 'utf8').trim().split('\n').length, 1);
   assert.match(fs.readFileSync(path.join(home, 'ledger-calls'), 'utf8'), /^appended .*\/config .*\/state\/task\.status$/m);
+  const ledgerEnv = fs.readFileSync(path.join(home, 'ledger-env'), 'utf8');
+  assert.doesNotMatch(ledgerEnv, /CLAUDE_PLUGIN_OPTION_/);
+  assert.match(ledgerEnv, new RegExp(`^KHAROS_HOME=${sb.env.KHAROS_HOME}$`, 'm'));
   assert.match(checkTarget({ status_file: path.join(home, 'state', 'missing.status'), home, mode: 'shared' }) ?? '', /never creates/);
   fs.writeFileSync(path.join(home, 'backlog.md'), '');
   assert.match(checkTarget({ status_file: path.join(home, 'backlog.md'), home, mode: 'shared' }) ?? '', /<home>\/state\/<task>\.status/);

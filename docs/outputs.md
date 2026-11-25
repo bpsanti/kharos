@@ -64,4 +64,4 @@ The adapter writes one line per event to one status file, given at launch and ne
 
 - `shared` is for a task that has a local worker owning its status file: the adapter never writes `done` or `failed`, because a cloud session ending is not the task ending.
 - `dedicated` is for a status file that exists only for the cloud session.
-  Every `done` there needs the session sheet (`FIM faltou=... ;; refiz=... ;; esperei=...`), so a dedicated launch asks the session for it in the `sheet` field of `KHAROS-DONE`; without it the adapter writes `blocked [key=...]: ... finished without the session sheet`.
+  Every `done` there needs the session sheet (`FIM faltou=... ;; refiz=... ;; esperei=...`), so a dedicated launch asks the session for it in the `sheet` field of `KHAROS-DONE`; without it, or with a sheet longer than 600 characters, the adapter writes `blocked [key=...]: ... finished without the session sheet`.

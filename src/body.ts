@@ -137,6 +137,9 @@ function gitBranch(b: string | null): string | null {
   return b;
 }
 
+/** The longest session sheet kept: a longer one is treated as missing, never cut, since firstmate parses it. */
+export const SHEET_MAX = 600;
+
 export interface DoneMark {
   status: 'ok' | 'failed';
   pr: string | null;
@@ -144,6 +147,10 @@ export interface DoneMark {
   summary: string | null;
   /** Only asked of launches reported to a dedicated firstmate task. */
   sheet: string | null;
+}
+
+function wholeSheet(sheet: string | null): string | null {
+  return sheet !== null && sheet.length <= SHEET_MAX ? sheet : null;
 }
 
 export function readDoneMark(text: string): DoneMark | null {
@@ -157,7 +164,7 @@ export function readDoneMark(text: string): DoneMark | null {
     pr: pr && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr) ? pr : null,
     branch: gitBranch(nullableString(m.branch, 200)),
     summary: nullableString(m.summary, 200),
-    sheet: nullableString(m.sheet, 600),
+    sheet: wholeSheet(nullableString(m.sheet, Infinity)),
   };
 }
 
