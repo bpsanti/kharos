@@ -3,57 +3,256 @@
   "$id": "https://github.com/bpsanti/kharos/schema/config.schema.json",
   "title": "kharos configuration",
   "type": "object",
-  "required": ["version"],
+  "required": [
+    "version"
+  ],
   "additionalProperties": false,
   "properties": {
-    "version": { "const": 1 },
-    "default_profile": { "type": ["string", "null"] },
+    "version": {
+      "const": 1
+    },
+    "default_profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "profiles": {
       "type": "object",
-      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
-      "additionalProperties": { "$ref": "#/$defs/profile" }
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
     },
-    "watch": { "$ref": "#/$defs/watch" },
-    "outputs": { "type": "array", "items": { "$ref": "#/$defs/output" } }
+    "watch": {
+      "$ref": "#/$defs/watch"
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/output"
+      }
+    }
   },
   "$defs": {
     "profile": {
       "type": "object",
-      "required": ["repo", "environment"],
+      "required": [
+        "repo",
+        "environment"
+      ],
       "additionalProperties": false,
       "properties": {
-        "repo": { "type": "string", "description": "One GitHub repository: https://github.com/owner/name or owner/name." },
-        "revision": { "type": "string", "default": "main", "description": "Branch or tag the session starts from." },
-        "environment": { "type": "string", "pattern": "^env_\\w+$", "description": "Cloud environment id, as /schedule shows it." },
-        "model": { "type": "string", "default": "claude-sonnet-5-5" },
-        "allowed_tools": { "type": "array", "items": { "type": "string" }, "description": "Pre-approved tools. It does not restrict: other tools still run." },
-        "connectors": { "type": "boolean", "default": false, "description": "false sends clear_mcp_connections, so the session gets none of the account's connectors." },
-        "deadline_min": { "type": "integer", "minimum": 1, "default": 180 }
+        "repo": {
+          "type": "string",
+          "description": "One GitHub repository: https://github.com/owner/name or owner/name."
+        },
+        "revision": {
+          "type": "string",
+          "default": "main",
+          "description": "Branch or tag the session starts from."
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^env_\\w+$",
+          "description": "Cloud environment id, as /schedule shows it."
+        },
+        "model": {
+          "type": "string",
+          "default": "claude-sonnet-5-5"
+        },
+        "allowed_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Pre-approved tools. It does not restrict: other tools still run."
+        },
+        "connectors": {
+          "type": "boolean",
+          "default": false,
+          "description": "false sends clear_mcp_connections, so the session gets none of the account's connectors."
+        },
+        "deadline_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 180
+        }
       }
     },
     "watch": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "model": { "type": "string", "default": "haiku" },
-        "interval_min": { "type": "integer", "minimum": 1, "default": 10 },
-        "provision_min": { "type": "integer", "minimum": 1, "default": 15 },
-        "silence_min": { "type": "integer", "minimum": 1, "default": 15 },
-        "silence_severe_min": { "type": "integer", "minimum": 1, "default": 45 },
-        "quiet_end_min": { "type": "integer", "minimum": 1, "default": 40 },
-        "loop_failures": { "type": "integer", "minimum": 1, "default": 4 },
-        "renotify_min": { "type": "integer", "minimum": 1, "default": 60 },
-        "max_open": { "type": "integer", "minimum": 1, "default": 5 }
+        "model": {
+          "type": "string",
+          "default": "haiku"
+        },
+        "interval_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "provision_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 15
+        },
+        "silence_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 15
+        },
+        "silence_severe_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 45
+        },
+        "quiet_end_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 40
+        },
+        "loop_failures": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4
+        },
+        "renotify_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60
+        },
+        "max_open": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5
+        }
       }
     },
-    "events": { "type": "array", "items": { "type": "string" }, "description": "Event classes (progress, needs_you, terminal), event names, or * for all." },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Event classes (progress, needs_you, terminal), event names, or * for all."
+    },
     "output": {
       "oneOf": [
-        { "type": "object", "required": ["type"], "additionalProperties": false, "properties": { "type": { "const": "notification" }, "events": { "$ref": "#/$defs/events" } } },
-        { "type": "object", "required": ["type", "path"], "additionalProperties": false, "properties": { "type": { "const": "file" }, "path": { "type": "string" }, "events": { "$ref": "#/$defs/events" } } },
-        { "type": "object", "required": ["type", "webhook_env"], "additionalProperties": false, "properties": { "type": { "const": "slack" }, "webhook_env": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }, "events": { "$ref": "#/$defs/events" } } },
-        { "type": "object", "required": ["type", "argv"], "additionalProperties": false, "properties": { "type": { "const": "command" }, "argv": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "timeout_s": { "type": "integer", "minimum": 1 }, "events": { "$ref": "#/$defs/events" } } },
-        { "type": "object", "required": ["type", "status_file", "home"], "additionalProperties": false, "properties": { "type": { "const": "firstmate" }, "status_file": { "type": "string" }, "home": { "type": "string" }, "mode": { "enum": ["shared", "dedicated"], "default": "shared" }, "events": { "$ref": "#/$defs/events" } } }
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "notification"
+            },
+            "events": {
+              "$ref": "#/$defs/events"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "file"
+            },
+            "path": {
+              "type": "string"
+            },
+            "events": {
+              "$ref": "#/$defs/events"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "slack"
+            },
+            "webhook_env": {
+              "type": "string",
+              "pattern": "^[A-Z_][A-Z0-9_]*$",
+              "default": "CLAUDE_PLUGIN_OPTION_SLACK_WEBHOOK",
+              "description": "Environment variable that holds the webhook URL. The default is the plugin's sensitive slack_webhook option, kept in the keychain."
+            },
+            "events": {
+              "$ref": "#/$defs/events"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "argv"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "command"
+            },
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeout_s": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "events": {
+              "$ref": "#/$defs/events"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "status_file",
+            "home"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "firstmate"
+            },
+            "status_file": {
+              "type": "string"
+            },
+            "home": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "shared",
+                "dedicated"
+              ],
+              "default": "shared"
+            },
+            "events": {
+              "$ref": "#/$defs/events"
+            }
+          }
+        }
       ]
     }
   }

@@ -21,7 +21,16 @@
   "network": {
     "hosts": [
       "github.com",
-      "api.github.com"
+      "api.github.com",
+      "hooks.slack.com"
     ]
+  },
+  "userConfig": {
+    "slack_webhook": {
+      "type": "string",
+      "title": "Slack incoming webhook URL",
+      "description": "For the slack output of kharos. Kept in the system keychain; leave empty if you do not use Slack.",
+      "sensitive": true
+    }
   }
 }

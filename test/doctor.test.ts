@@ -86,21 +86,21 @@ test('doctor: wrongly shaped environments and repos files are failed checks, not
   assert.equal(checks.find((c) => c.name === 'demo: repo')?.level, 'ok');
 });
 
-test('cli: a wrongly shaped registry prints one line naming the file and exits 1', () => {
+test('cli: a wrongly shaped registry prints one line naming the file and exits 1', async () => {
   const sb = sandbox();
   fs.mkdirSync(path.dirname(sb.paths.registry), { recursive: true });
   fs.writeFileSync(sb.paths.registry, '{"version":1}');
-  const r = captured(() => main(['list'], sb.env, () => ''));
+  const r = await captured(() => main(['list'], sb.env, () => ''));
   assert.equal(r.value, 1);
   assert.equal(r.stderr, `kharos: state could not be read (${sb.paths.registry}): it is not a kharos registry (it needs "next_seq" and "sessions" of objects). Do not run again; show this to the person.\n`);
   assert.equal(r.stdout, '');
 });
 
-test('config: a syntax error is one line from the CLI and a failed doctor check', () => {
+test('config: a syntax error is one line from the CLI and a failed doctor check', async () => {
   const sb = sandbox();
   fs.mkdirSync(path.dirname(sb.paths.config), { recursive: true });
   fs.writeFileSync(sb.paths.config, '{"version": 1, "profiles": {},}');
-  const r = captured(() => main(['prepare'], sb.env, () => 'Fix the typo.'));
+  const r = await captured(() => main(['prepare'], sb.env, () => 'Fix the typo.'));
   assert.equal(r.value, 1);
   const lines = (r.stdout + r.stderr).trim().split('\n');
   assert.equal(lines[0], 'not launched:');
@@ -117,17 +117,17 @@ test('doctor: no configuration points to setup', () => {
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps())), /no configuration .*\n {6}Run \/kharos:setup/);
 });
 
-test('plugin: every hook event in hooks.json has a handler', () => {
+test('plugin: every hook event in hooks.json has a handler', async () => {
   const sb = sandbox();
   const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks/hooks.json'), 'utf8'));
   const events = (Object.values(hooks.hooks) as any[]).flatMap((entries) => entries.flatMap((e: any) => e.hooks.map((h: any) => h.args[2] as string)));
   assert.ok(events.length > 0);
   for (const event of events) {
-    const r = captured(() => runHook(event, sb.ctx(T0), () => '{}'));
+    const r = await captured(() => runHook(event, sb.ctx(T0), () => '{}'));
     assert.equal(r.value, 0, `hook ${event} is handled`);
     assert.doesNotMatch(r.stderr, /unknown hook event/);
   }
-  assert.equal(captured(() => runHook('not-an-event', sb.ctx(T0), () => '{}')).value, 1);
+  assert.equal((await captured(() => runHook('not-an-event', sb.ctx(T0), () => '{}'))).value, 1);
 });
 
 /** The key/value pairs of a SKILL.md frontmatter block, the part Claude Code reads. */
@@ -144,7 +144,7 @@ function frontmatter(text: string): Record<string, string> {
   return out;
 }
 
-test('plugin: skills call commands the CLI knows, and the manifest matches the package', () => {
+test('plugin: skills call commands the CLI knows, and the manifest matches the package', async () => {
   const sb = sandbox();
   for (const name of fs.readdirSync(path.join(ROOT, 'skills'))) {
     const text = fs.readFileSync(path.join(ROOT, 'skills', name, 'SKILL.md'), 'utf8');
@@ -152,12 +152,12 @@ test('plugin: skills call commands the CLI knows, and the manifest matches the p
     assert.ok(fm.description, `${name} has a description`);
     for (const m of text.matchAll(/scripts\/kharos" ([a-z-]+)/g)) {
       const command = m[1] as string;
-      const r = captured(() => main([command], sb.env, () => ''));
+      const r = await captured(() => main([command], sb.env, () => ''));
       assert.ok(!(r.value === 2 && /unknown command/.test(r.stderr)), `${name} calls kharos ${command}, which the CLI knows`);
     }
     if (name !== 'kharos' && name !== 'watch') assert.equal(fm['disable-model-invocation'], 'true', `${name} is for the person only`);
   }
-  assert.equal(captured(() => main(['not-a-command'], sb.env, () => '')).value, 2);
+  assert.equal((await captured(() => main(['not-a-command'], sb.env, () => ''))).value, 2);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin/plugin.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(manifest.name, 'kharos');

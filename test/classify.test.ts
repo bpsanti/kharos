@@ -152,7 +152,7 @@ function session(over: Partial<Session> = {}): Session {
     instruction_sha256: '', launched_by: null, trigger_id: 'trig_1', session_id: 'cse_1', url: 'https://claude.ai/code/session_1', created_at: new Date(BASE).toISOString(),
     fired_at: null, step: 'open', state: 'running', state_since: new Date(BASE).toISOString(), pending_state: null, last_event_at: null, last_read_at: null, reads: 0,
     read_failures: 0, closed_turns: 0, notice: null, last_notice: null, result: { status: null, pr: null, branch: null, summary: null, question: null },
-    pending_cursor: null, cursor_reads: 0, seen_start: true, runs_seen_empty_at: null, closed_at: null, error: null, ...over,
+    extra_outputs: [], pending_cursor: null, cursor_reads: 0, seen_start: true, runs_seen_empty_at: null, closed_at: null, error: null, ...over,
   };
 }
 

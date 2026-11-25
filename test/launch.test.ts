@@ -130,13 +130,13 @@ test('rearm: refused for a launch that is not firing', () => {
   assert.throws(() => rearm(sb.paths, id, T0 + 3000), /not waiting on a fire \(step open\)/);
 });
 
-test('rearm: then resume allows exactly one more run', () => {
+test('rearm: then resume allows exactly one more run', async () => {
   const sb = sandbox();
   const id = prepared(sb);
   const trig = fired(sb, id);
   // The CLI reads the real clock, so the empty list_runs is recorded now.
   postToolUse(sb.ctx(Date.now()), hook({ action: 'list_runs', trigger_id: trig }, NO_RUNS));
-  const r = captured(() => main(['rearm', id], sb.env, () => ''));
+  const r = await captured(() => main(['rearm', id], sb.env, () => ''));
   assert.equal(r.value, 0);
   assert.match(r.stdout, /k-0001 re-armed\. To fire it once, type \/kharos:run --resume k-0001/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'routine_created');
@@ -147,7 +147,7 @@ test('rearm: then resume allows exactly one more run', () => {
   assert.throws(() => rearm(sb.paths, id, now + 2000), /no empty list_runs/);
 });
 
-test('launch: list_runs does not reopen a closed launch', () => {
+test('launch: list_runs does not reopen a closed launch', async () => {
   const sb = sandbox();
   const id = prepared(sb);
   const trig = fired(sb, id);
@@ -159,28 +159,28 @@ test('launch: list_runs does not reopen a closed launch', () => {
 });
 
 /** Runs the pre-tool-use hook the way Claude Code does and returns what it printed. */
-function runPreHook(sb: Sandbox, ti: Record<string, unknown>): { code: number; printed: string } {
-  const r = captured(() => runHook('pre-tool-use', sb.ctx(T0), () => JSON.stringify(hook(ti))));
+async function runPreHook(sb: Sandbox, ti: Record<string, unknown>): Promise<{ code: number; printed: string }> {
+  const r = await captured(() => runHook('pre-tool-use', sb.ctx(T0), () => JSON.stringify(hook(ti))));
   return { code: r.value, printed: r.stdout };
 }
 
-test('hooks: with unreadable kharos state, a run and a kharos create are denied and other calls pass', () => {
+test('hooks: with unreadable kharos state, a run and a kharos create are denied and other calls pass', async () => {
   const sb = sandbox();
   fs.mkdirSync(sb.paths.state, { recursive: true });
   fs.writeFileSync(sb.paths.registry, '{"version": 1, "sessions": ');
   for (const ti of [{ action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }, { action: 'create', body: { kharos_launch: 'k-0001' } }]) {
-    const { code, printed } = runPreHook(sb, ti);
+    const { code, printed } = await runPreHook(sb, ti);
     assert.equal(code, 0);
     const h = JSON.parse(printed).hookSpecificOutput;
     assert.equal(h.permissionDecision, 'deny');
     assert.ok(h.permissionDecisionReason.includes(sb.paths.registry), 'the reason names the state file');
     assert.match(h.permissionDecisionReason, /^kharos: state could not be read \(.*\): .*\. Do not run again; show this to the person\.$/);
   }
-  assert.equal(runPreHook(sb, { action: 'create', body: { name: 'my own routine' } }).printed, '');
-  assert.equal(runPreHook(sb, { action: 'list' }).printed, '');
+  assert.equal((await runPreHook(sb, { action: 'create', body: { name: 'my own routine' } })).printed, '');
+  assert.equal((await runPreHook(sb, { action: 'list' })).printed, '');
 });
 
-test('hooks: a registry lock left by a dead holder is taken over, so a run is not denied', () => {
+test('hooks: a registry lock left by a dead holder is taken over, so a run is not denied', async () => {
   const sb = sandbox();
   const id = prepared(sb);
   const trig = fired(sb, id);
@@ -189,7 +189,7 @@ test('hooks: a registry lock left by a dead holder is taken over, so a run is no
   fs.mkdirSync(lock);
   const old = new Date(Date.now() - 60_000);
   fs.utimesSync(lock, old, old);
-  assert.equal(runPreHook(sb, { action: 'run', trigger_id: trig }).printed, '');
+  assert.equal((await runPreHook(sb, { action: 'run', trigger_id: trig })).printed, '');
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
 });
 
@@ -298,12 +298,12 @@ test('hooks: a log page that cannot be stored never reaches the model', () => {
   assert.equal(/BANANA|sleep/.test(JSON.stringify(out)), false);
 });
 
-test('hooks: with unreadable or wrongly shaped kharos state, answers are hidden and a run is denied', () => {
+test('hooks: with unreadable or wrongly shaped kharos state, answers are hidden and a run is denied', async () => {
   for (const content of ['{"version": 1, "sessions": ', '{}', '[]', '{"version":1}', 'null', '{"version":1,"next_seq":2,"sessions":{"k-0001":null}}']) {
     const sb = sandbox();
     fs.mkdirSync(sb.paths.state, { recursive: true });
     fs.writeFileSync(sb.paths.registry, content);
-    const denied = JSON.parse(runPreHook(sb, { action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' }).printed).hookSpecificOutput;
+    const denied = JSON.parse((await runPreHook(sb, { action: 'run', trigger_id: 'trig_01TESTROUTINEAAAAAAAAAAA' })).printed).hookSpecificOutput;
     assert.equal(denied.permissionDecision, 'deny', `a run is denied with ${content}`);
     const answers = [
       hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, fixture('log-question-background-done.txt'))),
