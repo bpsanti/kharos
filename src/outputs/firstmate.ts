@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { clean, SHEET_MAX } from '../body.ts';
-import type { KharosEvent } from '../events.ts';
+import { permissionLine, type KharosEvent } from '../events.ts';
 import { childEnv } from './env.ts';
 
 export type FirstmateMode = 'shared' | 'dedicated';
@@ -70,6 +70,10 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
     case 'ended_unmarked':
       if (mode === 'dedicated') return `failed ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
       return `blocked ${key} ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
+    case 'waiting_permission': {
+      const detail = permissionLine(ev);
+      return `blocked ${key} ${at}: ${text(`kharos ${ev.session} waiting permission: ${ev.reason}${detail ? ` (${detail})` : ''}`)}${where}`;
+    }
     default:
       return `blocked ${key} ${at}: ${text(`kharos ${ev.session} ${kind.replace(/_/g, ' ')}: ${ev.reason}`)}${where}`;
   }

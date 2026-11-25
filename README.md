@@ -47,7 +47,8 @@ It writes a profile, checks the repository, and tells you exactly what to fix: s
 | Command | What it does |
 |---|---|
 | `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
-| `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment and limits, with the fix for each gap |
+| `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment, permission rules and limits, with the fix for each gap |
+| `/kharos:permissions [default\|standard\|open] [folder]` | Shows the permission rules a repository gives its cloud sessions, and writes a permission profile to its `.claude/settings.json` after you approve the diff; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session and records it |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
@@ -90,8 +91,15 @@ claude --model haiku
 
 Each pass reads the sessions that are due, and code (not the model) classifies each one: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
 A closed turn is never taken for the end: only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+A session waiting at a permission prompt raises a notice that names the tool and what it asks for (secrets taken out), with the link to the session, where a person answers it.
 `kharos health` exits with 1 when sessions are open and the watcher stopped, for launchd, cron or any other check.
 See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
+
+## Permission prompts
+
+A cloud session that a routine starts runs in auto mode, and still stops at a prompt for `ask` rules in the repository's `.claude/settings.json` and after repeated classifier blocks.
+The routine's `allowed_tools` neither allows nor restricts anything there.
+`/kharos:permissions` shows a repository's rules and switches them to the `standard` or `open` profile, and `/kharos:doctor` warns when a launch branch would likely stall: see [docs/permissions.md](docs/permissions.md).
 
 ## Outputs
 

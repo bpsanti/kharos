@@ -1,9 +1,11 @@
 // The classifier: code, not the model, decides what state a session is in, from the events of its log.
 // Rules are evaluated in order and the first match wins. Times come from the log events; `now` is the
-// clock of the machine that reads. Reasons are fixed texts: no part of the log is ever copied into them.
+// clock of the machine that reads. Reasons are fixed texts: no part of the log is ever copied into them,
+// except the name of the tool a permission prompt is for, which the log format limits to a tool name.
 
 import type { WatchConfig } from './config.ts';
 import type { LogEvent } from './logparse.ts';
+import { describePermission, type PermissionRequest } from './permission-request.ts';
 import type { State } from './registry.ts';
 import { latestMarks, sinceLastUser } from './track.ts';
 
@@ -28,6 +30,8 @@ export interface Verdict {
   state: State;
   notice: NoticeKind | null;
   reason: string;
+  /** Only with waiting_permission: what the open prompt asks for. */
+  permission?: PermissionRequest;
 }
 
 export interface ClassifyInput {
@@ -145,8 +149,10 @@ export function classify(input: ClassifyInput): Verdict {
   // waiting for a permission answer
   const pending = openPermission(events);
   if (pending >= 0) {
-    const ago = Math.round((now - (events[pending] as LogEvent).t) / MIN);
-    return { state: 'waiting_permission', notice: 'waiting_permission', reason: `permission request with no answer for ${ago} min` };
+    const prompt = events[pending] as LogEvent;
+    const ago = Math.round((now - prompt.t) / MIN);
+    const permission = describePermission(prompt);
+    return { state: 'waiting_permission', notice: 'waiting_permission', reason: `permission request for ${permission.tool} with no answer for ${ago} min`, permission };
   }
 
   // waiting for an answer

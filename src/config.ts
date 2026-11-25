@@ -12,7 +12,7 @@ export interface Profile {
   revision: string;
   environment: string;
   model: string;
-  /** Pre-approved tools. This list does not restrict anything: tools outside it still run. */
+  /** Sent as the routine's allowed_tools. It neither allows nor restricts: prompts come from the repository's .claude/settings.json. */
   allowed_tools: string[];
   /** false sends clear_mcp_connections, so the server does not attach every connector of the account. */
   connectors: boolean;
