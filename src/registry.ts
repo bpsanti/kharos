@@ -97,7 +97,14 @@ function empty(): Registry {
 }
 
 export function loadRegistry(paths: Paths): Registry {
-  return readJson<Registry>(paths.registry) ?? empty();
+  const reg = readJson<unknown>(paths.registry);
+  if (reg === undefined) return empty();
+  const r = reg as Partial<Registry> | null;
+  const sessions = r?.sessions;
+  if (typeof r !== 'object' || r === null || Array.isArray(r) || typeof r.next_seq !== 'number' || typeof sessions !== 'object' || sessions === null || Array.isArray(sessions)) {
+    throw new Error(`kharos state could not be read: ${paths.registry} is not a kharos registry (it needs "next_seq" and "sessions")`);
+  }
+  return r as Registry;
 }
 
 /** Reads, changes and writes the registry under its lock. */
