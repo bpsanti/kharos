@@ -101,7 +101,6 @@ test('classify: the same error four times in a row is a loop; other errors are n
 });
 
 test('classify: failure, permission, deadline, usage limit and provisioning', () => {
-  assert.equal(at(log([...START, [300, 'result', null, 'error_during_execution is_error=true']]), 301).state, 'failed');
   assert.equal(at(log([[0, 'user', null, 'x'], [5, 'env[error]', null, 'Clone failed']]), 10).state, 'failed');
   assert.equal(at(log([...START, [300, 'assistant', null, 'KHAROS-DONE {"status":"failed","pr":null,"branch":null,"summary":"tests do not pass"}']]), 301).state, 'failed');
   const perm = log([...START, [130, 'tool_use', 'Bash', '{"command":"git push"}'], [131, 'permission_request', 'Bash', 'git push']]);
@@ -114,6 +113,27 @@ test('classify: failure, permission, deadline, usage limit and provisioning', ()
   // A page that starts in the middle of a session has no init line, and that does not mean provisioning.
   assert.equal(at(log([[0, 'tool_result', null, 'ok']]), 30, { seenStart: false }).state, 'running');
   assert.equal(at(log([...START, [130, 'tool_use', 'AskUserQuestion', '{"questions":[]}']]), 140).state, 'waiting_answer');
+});
+
+test('classify: a turn that ended with an error is a warning, and the usage limit wins over it', () => {
+  assert.deepEqual(at(log([...START, [300, 'result', null, 'error_during_execution is_error=true']]), 301), { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' });
+  const limited = log([...START, [300, 'assistant', null, 'working'], [301, 'result', null, "error_during_execution is_error=true — You've hit your usage limit"]]);
+  assert.equal(at(limited, 310).state, 'usage_limit');
+});
+
+test('classify: a message after an error wakes the session; it reads as running and can finish', () => {
+  const errored: [number, string, string | null, string][] = [...START, [300, 'result', null, 'error_during_execution is_error=true']];
+  const woken: [number, string, string | null, string][] = [...errored, [900, 'user', null, 'Try again with the other branch.'], [905, 'tool_use', 'Bash', '{"command":"git switch other"}']];
+  assert.equal(at(log(woken), 910).state, 'running');
+  const done: [number, string, string | null, string][] = [...woken, [950, 'tool_result', null, 'Switched'], [960, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":null,"branch":"other","summary":"done"}'], [961, 'result', null, 'success is_error=false']];
+  assert.equal(at(log(done), 970).state, 'finished');
+});
+
+test('classify: an environment error counts only in the current turn and before the first init', () => {
+  const late = log([...START, [200, 'env[error]', null, 'Lost connection to the runner'], [210, 'tool_use', 'Bash', '{}']]);
+  assert.notEqual(at(late, 220).state, 'failed');
+  const old = log([[0, 'user', null, 'x'], [5, 'env[error]', null, 'Clone failed'], [600, 'user', null, 'Try again.'], [610, 'init', null, 'model=x'], [620, 'tool_use', 'Bash', '{}']]);
+  assert.equal(at(old, 630).state, 'running');
 });
 
 function session(over: Partial<Session> = {}): Session {

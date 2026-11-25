@@ -24,7 +24,9 @@ Each pass:
 3. The hooks store the new events in `logs/<id>.jsonl`, classify, and queue events.
 4. `kharos pass-end` answers with one line: what changed, or that nothing did.
 
-The watcher session can only read: its hook denies `create`, `update`, `run` and `create_webhook_trigger`.
+The watcher session can only read: its hook denies a kharos launch (`create` of a prepared body), and `run`, `update` and `create_webhook_trigger` on a routine kharos follows.
+Routines outside kharos pass untouched.
+A session counts as the watcher while its last `kharos due` is younger than three intervals, so a session that ran `/kharos:watch` once and stopped can launch again.
 
 ## Who watches the watcher
 
@@ -42,11 +44,12 @@ The rules are checked in this order, and the first that matches wins.
 | State | Rule | Notice |
 |---|---|---|
 | `invisible` | two failed reads in a row (HTTP error, the session missing from `list_runs`, an empty log for a session that had events), or the account logged in now is not the one that launched it | yes |
-| `failed` | an environment error (setup or clone), a last `result` with `is_error=true`, or `KHAROS-DONE` with `failed` | yes, terminal |
+| `usage_limit` | a plan usage limit in the last events of the turn, seen on two reads, even when the turn closed with an error result | yes |
+| `failed` | an environment error (setup or clone) in the current turn before the first `init`, or `KHAROS-DONE` with `failed` | yes, terminal |
 | `finished` | `KHAROS-DONE` with `ok` after the last message from a person, and no work after it | yes, terminal |
+| `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
 | `waiting_permission` | a permission request with no answer or denial after it | yes |
 | `waiting_answer` | `KHAROS-QUESTION` in a closed turn, or `AskUserQuestion` as the last event | yes |
-| `usage_limit` | a plan usage limit in the last events of the turn, seen on two reads | yes |
 | `overdue` | running for longer than the profile's `deadline_min` | yes |
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
@@ -59,7 +62,7 @@ A session archived in `list_runs` without an end mark becomes `ended_unmarked`, 
 ## Why these numbers
 
 - A command in the foreground can run up to 10 minutes; gaps of almost 10 minutes with no event are normal, so `silence_min` is 15.
-- A closed turn is not an end: a session closed its turn, stayed quiet for over 10 minutes, and woke up by itself when a background command finished.
+- A closed turn is not an end, not even one that ended with an error result: a session closed its turn, stayed quiet for over 10 minutes, and woke up by itself when a background command finished.
   A command moved to the background can run up to 30 minutes more, hence `quiet_end_min` of 40, and the notice is a warning, never an end.
 - Repeated calls of the same script are normal (waiting for CI, for example); only the same error in a row counts as a loop.
 - The end is said by the session itself, with a mark it sends as its own last message: the condensed log cuts each event at about a thousand characters, so a mark at the end of a long message would be lost.
@@ -72,7 +75,7 @@ If the cloud environment raises the Bash timeout, raise `silence_min` with it.
 
 - A session is read on every pass during its first 20 minutes and while a notice is open, every second pass up to two hours, and every third pass after that.
   A `/loop` pass can come up to half an interval late, and the cadence allows for that.
-- When more than 200 events happened between two reads, the newest page does not reach the stored events; the hook asks for the older page, at most two.
+- When more than 200 events happened between two reads, the newest page does not reach the stored events; the hook asks for older pages until one reaches them, at most two.
 - Run the watcher with a small model.
   Its context grows with each pass; restart the watcher session once a day if it gets large.
 

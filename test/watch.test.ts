@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import { readAuthStatus } from '../src/account.ts';
 import { readOutbox } from '../src/events.ts';
@@ -33,15 +34,45 @@ function readLog(sb: Sandbox, now: number, summary: string, extra: Record<string
 
 const account = () => readAuthStatus(sandbox().env)?.account ?? null;
 
-test('watch: a pass lists the due reads, marks the watcher, and the watcher may not fire', () => {
+test('watch: a pass lists the due reads, and the watcher may not launch or change a kharos routine', () => {
   const sb = sandbox();
   const id = openOne(sb);
   const r = due(sb.paths, { watcher: 'watcher', all: false, now: T0 + MIN, env: sb.env, account });
   assert.deepEqual(r.reads, [{ session: id, action: 'get_run_log', params: { session_id: SID } }]);
   assert.match(formatReads(r), /- action "get_run_log", session_id "cse_01TESTSESSIONAAAAAAAAAAA"/);
-  const denied = preToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: 'trig_other' }, undefined, 'watcher'));
-  assert.equal((denied?.hookSpecificOutput as any).permissionDecision, 'deny');
-  assert.equal(preToolUse(sb.ctx(T0), h({ action: 'get_run_log', session_id: SID }, undefined, 'watcher')), null);
+  const next = prepare(sb.paths, { instruction: 'Another fix.', claude_session: 'watcher', now: T0 + MIN, env: sb.env, heads: () => HEADS_OK }).id;
+  const decision = (out: ReturnType<typeof preToolUse>) => (out?.hookSpecificOutput as any)?.permissionDecisionReason as string | undefined;
+  assert.match(decision(preToolUse(sb.ctx(T0 + 2 * MIN), h({ action: 'create', body: { kharos_launch: next } }, undefined, 'watcher'))) ?? '', /runs \/kharos:watch/);
+  assert.match(decision(preToolUse(sb.ctx(T0 + 2 * MIN), h({ action: 'update', trigger_id: TRIG, body: {} }, undefined, 'watcher'))) ?? '', /runs \/kharos:watch/);
+  // Routines outside kharos pass untouched, even from the watcher session.
+  assert.equal(preToolUse(sb.ctx(T0 + 2 * MIN), h({ action: 'run', trigger_id: 'trig_other' }, undefined, 'watcher')), null);
+  assert.equal(preToolUse(sb.ctx(T0 + 2 * MIN), h({ action: 'update', trigger_id: 'trig_other', body: {} }, undefined, 'watcher')), null);
+  assert.equal(preToolUse(sb.ctx(T0 + 2 * MIN), h({ action: 'get_run_log', session_id: SID }, undefined, 'watcher')), null);
+});
+
+test('watch: a session that stopped watching three intervals ago may launch again', () => {
+  const sb = sandbox();
+  openOne(sb);
+  due(sb.paths, { watcher: 'launcher', all: false, now: T0 + MIN, env: sb.env, account });
+  const id = prepare(sb.paths, { instruction: 'Another fix.', claude_session: 'launcher', now: T0 + 2 * MIN, env: sb.env, heads: () => HEADS_OK }).id;
+  const create = (now: number) => (preToolUse(sb.ctx(now), h({ action: 'create', body: { kharos_launch: id } }))?.hookSpecificOutput as any).permissionDecision;
+  assert.equal(create(T0 + 25 * MIN), 'deny');
+  assert.equal(create(T0 + 32 * MIN), 'allow');
+});
+
+test('watch: an unreadable watcher file denies run and kharos create', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  const id = prepare(sb.paths, { instruction: 'Fix the typo.', claude_session: 'launcher', now: T0, env: sb.env, heads: () => HEADS_OK }).id;
+  const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: id } }));
+  postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: TRIG } })));
+  fs.writeFileSync(sb.paths.watch, '[]');
+  const ran = preToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: TRIG }))?.hookSpecificOutput as any;
+  assert.equal(ran.permissionDecision, 'deny');
+  assert.match(ran.permissionDecisionReason, /^kharos: state could not be read \(.*watch\.json\): .*Do not run again; show this to the person\.$/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'routine_created');
+  const next = prepare(sb.paths, { instruction: 'Another fix.', claude_session: 'launcher', now: T0, env: sb.env, heads: () => HEADS_OK }).id;
+  assert.equal((preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: next } }))?.hookSpecificOutput as any).permissionDecision, 'deny');
 });
 
 test('watch: reads follow the cadence, and a session in trouble is read every pass', () => {
@@ -56,8 +87,8 @@ test('watch: reads follow the cadence, and a session in trouble is read every pa
   readLog(sb, T0 + 30 * MIN, fixture('log-foreground-command.txt') + `\n[${recent}] tool_use Bash: {"command":"npm test"}`);
   assert.equal(soon(38), 0);
   assert.equal(soon(46), 1);
-  // Quiet for 16 minutes: the open notice brings the reads back to every pass.
-  readLog(sb, T0 + 46 * MIN, '');
+  // Quiet for 16 minutes (the newest page repeats the last stored event): the open notice brings the reads back to every pass.
+  readLog(sb, T0 + 46 * MIN, `(older events exist: pass next_cursor as cursor)\n[${recent}] tool_use Bash: {"command":"npm test"}`);
   assert.equal(loadRegistry(sb.paths).sessions['k-0001']?.notice?.event, 'session.silent');
   assert.equal(soon(52), 1);
   assert.equal(due(sb.paths, { watcher: null, all: true, now: T0 + 31 * MIN, env: sb.env, account }).reads.length, 1);
@@ -109,14 +140,54 @@ test('watch: an archived run without an end mark is a terminal event', () => {
   assert.equal(readOutbox(sb.paths).at(-1)?.event.class, 'terminal');
 });
 
-test('watch: a page that does not reach the last read asks for the older page, twice at most', () => {
+test('watch: an empty log for a session that had events is a failed read', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  readLog(sb, T0 + MIN, fixture('log-foreground-command.txt'));
+  assert.match(readLog(sb, T0 + 11 * MIN, ''), /log came back empty \(1 failed read/);
+  readLog(sb, T0 + 21 * MIN, '');
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.state, 'invisible');
+});
+
+test('watch: a usage limit that closes the turn with an error counts after two reads', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const page = fixture('log-foreground-command.txt') + `\n[2026-11-25T19:05:00.000000Z] result: error_during_execution is_error=true — You've hit your usage limit`;
+  readLog(sb, Date.parse('2026-11-25T19:05:10Z'), page);
+  assert.notEqual(loadRegistry(sb.paths).sessions[id]?.state, 'usage_limit');
+  readLog(sb, Date.parse('2026-11-25T19:15:10Z'), page);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.state, 'usage_limit');
+  assert.equal(due(sb.paths, { watcher: 'w', all: false, now: Date.parse('2026-11-25T19:16:00Z'), env: sb.env, account }).open, 1);
+});
+
+test('watch: a page that does not reach the last read asks for older pages, two at most', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  readLog(sb, T0 + MIN, fixture('log-foreground-command.txt'));
+  const older = '(older events exist: pass next_cursor as cursor)';
+  const page = (cursor: string, ...lines: string[]) => response(200, { session_id: SID, next_cursor: cursor }, [older, ...lines].join('\n'));
+  const read = (now: number, cursor: string | null, answer: Record<string, unknown>) =>
+    (postToolUse(sb.ctx(now), h({ action: 'get_run_log', session_id: SID, ...(cursor ? { cursor } : {}) }, answer))?.hookSpecificOutput as any).updatedToolOutput.summary as string;
+  assert.match(read(T0 + 20 * MIN, null, page('rl1.a.1', '[2026-11-25T23:00:00.000000Z] tool_use Bash: {"command":"ls"}')), /cursor "rl1\.a\.1"/);
+  assert.deepEqual(due(sb.paths, { watcher: 'w', all: false, now: T0 + 21 * MIN, env: sb.env, account }).reads[0]?.params, { session_id: SID, cursor: 'rl1.a.1' });
+  // The first older page still does not reach the stored events: one more.
+  assert.match(read(T0 + 21 * MIN, 'rl1.a.1', page('rl1.a.2', '[2026-11-25T22:00:00.000000Z] tool_use Bash: {"command":"pwd"}')), /cursor "rl1\.a\.2"/);
+  // The second older page does not reach them either, and that is the last one asked for.
+  assert.doesNotMatch(read(T0 + 22 * MIN, 'rl1.a.2', page('rl1.a.3', '[2026-11-25T21:00:00.000000Z] tool_use Bash: {"command":"id"}')), /cursor/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.pending_cursor, null);
+});
+
+test('watch: an older page that reaches the stored events asks for nothing more', () => {
   const sb = sandbox();
   openOne(sb);
-  readLog(sb, T0 + MIN, fixture('log-foreground-command.txt'));
-  const later = '(older events exist: pass next_cursor as cursor)\n[2026-11-25T23:00:00.000000Z] tool_use Bash: {"command":"ls"}';
-  const out = postToolUse(sb.ctx(T0 + 20 * MIN), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: 'rl1.a.1' }, later)));
-  assert.match((out?.hookSpecificOutput as any).updatedToolOutput.summary, /cursor "rl1\.a\.1"/);
-  assert.deepEqual(due(sb.paths, { watcher: 'w', all: false, now: T0 + 21 * MIN, env: sb.env, account }).reads[0]?.params, { session_id: SID, cursor: 'rl1.a.1' });
+  const first = fixture('log-foreground-command.txt').split('\n');
+  readLog(sb, T0 + MIN, first.join('\n'));
+  const lastStored = first.filter((l) => l.startsWith('[')).at(-1) as string;
+  const out = postToolUse(
+    sb.ctx(T0 + 20 * MIN),
+    h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: 'rl1.b.1' }, `(older events exist: pass next_cursor as cursor)\n${lastStored}\n[2026-11-25T23:00:00.000000Z] tool_use Bash: {"command":"ls"}`)),
+  );
+  assert.doesNotMatch((out?.hookSpecificOutput as any).updatedToolOutput.summary, /cursor/);
 });
 
 test('health: fails with open sessions and a stale heartbeat, and the session start says so', () => {

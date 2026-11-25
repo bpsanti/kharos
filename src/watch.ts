@@ -1,6 +1,6 @@
 // The watcher: `/loop 10m /kharos:watch` in a session of its own. Each pass asks `kharos due` which reads
-// to make (no network), the model makes them, the hooks classify, and `kharos pass-end` delivers the
-// events and answers with one line. The heartbeat lets `kharos health` and the SessionStart hook tell a
+// to make (no network), the model makes them, the hooks classify and queue the events, and
+// `kharos pass-end` answers with one line about what changed. The heartbeat lets `kharos health` and the SessionStart hook tell a
 // stopped watcher from a quiet one.
 
 import { readAuthStatus } from './account.ts';
@@ -106,6 +106,19 @@ export function due(paths: Paths, opts: DueOptions): DueResult {
     return followed.length;
   });
   return { reads, open, events };
+}
+
+/**
+ * Whether a Claude Code session runs the watcher now: it listed the reads of a pass less than three
+ * intervals ago. A session that ran /kharos:watch once and stopped is an ordinary session again.
+ */
+export function isActiveWatcher(paths: Paths, claudeSession: string | undefined, now: number): boolean {
+  if (!claudeSession) return false;
+  const w = loadWatch(paths);
+  const at = w.watchers[claudeSession];
+  if (!at) return false;
+  const every = w.interval_min ?? watchConfig(paths).interval_min;
+  return now - Date.parse(at) < 3 * every * MIN;
 }
 
 export function formatReads(r: DueResult): string {

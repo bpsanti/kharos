@@ -69,7 +69,7 @@ export interface Session {
   step: Step;
   state: State;
   state_since: string;
-  /** A state seen once that needs a second read to count (looping, usage limit, invisible). */
+  /** A state seen once that needs a second read to count (looping, usage limit). */
   pending_state: { state: State; reads: number } | null;
   last_event_at: string | null;
   last_read_at: string | null;
@@ -134,7 +134,6 @@ export function bySessionId(reg: Registry, sessionId: string): Session | undefin
   return Object.values(reg.sessions).find((s) => s.session_id === sessionId);
 }
 
-/** Counts launches that hold a slot against max_open: everything that may run and is not finished. */
 /** Sessions the watcher still follows: launched or launching, not terminal, not closed. */
 export function isFollowed(s: Session): boolean {
   if (s.step === 'closed' || s.step === 'refused' || s.step === 'prepared' || s.step === 'routine_created') return false;
@@ -152,6 +151,7 @@ export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
   }
 }
 
+/** Counts launches that hold a slot against max_open: everything that may run and is not finished. */
 export function activeCount(reg: Registry): number {
   return Object.values(reg.sessions).filter((s) => s.step !== 'closed' && s.step !== 'refused' && !TERMINAL_STATES.has(s.state)).length;
 }

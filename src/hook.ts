@@ -22,8 +22,7 @@ import { recordAccess, readOwnerType, refusalFix, type OwnerType } from './repo.
 import { saveEnvironments, takeIntent } from './state.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
-import { health } from './watch.ts';
-import { loadWatch } from './state.ts';
+import { health, isActiveWatcher } from './watch.ts';
 
 export interface HookInput {
   hook_event_name: string;
@@ -113,22 +112,18 @@ function withRegistry(ctx: Ctx, r: ReturnType<typeof readToolResponse>, fn: (reg
   }
 }
 
-const WRITE_ACTIONS = new Set(['create', 'update', 'run', 'create_webhook_trigger']);
+const WATCHER_DENIED = (action: string) => deny(`kharos: this session runs /kharos:watch, which only reads; RemoteTrigger "${action}" on a kharos launch is not allowed here.`);
 
 export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (input.tool_name !== 'RemoteTrigger') return null;
   const ti = input.tool_input ?? {};
   const action = str(ti.action);
 
-  // The watcher session only reads: it may never create, change or fire a routine.
-  if (action && WRITE_ACTIONS.has(action) && input.session_id && loadWatch(ctx.paths).watchers[input.session_id]) {
-    return deny(`kharos: this session runs /kharos:watch, which only reads; RemoteTrigger "${action}" is not allowed here.`);
-  }
-
   if (action === 'create') {
     const launch = str(rec(ti.body)?.kharos_launch);
     if (!launch) return null;
     return launchCheck(ctx, (reg) => {
+      if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return WATCHER_DENIED(action);
       const s = reg.sessions[launch];
       if (!s) return deny(`kharos: there is no prepared launch ${launch}. Run /kharos:run again.`);
       if (s.step !== 'prepared') return deny(`kharos: launch ${launch} is past creation (step ${s.step}); do not create it again.`);
@@ -155,8 +150,10 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
     return launchCheck(ctx, (reg) => {
+      const watcher = isActiveWatcher(ctx.paths, input.session_id, ctx.now);
       const s = byTrigger(reg, trig);
       if (!s) return null;
+      if (watcher) return WATCHER_DENIED(action);
       if (s.step === 'routine_created') {
         s.step = 'firing';
         s.fired_at = new Date(ctx.now).toISOString();
@@ -168,6 +165,18 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
           `If the first answer was lost, run /kharos:run --resume ${s.id}.`,
       );
     });
+  }
+
+  // The watcher session only reads: it may not change a routine kharos follows.
+  if (action === 'update' || action === 'create_webhook_trigger') {
+    const trig = str(ti.trigger_id);
+    if (!trig) return null;
+    try {
+      if (!byTrigger(loadRegistry(ctx.paths), trig)) return null;
+      return isActiveWatcher(ctx.paths, input.session_id, ctx.now) ? WATCHER_DENIED(action) : null;
+    } catch (err) {
+      return deny(stateUnreadable(ctx, err));
+    }
   }
   return null;
 }
@@ -351,7 +360,7 @@ function readLogInto(ctx: Ctx, s: Session, r: ReturnType<typeof readToolResponse
   const page = parseLog(r.summary);
   const merged = mergePage(logPath(ctx.paths, s.id), page);
   const fromCursor = typeof ti.cursor === 'string';
-  return applyRead(ctx, s, merged, header, fromCursor, page.partial);
+  return applyRead(ctx, s, merged, header, fromCursor, page);
 }
 
 function logView(ctx: Ctx, s: Session, lines: number): string {

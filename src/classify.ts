@@ -21,7 +21,8 @@ export type NoticeKind =
   | 'provisioning_slow'
   | 'silent'
   | 'silent_severe'
-  | 'quiet_unmarked';
+  | 'quiet_unmarked'
+  | 'turn_error';
 
 export interface Verdict {
   state: State;
@@ -100,9 +101,17 @@ export function classify(input: ClassifyInput): Verdict {
   const turn = sinceLastUser(events);
   const marks = latestMarks(events);
 
-  // failed
-  if (events.some((e) => /^env\[(?:error|fatal)\]$/.test(e.kind))) return { state: 'failed', notice: 'failed', reason: 'the environment reported an error (setup or clone)' };
-  if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'failed', notice: 'failed', reason: 'the last turn ended with an error result' };
+  // usage limit: first, since a turn the limit stopped can close with an error result
+  const tail = turn.slice(-5);
+  if (tail.some((e) => !['assistant', 'tool_result', 'tool_use', 'user'].includes(e.kind) && USAGE_LIMIT_RE.test(e.text))) {
+    return { state: 'usage_limit', notice: 'usage_limit', reason: 'the plan usage limit stopped the session' };
+  }
+
+  // failed: the environment could not start this turn, or the session said so
+  const firstInit = events.findIndex((e) => e.kind === 'init');
+  const turnStart = events.length - turn.length;
+  const envFailed = turn.some((e, i) => /^env\[(?:error|fatal)\]$/.test(e.kind) && (firstInit < 0 || turnStart + i < firstInit));
+  if (envFailed) return { state: 'failed', notice: 'failed', reason: 'the environment reported an error (setup or clone)' };
   if (marks.done?.status === 'failed') return { state: 'failed', notice: 'failed', reason: 'the session reported that it failed' };
 
   // finished: the end mark after the last message from a person, and no work after it
@@ -110,6 +119,9 @@ export function classify(input: ClassifyInput): Verdict {
     const after = turn.slice(marks.doneAt + 1);
     if (!after.some((e) => WORK.has(e.kind))) return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark' };
   }
+
+  // a turn that ended with an error: a warning, since a message can wake the session again
+  if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
   // waiting for a permission answer
   const lastPermission = [...events].reverse().findIndex(isPermissionEvent);
@@ -127,12 +139,6 @@ export function classify(input: ClassifyInput): Verdict {
   }
   if (last.kind === 'tool_use' && last.tool === 'AskUserQuestion') {
     return { state: 'waiting_answer', notice: 'waiting_answer', reason: 'the session asked a question and waits for the answer' };
-  }
-
-  // usage limit
-  const tail = turn.slice(-5);
-  if (tail.some((e) => !['assistant', 'tool_result', 'tool_use', 'user'].includes(e.kind) && USAGE_LIMIT_RE.test(e.text))) {
-    return { state: 'usage_limit', notice: 'usage_limit', reason: 'the plan usage limit stopped the session' };
   }
 
   // past the deadline

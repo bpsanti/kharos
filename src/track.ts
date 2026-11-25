@@ -4,7 +4,7 @@ import { readDoneMark, readQuestionMark } from './body.ts';
 import { classify, CONFIRM_TWICE, type Verdict } from './classify.ts';
 import { ConfigError, DEFAULT_WATCH, loadConfig, type WatchConfig } from './config.ts';
 import { enqueue, transition, type KharosEvent } from './events.ts';
-import type { LogEvent, MergeResult } from './logparse.ts';
+import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
 import type { Session } from './registry.ts';
@@ -73,14 +73,14 @@ export function failedRead(ctx: TrackCtx, s: Session, why: string): KharosEvent[
   return settle(ctx, s, { state: 'invisible', notice: 'invisible', reason: `${s.read_failures} reads in a row failed (${why})` });
 }
 
-export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header: LogHeader | null, fromCursor: boolean, partial: boolean): string {
+export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header: LogHeader | null, fromCursor: boolean, page: LogPage): string {
   const events = merged.all;
-  if (events.length === 0 && s.last_event_at) {
+  if (page.events.length === 0 && s.last_event_at) {
     failedRead(ctx, s, 'the log came back empty');
     return `kharos: ${s.id} log came back empty (${s.read_failures} failed read(s) in a row).`;
   }
   s.read_failures = 0;
-  if (!partial) s.seen_start = true;
+  if (!page.partial) s.seen_start = true;
   const last = events[events.length - 1];
   if (last) s.last_event_at = last.ts;
   if (fromCursor) s.cursor_reads++;
