@@ -76,14 +76,17 @@ export async function captured<T>(fn: () => T | Promise<T>): Promise<{ value: T;
   const err = process.stderr.write;
   const outs: string[] = [];
   const errs: string[] = [];
-  process.stdout.write = ((c: string) => {
-    outs.push(String(c));
-    return true;
-  }) as typeof process.stdout.write;
-  process.stderr.write = ((c: string) => {
-    errs.push(String(c));
-    return true;
-  }) as typeof process.stderr.write;
+  // Only text is captured: the test runner's own messages are buffers and go through.
+  const capture = (stream: NodeJS.WriteStream, real: typeof process.stdout.write, into: string[]) =>
+    ((c: string | Uint8Array, ...rest: unknown[]) => {
+      if (typeof c !== 'string') return (real as (...a: unknown[]) => boolean).call(stream, c, ...rest);
+      into.push(c);
+      const done = rest.find((r) => typeof r === 'function') as (() => void) | undefined;
+      done?.();
+      return true;
+    }) as typeof process.stdout.write;
+  process.stdout.write = capture(process.stdout, out, outs);
+  process.stderr.write = capture(process.stderr, err, errs);
   try {
     const value = await fn();
     return { value, stdout: outs.join(''), stderr: errs.join('') };

@@ -88,7 +88,7 @@ const USAGE = `usage: kharos <command>
   doctor [--profile p] [--no-remote-tool] | environments --session id
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
   repo-init <owner/name>
-  due [--watcher id] [--all] | pass-end [--watcher id] | deliver | health
+  due [--watcher id] [--all] | pass-end [--watcher id] | health
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
@@ -199,11 +199,6 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(extraLine ? `${line}; ${extraLine}` : line);
         return 0;
       }
-      case 'deliver': {
-        const report = await deliver({ paths, env, now, platform: process.platform, inHook: false });
-        out(deliveryLine(report) || `delivered ${report.sent} event output(s)`);
-        return 0;
-      }
       case 'health': {
         const h = health(paths, now);
         out(h.line);
@@ -235,6 +230,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
   }
 }
 
+/** How long delivery may run inside each hook that delivers, well inside its timeout in hooks.json. */
+const DELIVERY_BUDGET_MS: Record<string, number> = {
+  'post-tool-use': 20_000,
+  'post-tool-use-failure': 10_000,
+};
+
 const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unknown> | null> = {
   'pre-tool-use': preToolUse,
   'post-tool-use': postToolUse,
@@ -257,10 +258,14 @@ export async function runHook(event: string, ctx: Ctx, stdin: () => string = rea
     const raw = stdin();
     if (raw.trim() === '') return 0;
     const out = handler(ctx, JSON.parse(raw) as HookInput);
-    if (out) process.stdout.write(JSON.stringify(out));
+    if (out) {
+      const text = JSON.stringify(out);
+      await new Promise<void>((resolve) => process.stdout.write(text, () => resolve()));
+    }
     // Events go out right away from the hook, where the plugin's sensitive options are set.
-    if (event === 'post-tool-use' || event === 'post-tool-use-failure') {
-      if (readOutbox(ctx.paths).length) await deliver({ paths: ctx.paths, env: ctx.env, now: ctx.now, platform: process.platform, inHook: true });
+    const budget = DELIVERY_BUDGET_MS[event];
+    if (budget !== undefined && readOutbox(ctx.paths).length) {
+      await deliver({ paths: ctx.paths, env: ctx.env, now: ctx.now, platform: process.platform, inHook: true, deadline: Date.now() + (ctx.deliveryBudgetMs ?? budget) });
     }
   } catch (err) {
     try {

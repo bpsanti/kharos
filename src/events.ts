@@ -120,7 +120,7 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
 
 export interface OutboxItem {
   event: KharosEvent;
-  /** Extra outputs given to this launch only; the configured outputs are read at delivery. */
+  /** Failed tries so far, per target key. */
   attempts: Record<string, number>;
   done: string[];
 }
