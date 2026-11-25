@@ -11,6 +11,7 @@ export interface Paths {
   registry: string;
   watch: string;
   intents: string;
+  outbox: string;
   repos: string;
   environments: string;
   bodies: string;
@@ -35,6 +36,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     registry: path.join(state, 'sessions.json'),
     watch: path.join(state, 'watch.json'),
     intents: path.join(state, 'intents.json'),
+    outbox: path.join(state, 'outbox.json'),
     repos: path.join(state, 'repos.json'),
     environments: path.join(state, 'environments.json'),
     bodies: path.join(state, 'bodies'),

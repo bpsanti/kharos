@@ -63,8 +63,28 @@ export function saveEnvironments(paths: Paths, environments: EnvironmentUse[], n
 export interface WatchState {
   last_beat: string | null;
   interval_min: number | null;
+  /** When the current watcher pass began, to tell what changed during it. */
+  pass_started_at: string | null;
+  /** Claude Code sessions that run the watcher: they may read, never create or fire. */
+  watchers: Record<string, string>;
+  /** The account the watcher read last, to tell a switched login from a finished session. */
+  account: string | null;
+  account_read_at: string | null;
 }
 
+const EMPTY_WATCH: WatchState = { last_beat: null, interval_min: null, pass_started_at: null, watchers: {}, account: null, account_read_at: null };
+
 export function loadWatch(paths: Paths): WatchState {
-  return readState<WatchState>(paths.watch, isObject, 'an object') ?? { last_beat: null, interval_min: null };
+  const w = readState<Partial<WatchState>>(paths.watch, isObject, 'an object');
+  if (!w) return { ...EMPTY_WATCH, watchers: {} };
+  return { ...EMPTY_WATCH, ...w, watchers: isObject(w.watchers) ? (w.watchers as Record<string, string>) : {} };
+}
+
+export function updateWatch<T>(paths: Paths, fn: (w: WatchState) => T): T {
+  return withLock(paths.watch, () => {
+    const w = loadWatch(paths);
+    const out = fn(w);
+    writeJsonAtomic(paths.watch, w);
+    return out;
+  });
 }

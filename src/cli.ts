@@ -6,11 +6,12 @@ import { appendLine, StateError } from './fsutil.ts';
 import * as cmd from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo } from './config.ts';
 import { formatChecks, realDeps, runDoctor } from './doctor.ts';
-import { postToolUse, postToolUseFailure, preToolUse, type Ctx, type HookInput } from './hook.ts';
+import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, prepare, readInstruction } from './launch.ts';
 import { resolvePaths } from './paths.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
+import { due, formatReads, health, passEnd } from './watch.ts';
 
 const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors']);
 
@@ -82,7 +83,8 @@ const USAGE = `usage: kharos <command>
   doctor [--profile p] [--no-remote-tool] | environments --session id
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
   repo-init <owner/name>
-  hook <pre-tool-use|post-tool-use|post-tool-use-failure>`;
+  due [--watcher id] [--all] | pass-end [--watcher id] | health
+  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
 export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): number {
   const paths = resolvePaths(env);
@@ -177,6 +179,19 @@ export function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin
         out(r.ok ? r.detail : `not done: ${r.detail}`);
         return r.ok ? 0 : 1;
       }
+      case 'due': {
+        const r = due(paths, { watcher: flag(args, 'watcher') ?? null, all: args.flags.all === true, now, env });
+        out(args.flags.json === true ? JSON.stringify(r, null, 2) : formatReads(r));
+        return 0;
+      }
+      case 'pass-end':
+        out(passEnd(paths, { watcher: flag(args, 'watcher') ?? null, now }));
+        return 0;
+      case 'health': {
+        const h = health(paths, now);
+        out(h.line);
+        return h.ok ? 0 : 1;
+      }
       case undefined:
       case 'help':
       case '--help':
@@ -207,6 +222,7 @@ const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unkno
   'pre-tool-use': preToolUse,
   'post-tool-use': postToolUse,
   'post-tool-use-failure': postToolUseFailure,
+  'session-start': sessionStart,
 };
 
 /**

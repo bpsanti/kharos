@@ -84,7 +84,7 @@ export function sortEvents(events: LogEvent[]): LogEvent[] {
 export interface MergeResult {
   all: LogEvent[];
   added: LogEvent[];
-  /** The page is partial and its oldest event is newer than every stored one: events are missing between them. */
+  /** The page is partial, its oldest event is new, and older events are stored: events are missing between them. */
   gap: boolean;
 }
 
@@ -92,9 +92,8 @@ export interface MergeResult {
 export function mergePage(file: string, page: LogPage): MergeResult {
   const stored = readStoredEvents(file);
   const known = new Set(stored.map((e) => e.key));
-  const newestStored = stored.length ? (stored[stored.length - 1] as LogEvent).t : null;
-  const oldestPage = page.events.length ? Math.min(...page.events.map((e) => e.t)) : null;
-  const gap = page.partial && newestStored !== null && oldestPage !== null && oldestPage > newestStored;
+  const oldestPage = sortEvents([...page.events])[0];
+  const gap = page.partial && oldestPage !== undefined && !known.has(oldestPage.key) && stored.some((e) => e.t < oldestPage.t);
   const base = stored.length ? Math.max(...stored.map((e) => e.seq)) + 1 : 0;
   const added: LogEvent[] = [];
   for (const e of page.events) {
