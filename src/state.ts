@@ -1,0 +1,70 @@
+// Small state files besides the registry: intents (what a command asked the next RemoteTrigger answer
+// to be turned into), the environments seen in the account's routines, and the watcher heartbeat.
+
+import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
+import type { EnvironmentUse } from './remote.ts';
+import type { Paths } from './paths.ts';
+
+/**
+ * A command that needs the model to call RemoteTrigger records what it expects first. The hook then
+ * turns that one answer into what the command shows, and leaves every other call alone.
+ */
+export type Intent =
+  | { kind: 'log'; id: string; lines: number; claude_session: string; expires_at: number }
+  | { kind: 'environments'; claude_session: string; expires_at: number };
+
+const INTENT_TTL_MS = 10 * 60_000;
+
+function loadIntents(paths: Paths, now: number): Intent[] {
+  return (readState<Intent[]>(paths.intents, (v) => Array.isArray(v) && v.every(isObject), 'a list of intents') ?? []).filter((i) => i.expires_at > now);
+}
+
+type WithoutExpiry<T> = T extends unknown ? Omit<T, 'expires_at'> : never;
+
+export function addIntent(paths: Paths, intent: WithoutExpiry<Intent>, now: number): void {
+  withLock(paths.intents, () => {
+    const list = loadIntents(paths, now).filter((i) => !(i.kind === intent.kind && i.claude_session === intent.claude_session));
+    list.push({ ...intent, expires_at: now + INTENT_TTL_MS } as Intent);
+    writeJsonAtomic(paths.intents, list);
+  });
+}
+
+/** Takes the intent that matches, so one answer serves one command. */
+export function takeIntent<K extends Intent['kind']>(
+  paths: Paths,
+  kind: K,
+  claudeSession: string,
+  match: (i: Extract<Intent, { kind: K }>) => boolean,
+  now: number,
+): Extract<Intent, { kind: K }> | null {
+  return withLock(paths.intents, () => {
+    const list = loadIntents(paths, now);
+    const idx = list.findIndex((i) => i.kind === kind && i.claude_session === claudeSession && match(i as Extract<Intent, { kind: K }>));
+    if (idx < 0) return null;
+    const [found] = list.splice(idx, 1);
+    writeJsonAtomic(paths.intents, list);
+    return found as Extract<Intent, { kind: K }>;
+  });
+}
+
+export interface EnvironmentBook {
+  read_at: string;
+  environments: EnvironmentUse[];
+}
+
+export function loadEnvironments(paths: Paths): EnvironmentBook | null {
+  return readState<EnvironmentBook>(paths.environments, (v) => isObject(v) && Array.isArray(v.environments), 'an object with an "environments" list') ?? null;
+}
+
+export function saveEnvironments(paths: Paths, environments: EnvironmentUse[], now: number): void {
+  writeJsonAtomic(paths.environments, { read_at: new Date(now).toISOString(), environments });
+}
+
+export interface WatchState {
+  last_beat: string | null;
+  interval_min: number | null;
+}
+
+export function loadWatch(paths: Paths): WatchState {
+  return readState<WatchState>(paths.watch, isObject, 'an object') ?? { last_beat: null, interval_min: null };
+}
