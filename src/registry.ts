@@ -83,6 +83,8 @@ export interface Session {
   extra_outputs: OutputConfig[];
   /** A next older page the watcher must read because the newest page did not reach the events it had. */
   pending_cursor: string | null;
+  /** Some read reached the start of the session, so a missing init line means it is still provisioning. */
+  seen_start: boolean;
   cursor_reads: number;
   closed_at: string | null;
   error: string | null;

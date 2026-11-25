@@ -49,11 +49,12 @@ It writes a profile, checks the repository, and tells you exactly what to fix: s
 | `/nuvem:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
 | `/nuvem:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment and limits, with the fix for each gap |
 | `/nuvem:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session and records it |
-| `/nuvem:list [--all]` | Lists followed sessions from the local registry, with no network call |
+| `/nuvem:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/nuvem:log <id> [lines]` | Shows the last lines of a session's log |
 | `/nuvem:msg <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/nuvem:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
 | `/nuvem:close <id>` | Stops following a session, and shows where to delete its routine |
+| `/nuvem:watch` | One watcher pass; run it as `/loop 10m /nuvem:watch` in a session of its own |
 
 Commands that spend plan usage or change state can only be started by you, not by the model.
 
@@ -68,6 +69,20 @@ Commands that spend plan usage or change state can only be started by you, not b
 4. The session id and link go into the registry, and the session is followed from then on.
 
 The instruction gets a short footer: the session ends with a `NUVEM-DONE {...}` line when it is truly finished, or a `NUVEM-QUESTION {...}` line when it needs an answer, and pushes work in progress every 30 minutes.
+
+## Following sessions
+
+Start the watcher in a separate terminal, with a small model:
+
+```
+claude --model haiku
+/loop 10m /nuvem:watch
+```
+
+Each pass reads the sessions that are due, and code (not the model) classifies each one: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
+A closed turn is never taken for the end: only the session's own `NUVEM-DONE` mark ends it, and "could not read" is never taken for "finished".
+`nuvem health` exits with 1 when sessions are open and the watcher stopped, for launchd, cron or any other check.
+See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
 
 ## Files
 

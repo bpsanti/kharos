@@ -138,6 +138,7 @@ export function msg(paths: Paths, ref: string, text: string, env: NodeJS.Process
       cur.state = 'running';
       cur.state_since = new Date().toISOString();
       cur.pending_state = null;
+      cur.last_notice = null;
     }
   });
   return `sent to ${s.id}; the answer shows on the next read. A permission request cannot be answered here: open ${s.url}`;

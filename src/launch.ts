@@ -131,6 +131,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       result: { status: null, pr: null, branch: null, summary: null, question: null },
       extra_outputs: opts.extra_outputs ?? [],
       pending_cursor: null,
+      seen_start: false,
       cursor_reads: 0,
       closed_at: null,
       error: null,
