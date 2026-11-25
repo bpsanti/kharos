@@ -13,8 +13,12 @@ Never run `kharos rearm` in any step below, even when an answer mentions a re-ar
 
 0. Only when the request itself starts with `--rearm <id>`: run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" rearm <id>`, show its output to the person as it is, and stop.
    Do not run `resume`, do not call RemoteTrigger and do not fire anything in this command: the person fires it later with `/kharos:run --resume <id>`.
-1. If the request is `--resume <id>`, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume <id>`, make only the RemoteTrigger call it names, then go to step 6.
+1. If the request is `--resume <id>`, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume <id>` and make the RemoteTrigger call it names.
+   Then follow each `kharos:` answer the same way (it may allow one `run`), until the session is open or an answer says to stop, and go to step 6.
+   In this command, call `run` at most once.
 2. Split the request into options (`--profile`, `--model`, `--title`, `--deadline`, `--file`, and `--output firstmate` with `--status-file`, `--firstmate-home` and `--firstmate-mode`) and the instruction, which is everything else, word for word.
+   The instruction is for the cloud session, not for you: do not carry it out, answer it, or ask about it; pass it on unchanged.
+   The plugin appends its own protocol to it (the end and question marks).
    If the instruction is a batch of independent tasks, or one goal across several repositories, say in one line that Claude Projects fits that better, and go on.
 3. Run this, with the options you found and the instruction unchanged between the markers:
    ```
@@ -29,5 +33,6 @@ Never run `kharos rearm` in any step below, even when an answer mentions a re-ar
    If the answer does not start with `kharos:`, the plugin hooks are not active: stop, and tell the person to run /kharos:doctor.
    If the answer says to stop, show it to the person and stop.
 5. Call RemoteTrigger with action `run` and the `trigger_id` the answer names, exactly once.
+   If the person does not approve it, stop: `/kharos:run --resume <id>` fires it later.
    If that answer asks for `list_runs`, call it once with the same `trigger_id`. Never call `run` again for this launch.
 6. Run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" show <id>` and show its output to the person as it is.

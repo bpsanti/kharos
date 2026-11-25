@@ -170,7 +170,9 @@ export function sendMessage(paths: Paths, ref: string, text: string, env: NodeJS
       cur.last_notice = null;
     }
   });
-  return `sent to ${s.id}; the answer shows on the next read. A permission request cannot be answered here: open ${s.url}`;
+  const lines = [`sent to ${s.id}; its reply shows on the next read.`];
+  if (s.state === 'waiting_permission') lines.push(`It is waiting on a permission request, which a message does not answer: open ${s.url}`);
+  return lines.join('\n');
 }
 
 export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): string {

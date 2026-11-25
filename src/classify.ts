@@ -46,12 +46,31 @@ export const CONFIRM_TWICE: ReadonlySet<State> = new Set(['usage_limit', 'loopin
 const MIN = 60_000;
 const WORK = new Set(['tool_use', 'tool_result', 'init', 'user']);
 
-function isPermissionEvent(e: LogEvent): boolean {
-  return /permission/i.test(e.kind) && !/denied|deny|response|granted|allow/i.test(e.kind);
+// Observed: `permission prompt Bash: {...}`. An answer has no event of its own that is known yet, so a
+// prompt counts as answered when the calls that were open at that moment all have results, or when
+// the session moved on (the model spoke again, or the turn ended or restarted). A message from a person
+// does not answer it: it was seen queued behind the open prompt.
+function isPermissionPrompt(e: LogEvent): boolean {
+  return /permission/.test(e.kind) && !/denied|deny|response|granted|allow|answer/.test(e.kind);
 }
 
-function isPermissionAnswer(e: LogEvent): boolean {
-  return (/permission/i.test(e.kind) && /denied|deny|response|granted|allow/i.test(e.kind)) || e.kind === 'tool_result';
+function isPermissionAnswerKind(e: LogEvent): boolean {
+  return /permission/.test(e.kind) && /denied|deny|response|granted|allow|answer/.test(e.kind);
+}
+
+/** The index of a permission prompt that has no answer yet, or -1. */
+export function openPermission(events: readonly LogEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i] as LogEvent;
+    if (!isPermissionPrompt(e)) continue;
+    const before = events.slice(0, i);
+    const open = before.filter((x) => x.kind === 'tool_use').length - before.filter((x) => x.kind === 'tool_result').length;
+    const after = events.slice(i + 1);
+    if (after.some((x) => isPermissionAnswerKind(x) || ['assistant', 'result', 'init'].includes(x.kind))) return -1;
+    if (after.filter((x) => x.kind === 'tool_result').length >= Math.max(open, 1)) return -1;
+    return i;
+  }
+  return -1;
 }
 
 const USAGE_LIMIT_RE = /usage limit|limit reached|rate[_ ]limit[_ ]error|you(?:'|’)ve hit your|out of (?:extra )?usage|plan limit/i;
@@ -114,16 +133,16 @@ export function classify(input: ClassifyInput): Verdict {
   if (marks.done?.status === 'ok') {
     const after = turn.slice(marks.doneAt + 1);
     if (!after.some((e) => WORK.has(e.kind))) return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark' };
+    // Events (pull request activity, a background command) can wake a finished session with no message
+    // from a person; once those turns close again, the end mark still stands.
+    if (last.kind === 'result') return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark; the turns events woke later closed again' };
   }
 
   // waiting for a permission answer
-  const lastPermission = [...events].reverse().findIndex(isPermissionEvent);
-  if (lastPermission >= 0) {
-    const idx = events.length - 1 - lastPermission;
-    if (!events.slice(idx + 1).some(isPermissionAnswer)) {
-      const ago = Math.round((now - (events[idx] as LogEvent).t) / MIN);
-      return { state: 'waiting_permission', notice: 'waiting_permission', reason: `permission request with no answer for ${ago} min` };
-    }
+  const pending = openPermission(events);
+  if (pending >= 0) {
+    const ago = Math.round((now - (events[pending] as LogEvent).t) / MIN);
+    return { state: 'waiting_permission', notice: 'waiting_permission', reason: `permission request with no answer for ${ago} min` };
   }
 
   // waiting for an answer
