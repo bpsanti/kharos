@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import { readAuthStatus } from './account.ts';
 import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256 } from './body.ts';
-import { ConfigError, loadConfig, pickProfile, repoSlug } from './config.ts';
+import { ConfigError, loadConfig, pickProfile, repoSlug, type Config } from './config.ts';
 import { writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, bodyPath, formatId, updateRegistry, type Session } from './registry.ts';
@@ -39,10 +39,12 @@ export function defaultTitle(instruction: string): string {
 
 export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const env = opts.env ?? process.env;
-  const { config, exists } = loadConfig(paths);
-  if (!exists) throw new LaunchError(['kharos has no configuration yet: run /kharos:setup first.']);
   let picked;
+  let config: Config;
   try {
+    const loaded = loadConfig(paths);
+    if (!loaded.exists) throw new LaunchError(['kharos has no configuration yet: run /kharos:setup first.']);
+    config = loaded.config;
     picked = pickProfile(config, opts.profile);
   } catch (err) {
     if (err instanceof ConfigError) throw new LaunchError([err.message]);

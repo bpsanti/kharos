@@ -2,7 +2,8 @@
 // The JSON Schema in schema/config.schema.json describes the same shape for editors; this module is the
 // validator that runs, with no dependency.
 
-import { readJson, writeJsonAtomic } from './fsutil.ts';
+import fs from 'node:fs';
+import { writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 
 export interface Profile {
@@ -205,9 +206,20 @@ export function parseConfig(v: unknown): Config {
 
 /** The configuration, or the defaults when there is no file yet. */
 export function loadConfig(paths: Paths): { config: Config; exists: boolean } {
-  const raw = readJson<unknown>(paths.config);
-  if (raw === undefined) return { config: defaultConfig(), exists: false };
-  return { config: parseConfig(raw), exists: true };
+  let text: string;
+  try {
+    text = fs.readFileSync(paths.config, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { config: defaultConfig(), exists: false };
+    throw new ConfigError(`${paths.config}: ${(err as Error).message}`);
+  }
+  try {
+    return { config: parseConfig(JSON.parse(text)), exists: true };
+  } catch (err) {
+    if (err instanceof SyntaxError) throw new ConfigError(`${paths.config}: invalid JSON (${err.message})`);
+    if (err instanceof ConfigError) throw new ConfigError(`${paths.config}: ${err.message}`);
+    throw err;
+  }
 }
 
 export function saveConfig(paths: Paths, config: Config): void {

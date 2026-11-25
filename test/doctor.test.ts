@@ -96,6 +96,22 @@ test('cli: a wrongly shaped registry prints one line naming the file and exits 1
   assert.equal(r.stdout, '');
 });
 
+test('config: a syntax error is one line from the CLI and a failed doctor check', () => {
+  const sb = sandbox();
+  fs.mkdirSync(path.dirname(sb.paths.config), { recursive: true });
+  fs.writeFileSync(sb.paths.config, '{"version": 1, "profiles": {},}');
+  const r = captured(() => main(['prepare'], sb.env, () => 'Fix the typo.'));
+  assert.equal(r.value, 1);
+  const lines = (r.stdout + r.stderr).trim().split('\n');
+  assert.equal(lines[0], 'not launched:');
+  assert.equal(lines.length, 2);
+  assert.ok(lines[1]!.trim().startsWith(`${sb.paths.config}: invalid JSON (`));
+  assert.doesNotMatch(r.stdout + r.stderr, /\n\s+at /);
+  const c = runDoctor(sb.paths, { now: T0, env: sb.env }, deps()).find((x) => x.name === 'config');
+  assert.equal(c?.level, 'fail');
+  assert.ok(c?.detail.startsWith(`${sb.paths.config}: invalid JSON (`));
+});
+
 test('doctor: no configuration points to setup', () => {
   const sb = sandbox();
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps())), /no configuration .*\n {6}Run \/kharos:setup/);

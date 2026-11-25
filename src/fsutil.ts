@@ -4,17 +4,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export function readJson<T>(file: string): T | undefined {
-  let text: string;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw err;
-  }
-  return JSON.parse(text) as T;
-}
-
 /** A kharos state file that exists but cannot be read, parsed, or has the wrong shape. */
 export class StateError extends Error {
   readonly file: string;
