@@ -19,7 +19,10 @@ import {
 import { readCreatedTrigger, readEnvironments, readError, readLogHeader, readRunSession, readRuns, readToolResponse } from './remote.ts';
 import { recordAccess, readOwnerType, refusalFix, type OwnerType } from './repo.ts';
 import { saveEnvironments, takeIntent } from './state.ts';
-import { applyRead } from './track.ts';
+import { buildEvent, enqueue } from './events.ts';
+import { applyRead, failedRead, settle } from './track.ts';
+import { health } from './watch.ts';
+import { loadWatch } from './state.ts';
 
 export interface HookInput {
   hook_event_name: string;
@@ -64,10 +67,17 @@ function reshape(status: number | null, header: Record<string, unknown>, summary
   };
 }
 
+const WRITE_ACTIONS = new Set(['create', 'update', 'run', 'create_webhook_trigger']);
+
 export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (input.tool_name !== 'RemoteTrigger') return null;
   const ti = input.tool_input ?? {};
   const action = str(ti.action);
+
+  // The watcher session only reads: it may never create, change or fire a routine.
+  if (action && WRITE_ACTIONS.has(action) && input.session_id && loadWatch(ctx.paths).watchers[input.session_id]) {
+    return deny(`kharos: this session runs /kharos:watch, which only reads; RemoteTrigger "${action}" is not allowed here.`);
+  }
 
   if (action === 'create') {
     const launch = str(rec(ti.body)?.kharos_launch);
@@ -161,6 +171,7 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
       const sid = err ? null : readRunSession(r);
       if (sid) {
         openSession(s, sid, null, ctx.now);
+        enqueue(ctx.paths, [buildEvent(s, 'session.opened', 'launching', 'the cloud session started', ctx.now)]);
         return reshape(r.status, { kharos: s.id, step: 'open', session_id: sid }, `kharos: ${s.id} is open: ${s.url}`);
       }
       if (err && err.status !== null && err.status >= 400 && err.status < 500) {
@@ -182,17 +193,27 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
       const rows = readRuns(r);
       s.last_read_at = new Date(ctx.now).toISOString();
       if (rows === null) {
-        s.read_failures++;
+        failedRead(ctx, s, `list_runs HTTP ${r.status ?? '?'}`);
         return reshape(r.status, { kharos: s.id, read: 'failed' }, `kharos: ${s.id} list_runs could not be read (HTTP ${r.status ?? '?'}).`);
       }
       const row = s.session_id ? rows.find((x) => x.id === s.session_id) : rows[0];
-      if (!s.session_id && row) openSession(s, row.id, row.url, ctx.now);
-      else if (s.step === 'firing' && !row) {
+      if (s.session_id && !row && s.step === 'open') {
+        // The account sees the routine but not its session: another login, or a deleted session.
+        failedRead(ctx, s, 'list_runs does not show the session');
+        return reshape(r.status, { kharos: s.id, read: 'failed' }, `kharos: ${s.id} is not in list_runs (${s.read_failures} failed read(s) in a row).`);
+      }
+      if (!s.session_id && row) {
+        openSession(s, row.id, row.url, ctx.now);
+        enqueue(ctx.paths, [buildEvent(s, 'session.opened', 'launching', 'the cloud session started', ctx.now)]);
+      } else if (s.step === 'firing' && !row) {
         // The fire created no session: it was refused before one existed, so it may be fired again.
         s.step = 'routine_created';
         return reshape(r.status, { kharos: s.id, step: 'routine_created' }, `kharos: ${s.id} has no session; the fire did not happen. It may be fired once more with RemoteTrigger "run" and trigger_id "${trig}".`);
       }
       if (row?.url) s.url = row.url;
+      if (row?.status === 'archived' && s.step === 'open' && s.state !== 'finished' && s.state !== 'failed') {
+        settle(ctx, s, { state: 'ended_unmarked', notice: 'ended_unmarked', reason: 'the session was archived without an end mark' });
+      }
       return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
     });
   }
@@ -233,10 +254,7 @@ export function postToolUseFailure(ctx: Ctx, input: HookInput): HookOutput {
     const sid = str(ti.session_id);
     const trig = str(ti.trigger_id);
     const s = (sid && bySessionId(reg, sid)) || (trig && byTrigger(reg, trig)) || null;
-    if (s && (ti.action === 'get_run_log' || ti.action === 'list_runs')) {
-      s.read_failures++;
-      s.last_read_at = new Date(ctx.now).toISOString();
-    }
+    if (s && (ti.action === 'get_run_log' || ti.action === 'list_runs')) failedRead(ctx, s, 'the tool call failed');
   });
   return null;
 }
@@ -262,15 +280,14 @@ function readLogInto(ctx: Ctx, s: Session, r: ReturnType<typeof readToolResponse
   s.last_read_at = new Date(ctx.now).toISOString();
   s.reads++;
   if (r.status !== 200) {
-    s.read_failures++;
+    failedRead(ctx, s, `get_run_log HTTP ${r.status ?? '?'}`);
     return `kharos: ${s.id} log could not be read (HTTP ${r.status ?? '?'}; ${s.read_failures} failed read(s) in a row).`;
   }
   const header = readLogHeader(r);
   const page = parseLog(r.summary);
   const merged = mergePage(logPath(ctx.paths, s.id), page);
-  s.read_failures = 0;
   const fromCursor = typeof ti.cursor === 'string';
-  return applyRead(ctx, s, merged, header, fromCursor);
+  return applyRead(ctx, s, merged, header, fromCursor, page.partial);
 }
 
 function logView(ctx: Ctx, s: Session, lines: number): string {
@@ -294,10 +311,11 @@ function logView(ctx: Ctx, s: Session, lines: number): string {
   ].join('\n');
 }
 
+/** At the start of any session: one line when sessions are open and the watcher looks stopped. */
 export function sessionStart(ctx: Ctx, input: HookInput): HookOutput {
   void input;
-  void ctx;
-  return null;
+  const h = health(ctx.paths, ctx.now);
+  return h.ok ? null : { systemMessage: h.line };
 }
 
 export { findSession };
