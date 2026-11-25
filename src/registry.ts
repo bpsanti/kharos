@@ -2,6 +2,7 @@
 // Every launch step is recorded before the call that depends on it, so a session that dies in the
 // middle can be resumed without firing twice (a repeated `run` creates another paid session).
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
@@ -81,6 +82,8 @@ export interface Session {
   result: Result;
   /** A next older page the watcher must read because the newest page did not reach the events it had. */
   pending_cursor: string | null;
+  /** Some read reached the start of the session, so a missing init line means it is still provisioning. */
+  seen_start: boolean;
   cursor_reads: number;
   closed_at: string | null;
   error: string | null;
@@ -132,6 +135,23 @@ export function bySessionId(reg: Registry, sessionId: string): Session | undefin
 }
 
 /** Counts launches that hold a slot against max_open: everything that may run and is not finished. */
+/** Sessions the watcher still follows: launched or launching, not terminal, not closed. */
+export function isFollowed(s: Session): boolean {
+  if (s.step === 'closed' || s.step === 'refused' || s.step === 'prepared' || s.step === 'routine_created') return false;
+  return !TERMINAL_STATES.has(s.state);
+}
+
+const LOG_RETENTION_MS = 14 * 24 * 3600_000;
+
+/** Deletes raw logs and stored bodies of sessions closed more than 14 days ago. */
+export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
+  for (const s of Object.values(reg.sessions)) {
+    if (!s.closed_at || now - Date.parse(s.closed_at) < LOG_RETENTION_MS) continue;
+    fs.rmSync(logPath(paths, s.id), { force: true });
+    fs.rmSync(bodyPath(paths, s.id), { force: true });
+  }
+}
+
 export function activeCount(reg: Registry): number {
   return Object.values(reg.sessions).filter((s) => s.step !== 'closed' && s.step !== 'refused' && !TERMINAL_STATES.has(s.state)).length;
 }

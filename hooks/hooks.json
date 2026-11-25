@@ -1,22 +1,72 @@
 {
-  "description": "kharos: launches through RemoteTrigger get the stored routine body, and answers about routines in the registry are recorded and shortened. Every other RemoteTrigger call passes untouched.",
+  "description": "kharos: launches through RemoteTrigger get the stored routine body, answers about routines in the registry are recorded, classified and shortened, and the watcher session may only read. Every other RemoteTrigger call passes untouched.",
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "RemoteTrigger",
-        "hooks": [{ "type": "command", "command": "/bin/sh", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kharos", "hook", "pre-tool-use"], "timeout": 30 }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/kharos",
+              "hook",
+              "pre-tool-use"
+            ],
+            "timeout": 30
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "RemoteTrigger",
-        "hooks": [{ "type": "command", "command": "/bin/sh", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kharos", "hook", "post-tool-use"], "timeout": 60 }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/kharos",
+              "hook",
+              "post-tool-use"
+            ],
+            "timeout": 60
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
       {
         "matcher": "RemoteTrigger",
-        "hooks": [{ "type": "command", "command": "/bin/sh", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/kharos", "hook", "post-tool-use-failure"], "timeout": 30 }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/kharos",
+              "hook",
+              "post-tool-use-failure"
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/kharos",
+              "hook",
+              "session-start"
+            ],
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

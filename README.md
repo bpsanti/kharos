@@ -49,11 +49,12 @@ It writes a profile, checks the repository, and tells you exactly what to fix: s
 | `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
 | `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment and limits, with the fix for each gap |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session and records it |
-| `/kharos:list [--all]` | Lists followed sessions from the local registry, with no network call |
+| `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
 | `/kharos:close <id>` | Stops following a session, and shows where to delete its routine |
+| `/kharos:watch` | One watcher pass; run it as `/loop 10m /kharos:watch` in a session of its own |
 
 Commands that spend plan usage or change state can only be started by you, not by the model.
 
@@ -78,13 +79,27 @@ While the registry file cannot be read, every `run`, `list_runs` and `get_run_lo
 
 The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}` line when it is truly finished, or a `KHAROS-QUESTION {...}` line when it needs an answer, and pushes work in progress every 30 minutes.
 
+## Following sessions
+
+Start the watcher in a separate terminal, with a small model:
+
+```
+claude --model haiku
+/loop 10m /kharos:watch
+```
+
+Each pass reads the sessions that are due, and code (not the model) classifies each one: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
+A closed turn is never taken for the end: only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+`kharos health` exits with 1 when sessions are open and the watcher stopped, for launchd, cron or any other check.
+See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
+
 ## Files
 
 | Path | Content |
 |---|---|
 | `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
-| `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session |
+| `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 
 `KHAROS_HOME` moves both under one folder, which is how one machine serves several accounts.
 
