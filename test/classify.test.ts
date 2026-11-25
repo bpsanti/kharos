@@ -152,7 +152,7 @@ function session(over: Partial<Session> = {}): Session {
     instruction_sha256: '', launched_by: null, trigger_id: 'trig_1', session_id: 'cse_1', url: 'https://claude.ai/code/session_1', created_at: new Date(BASE).toISOString(),
     fired_at: null, step: 'open', state: 'running', state_since: new Date(BASE).toISOString(), pending_state: null, last_event_at: null, last_read_at: null, reads: 0,
     read_failures: 0, closed_turns: 0, notice: null, last_notice: null, result: { status: null, pr: null, branch: null, summary: null, question: null },
-    pending_cursor: null, cursor_reads: 0, seen_start: true, runs_seen_empty_at: null, closed_at: null, error: null, ...over,
+    extra_outputs: [], pending_cursor: null, cursor_reads: 0, seen_start: true, runs_seen_empty_at: null, closed_at: null, error: null, ...over,
   };
 }
 
@@ -189,4 +189,61 @@ test('events: looping and usage limit count only when two reads agree', () => {
   assert.equal(s.state, 'running');
   assert.equal(transition(s, loop, BASE + 600_000, 60, true).length, 1);
   assert.equal(s.state, 'looping');
+});
+
+test('classify: a real permission prompt, with a parallel call answered, waits for the person', () => {
+  const page = parseLog(fixture('log-permission-prompt.txt'));
+  const prompt = page.events.find((e) => e.kind === 'permission prompt');
+  assert.equal(prompt?.tool, 'Bash');
+  const now = page.events[page.events.length - 1]!.t + 60_000;
+  const v = classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
+  assert.equal(v.state, 'waiting_permission');
+  // A message from a person queues behind the prompt; it does not answer it.
+  const queued = log([[0, 'user', null, 'Skip that step.']]).map((e) => ({ ...e, t: now, ts: new Date(now).toISOString() }));
+  assert.equal(classify({ events: [...page.events, ...queued], seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
+  // The model speaking again means the prompt was answered.
+  const moved = [...page.events, { ...queued[0]!, kind: 'assistant', text: 'Skipped.' }];
+  assert.notEqual(classify({ events: moved, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
+});
+
+test('log: kinds of several words, and MCP tool names', () => {
+  const page = parseLog('[2026-11-25T20:20:35.572270Z] permission prompt Bash: {"command":"x"}\n[2026-11-25T20:20:36.000000Z] tool_use mcp__github__create_pull_request: {}\n[2026-11-25T20:20:37.000000Z] user: Mid: run');
+  assert.deepEqual(page.events.map((e) => [e.kind, e.tool]), [['permission prompt', 'Bash'], ['tool_use', 'mcp__github__create_pull_request'], ['user', null]]);
+  assert.equal(page.events[2]?.text, 'Mid: run');
+});
+
+test('classify: an end mark stands when pull request events wake the session and it closes again', () => {
+  const done: [number, string, string | null, string][] = [
+    ...START,
+    [200, 'assistant', null, 'Opened the PR. KHAROS-DONE {"status":"ok","pr":"https://github.com/example/demo/pull/4","branch":"fix","summary":"fixed"}'],
+    [201, 'result', null, 'success is_error=false'],
+    [202, 'init', null, 'model=x'],
+    [203, 'tool_use', 'mcp__github__pull_request_read', '{"method":"get_check_runs"}'],
+  ];
+  assert.equal(at(log(done), 210).state, 'running');
+  const closed = log([...done, [205, 'tool_result', null, '{"total_count":3}'], [206, 'assistant', null, 'CI still running.'], [207, 'result', null, 'success is_error=false']]);
+  assert.equal(at(closed, 300).state, 'finished');
+});
+
+test('classify: a tool call in the same turn after the end mark keeps the session running', () => {
+  const rows: [number, string, string | null, string][] = [
+    ...START,
+    [200, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":null,"branch":"fix","summary":"fixed"}'],
+    [201, 'tool_use', 'Bash', '{"command":"git push"}'],
+  ];
+  assert.equal(at(log(rows), 210).state, 'running');
+  const closed = log([...rows, [205, 'tool_result', null, 'pushed'], [206, 'assistant', null, 'Pushed.'], [207, 'result', null, 'success is_error=false']]);
+  assert.notEqual(at(closed, 300).state, 'finished');
+});
+
+test('classify: a question in a turn that events woke after the end mark is waiting for an answer', () => {
+  const rows: [number, string, string | null, string][] = [
+    ...START,
+    [200, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":"https://github.com/example/demo/pull/4","branch":"fix","summary":"fixed"}'],
+    [201, 'result', null, 'success is_error=false'],
+    [202, 'init', null, 'model=x'],
+    [203, 'assistant', null, 'KHAROS-QUESTION {"question":"CI fails on lint, should I fix it?"}'],
+    [204, 'result', null, 'success is_error=false'],
+  ];
+  assert.equal(at(log(rows), 300).state, 'waiting_answer');
 });

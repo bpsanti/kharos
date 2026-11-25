@@ -7,6 +7,8 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Paths } from './paths.ts';
 import { findSession, loadRegistry, routineUrl, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { addIntent, loadWatch } from './state.ts';
+import { readOutbox } from './events.ts';
+import { loadUndelivered, MAX_ATTEMPTS } from './outputs/index.ts';
 
 export class CommandError extends Error {}
 
@@ -46,6 +48,10 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   const lines = rows.map((s) => sessionLine(s, opts.now));
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
   lines.push(watcherLine(paths, opts.now));
+  const lost = loadUndelivered(paths);
+  if (lost.length) lines.push(`outputs: ${lost.length} event(s) could not be delivered after ${MAX_ATTEMPTS} tries; the last one: ${lost[lost.length - 1]?.target} (${lost[lost.length - 1]?.error})`);
+  const queued = readOutbox(paths).length;
+  if (queued) lines.push(`outputs: ${queued} event(s) waiting for delivery`);
   return lines.join('\n');
 }
 
@@ -164,7 +170,9 @@ export function sendMessage(paths: Paths, ref: string, text: string, env: NodeJS
       cur.last_notice = null;
     }
   });
-  return `sent to ${s.id}; the answer shows on the next read. A permission request cannot be answered here: open ${s.url}`;
+  const lines = [`sent to ${s.id}; its reply shows on the next read.`];
+  if (s.state === 'waiting_permission') lines.push(`It is waiting on a permission request, which a message does not answer: open ${s.url}`);
+  return lines.join('\n');
 }
 
 export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): string {

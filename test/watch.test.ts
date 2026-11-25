@@ -6,7 +6,7 @@ import { readOutbox } from '../src/events.ts';
 import { postToolUse, preToolUse, sessionStart, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { loadRegistry } from '../src/registry.ts';
-import { due, formatReads, health, passEnd } from '../src/watch.ts';
+import { due, formatReads, health, isDue, passEnd } from '../src/watch.ts';
 import { fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
@@ -200,4 +200,14 @@ test('health: fails with open sessions and a stale heartbeat, and the session st
   assert.equal(health(sb.paths, T0 + 20 * MIN).ok, true);
   assert.equal(sessionStart(sb.ctx(T0 + 20 * MIN), { hook_event_name: 'SessionStart' }), null);
   assert.match(health(sb.paths, T0 + 40 * MIN).line, /no watcher heartbeat for 40 min/);
+});
+
+test('watch: a launch with no session id yet follows the cadence, and a first log read is due at once', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const s = { ...loadRegistry(sb.paths).sessions[id]!, reads: 0, last_read_at: new Date(T0 + MIN).toISOString() };
+  const firing = { ...s, step: 'firing' as const, session_id: null };
+  assert.equal(isDue(firing, T0 + 2 * MIN, 5), false);
+  assert.equal(isDue(firing, T0 + 4 * MIN, 5), true);
+  assert.equal(isDue(s, T0 + 2 * MIN, 5), true);
 });

@@ -1,6 +1,9 @@
 // The condensed run log that RemoteTrigger get_run_log returns: one line per event, flattened to a
 // single line and cut to about a thousand characters, newest 200 events per page.
 //   [2026-11-25T18:57:41.184593Z] tool_use Bash: {"command":"..."}
+//   [2026-11-25T20:20:35.572270Z] permission prompt Bash: {"command":"..."}
+// A kind is one or more lowercase words (env[info] carries its level); a tool name starts with an
+// uppercase letter or is an MCP tool (mcp__server__tool).
 // The format is not in the public reference, so this parser keeps unknown kinds as they are, and the
 // classifier never reads an unknown kind as progress or as an end.
 
@@ -26,7 +29,7 @@ export interface LogPage {
   partial: boolean;
 }
 
-const LINE_RE = /^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)\] ([a-z_]+(?:\[[a-z_]+\])?)(?: ([\w.-]+))?: ?(.*)$/;
+const LINE_RE = /^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)\] ([a-z_]+(?: (?!mcp__)[a-z_]+)*(?:\[[a-z_]+\])?)(?: ([A-Z][\w.-]*|mcp__[\w.-]+))?: ?(.*)$/;
 const CUT_RE = /… \[\+\d+ chars\]$/;
 
 function eventKey(ts: string, kind: string, tool: string | null, text: string): string {

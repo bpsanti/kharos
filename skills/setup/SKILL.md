@@ -12,7 +12,7 @@ Set up a kharos launch profile. Request: $ARGUMENTS
    Otherwise run `git remote get-url origin`; if it is a GitHub URL, offer it as the recommended choice with AskUserQuestion, and let the person name another.
    The repository must be on GitHub.
 2. Pick the cloud environment.
-   If you have the RemoteTrigger tool, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" environments --session ${CLAUDE_SESSION_ID}`, then call RemoteTrigger with action `list` and no other field; its answer lists the environment ids your routines use.
+   If you have the RemoteTrigger tool, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" environments --session ${CLAUDE_SESSION_ID}`, then call RemoteTrigger with action `list` and no other field, and wait for its answer (never in the same batch of calls); it lists the environment ids your routines use.
    Ask the person which one to use with AskUserQuestion (most recent first, recommended).
    If there is none, or the person wants another, tell them: create or pick an environment on claude.ai/code (with a setup script if the project needs tools installed; it runs in the cloud, so it cannot point at files on this machine), and read its id with /schedule.
    Without an `env_...` id, stop here.
