@@ -186,8 +186,9 @@ It lists the prompts the session is likely to hit, each as `likely prompt -> sug
 | Earlier sessions | The Bash permission prompts in the stored logs of earlier sessions on the same repository (kharos keeps a log for 14 days after the session is closed) |
 
 A command becomes an allow pattern word by word: the program stays as written, a variable assignment in front goes, and each argument that expands a variable, needed quoting (free text such as a query) or is not a plain word becomes `*`.
-Commands with the same program, first argument and length merge into one pattern only where a word was already `*` in one of them; that `*` then also stands for the literal words of the others.
-A `*` never stands for a literal flag (a word that starts with `-`) or a path that may leave the repository (absolute, starting with `~`, or with `..`), and two different literal words keep the commands apart: `git push origin main` and `git push origin feature-x` stay two patterns, never `git push origin *`.
+Commands with the same program, first argument and length merge into one pattern, where the words that differ become `*`.
+A merged rule can widen what is allowed: earlier prompts `git push origin feature-x` and `git push origin main` merge into `git push origin *`, which allows a push with any one argument there, such as another branch or `--force`.
+Read a merged rule before you add it; automatic preflight applies it as it is.
 A rule for every command (such as a bare `Bash` ask rule) does not make every line of every script a likely prompt: only earlier prompts count for it.
 Each pattern goes through the same filter as `kharos permissions hook diff`: a broad pattern (a shell, an interpreter, a wrapper) or one a deny rule covers is listed as not suggested, with why, and a pattern the hook on the branch allows already is listed as answered.
 An ask rule that nothing found runs is listed with no rule to suggest, and the form to add if the task needs it.
@@ -201,7 +202,7 @@ While it is off, the preflight only suggests.
 While it is on, each launch does this before the routine is created:
 
 1. It runs the preflight on the branch the profile launches from.
-2. It plans the change to the hook with the suggested narrow patterns, through the same plan as `kharos permissions hook diff`: never a broad pattern, never one a deny rule covers, and never one with a `*` that also stands for literal words of earlier commands (those stay suggestions for a person to review).
+2. It plans the change to the hook with the suggested narrow patterns, through the same plan as `kharos permissions hook diff`: never a broad pattern, never one a deny rule covers; a merged rule is applied as it is.
    It mirrors the organization's ask rules only with a remembered confirmation that still matches the managed settings, and never broad ones.
 3. It writes that change as one commit on top of the launch branch, to a new branch `kharos/<id>` (`<id>` is the kharos session id), through the GitHub Git data API with your `gh`; no checkout is touched, and an existing branch is never overwritten.
 4. The routine starts the session on `kharos/<id>`, and the instruction tells the session that the branch is the launch branch plus one hook commit, to work on a branch of its own, and to take that commit out (`git rebase --onto FETCH_HEAD <commit>` after `git fetch origin <base>`) before it opens a pull request against the launch branch.

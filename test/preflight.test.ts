@@ -92,7 +92,7 @@ test('preflight: a repository command an organization ask rule covers is a likel
   assert.deepEqual(states, { 'Bash(psql:*)': 'suggested', 'Bash(pg_dump:*)': 'open', 'Bash(redis-cli:*)': 'open', Bash: 'every-command', 'WebFetch(domain:internal.example)': 'not-bash' });
 });
 
-test('preflight: earlier prompts on the same repository are suggestions, kept apart from the repository where literal words differ', () => {
+test('preflight: earlier prompts on the same repository are suggestions, merged with the repository by the words that differ', () => {
   const history: HistoryPrompt[] = [
     { session: 'k-0001', tool: 'Bash', command: `psql -h 127.0.0.1 -U dev -d shop -c 'select 2'` },
     { session: 'k-0002', tool: 'Bash', command: 'redis-cli -h 127.0.0.1 info memory' },
@@ -102,14 +102,12 @@ test('preflight: earlier prompts on the same repository are suggestions, kept ap
     { session: 'k-0003', tool: 'WebFetch', command: null },
   ];
   const r = report({ 'package.json': PACKAGE }, { history, instruction: 'Profile the slow redis-cli calls.' });
-  const psql = r.suggestions.filter((s) => s.program === 'psql');
-  assert.deepEqual(
-    psql.map((s) => [s.pattern, s.sources]),
-    [
-      ['psql -h 127.0.0.1 -U dev -d app -c *', [{ kind: 'repo', file: 'package.json' }]],
-      ['psql -h 127.0.0.1 -U dev -d shop -c *', [{ kind: 'history', session: 'k-0001' }]],
-    ],
-  );
+  const psql = r.suggestions.find((s) => s.program === 'psql');
+  assert.equal(psql?.pattern, 'psql -h 127.0.0.1 -U dev -d * -c *');
+  assert.deepEqual(psql?.sources, [{ kind: 'repo', file: 'package.json' }, { kind: 'history', session: 'k-0001' }]);
+  // Two literal words that differ merge into a `*` too, and automatic preflight applies it as it is.
+  const pushes = report({}, { history: ['feature-x', 'main'].map((b) => ({ session: 'k-0001', tool: 'Bash', command: `git push origin ${b}` })) });
+  assert.equal(applicable(pushes).includes('git push origin *'), true);
   const redis = r.suggestions[0];
   assert.equal(redis?.pattern, 'redis-cli -h 127.0.0.1 info memory', 'what the instruction names comes first');
   assert.equal(redis?.mentioned, true);
@@ -117,56 +115,6 @@ test('preflight: earlier prompts on the same repository are suggestions, kept ap
   assert.equal(r.chained, 1);
   assert.deepEqual(r.otherTools, [{ tool: 'WebFetch', count: 2 }]);
   assert.equal(r.asks.find((a) => a.rule === 'Bash(redis-cli:*)')?.state, 'suggested');
-});
-
-test('preflight: a merged * stands only where a word was already dynamic, never for a flag or a path, and automatic mode never applies it', () => {
-  const bash = (command: string): HistoryPrompt => ({ session: 'k-0001', tool: 'Bash', command });
-  const literal = report({}, { history: [bash('git push origin feature-x'), bash('git push origin main'), bash('rm -rf build'), bash('rm -rf dist')] });
-  const patterns = literal.suggestions.map((s) => s.pattern);
-  assert.equal(patterns.includes('git push origin *'), false);
-  assert.equal(patterns.includes('rm -rf *'), false);
-  assert.deepEqual(patterns.filter((p) => p.startsWith('git push') || p.startsWith('rm ')).sort(), ['git push origin feature-x', 'git push origin main', 'rm -rf build', 'rm -rf dist']);
-  assert.equal(applicable(literal).includes('git push origin *') || applicable(literal).includes('rm -rf *'), false);
-
-  // A dynamic word takes in the literal words of the others there: a person may review it, automatic mode leaves it out.
-  const dynamic = report({ 'package.json': PACKAGE }, { history: [bash(`psql -h 127.0.0.1 -U dev -d "$DB" -c 'select 1'`)] });
-  const psql = dynamic.suggestions.find((s) => s.program === 'psql');
-  assert.equal(psql?.pattern, 'psql -h 127.0.0.1 -U dev -d * -c *');
-  assert.equal(psql?.status, 'suggested');
-  assert.equal(psql?.merged, true);
-  assert.equal(applicable(dynamic).includes('psql -h 127.0.0.1 -U dev -d * -c *'), false);
-  assert.match(formatPreflight(dynamic, { addCommand: null, after: [], hookOn: true, auto: false }), /automatic preflight leaves it to you/);
-
-  // Never a * for a literal flag or a path that may leave the repository.
-  const risky = report({}, { history: [bash('ls "$DIR"'), bash('ls /etc'), bash('ls ../other'), bash('cat "$F" x'), bash('cat --all x')] });
-  assert.deepEqual(risky.suggestions.filter((s) => s.program === 'ls' || s.program === 'cat').map((s) => [s.pattern, s.merged]).sort(), [
-    ['cat * x', false],
-    ['cat --all x', false],
-    ['ls *', false],
-    ['ls ../other', false],
-    ['ls /etc', false],
-  ].sort());
-});
-
-test('automatic preflight: earlier prompts with different literal words never become a merged * on the side branch', () => {
-  const sb = sandbox();
-  updateRegistry(sb.paths, (reg) => {
-    reg.sessions['k-0090'] = { id: 'k-0090', repo: 'https://github.com/example/demo' } as never;
-  });
-  const prompt = (cmd: string) => JSON.stringify({ t: T0, ts: '2026-11-25T18:57:41.000Z', kind: 'permission prompt', tool: 'Bash', text: JSON.stringify({ command: cmd }), truncated: false, key: cmd, seq: 0 });
-  fs.mkdirSync(sb.paths.logs, { recursive: true });
-  const cmds = ['git push origin feature-x', 'git push origin main', 'rm -rf build', 'rm -rf dist', `psql -h 127.0.0.1 -U dev -d "$DB" -c 'select 1'`];
-  fs.writeFileSync(logPath(sb.paths, 'k-0090'), cmds.map(prompt).join('\n') + '\n');
-  const forge = fakeForge({ 'package.json': PACKAGE });
-  const s = autoPrepare(sb, forge);
-  assert.equal(s.preflight?.status, 'applied');
-  const allow: string[] = JSON.parse(forge.created[0]?.files.find((f) => f.path === HOOK_RULES_PATH)?.content ?? '{}').allow;
-  assert.equal(allow.includes('git push origin *'), false);
-  assert.equal(allow.includes('rm -rf *'), false);
-  assert.equal(allow.includes('psql -h 127.0.0.1 -U dev -d * -c *'), false, 'a * that also stands for a literal word is left to a person');
-  for (const c of ['git push origin --force', 'rm -rf /']) {
-    assert.equal(decide({ tool_name: 'Bash', tool_input: { command: c } }, s.permission_hook!).behavior, 'deny', c);
-  }
 });
 
 test('preflight: what the hook on the branch allows already is not suggested again', () => {

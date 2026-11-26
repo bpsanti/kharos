@@ -263,8 +263,6 @@ export interface Suggestion {
   sources: Source[];
   /** The instruction names the program. */
   mentioned: boolean;
-  /** A `*` also stands for literal words of the commands merged into it: a person reviews it, automatic preflight never applies it. */
-  merged: boolean;
   status: 'suggested' | 'covered' | 'refused';
   /** Why kharos does not suggest it, for status refused. */
   refusal: string | null;
@@ -356,41 +354,9 @@ function groupKey(words: readonly (string | null)[]): string {
   return [words[0], words[1] ?? '*', words.length].join('\u0000');
 }
 
-/** A literal word a merged `*` must not stand for: a flag, or a path that may leave the repository. */
-function riskyLiteral(w: string): boolean {
-  return w.startsWith('-') || w.startsWith('/') || w.startsWith('~') || w.split('/').includes('..');
-}
-
-interface Group {
-  words: (string | null)[];
-  /** For each word, the literal words of the commands merged into it. */
-  literals: Set<string>[];
-  texts: Set<string>;
-  sources: Source[];
-}
-
-/**
- * Two patterns of one group as one, or null when they cannot be. A word stays `*` only where it was
- * already dynamic in one of them, and never for a literal flag or path; two different literal words
- * keep the patterns apart.
- */
-function merge(a: Group, b: Group): Group | null {
-  const words: (string | null)[] = [];
-  const literals: Set<string>[] = [];
-  for (let i = 0; i < a.words.length; i++) {
-    const x = a.words[i] ?? null;
-    const y = b.words[i] ?? null;
-    const lits = new Set([...(a.literals[i] ?? []), ...(b.literals[i] ?? [])]);
-    if (x !== null && y !== null && x !== y) return null;
-    if (x === null || y === null) {
-      if ([...lits].some(riskyLiteral)) return null;
-      words.push(null);
-    } else words.push(x);
-    literals.push(lits);
-  }
-  const sources = [...a.sources];
-  for (const src of b.sources) if (!sources.some((s) => JSON.stringify(s) === JSON.stringify(src))) sources.push(src);
-  return { words, literals, texts: new Set([...a.texts, ...b.texts]), sources };
+/** Two candidates of one group as one pattern: the words that differ become `*`. */
+function merge(a: (string | null)[], b: readonly (string | null)[]): (string | null)[] {
+  return a.map((w, i) => (w !== null && w === b[i] ? w : null));
 }
 
 export function buildPreflight(input: PreflightInput): PreflightReport {
@@ -423,21 +389,22 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
   const narrowAsks = asks.filter((a) => bashAsk(a.rule) && broadRuleWhy(a.rule) === null);
   const asksOf = (text: string) => narrowAsks.filter((a) => bashRuleMatches(a.rule, text));
 
-  const groups = new Map<string, Group[]>();
+  interface Group {
+    words: (string | null)[];
+    texts: Set<string>;
+    sources: Source[];
+  }
+  const groups = new Map<string, Group>();
   const add = (c: Candidate, source: Source) => {
     const key = groupKey(c.words);
-    const others = groups.get(key) ?? [];
-    let g: Group = { words: [...c.words], literals: c.words.map((w) => new Set(w === null ? [] : [w])), texts: new Set([c.text]), sources: [source] };
-    for (let i = 0; i < others.length; ) {
-      const m = merge(others[i] as Group, g);
-      if (m === null) i++;
-      else {
-        g = m;
-        others.splice(i, 1);
-        i = 0;
-      }
+    const g = groups.get(key);
+    if (!g) {
+      groups.set(key, { words: [...c.words], texts: new Set([c.text]), sources: [source] });
+      return;
     }
-    groups.set(key, [...others, g]);
+    g.words = merge(g.words, c.words);
+    g.texts.add(c.text);
+    if (!g.sources.some((s) => JSON.stringify(s) === JSON.stringify(source))) g.sources.push(source);
   };
 
   // 2. Commands the repository runs, when an ask rule covers them.
@@ -469,7 +436,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
 
   const repoDeny = repoRules.deny;
   const suggestions: Suggestion[] = [];
-  for (const g of [...groups.values()].flat()) {
+  for (const g of groups.values()) {
     const pattern = g.words.map((w) => (w === null ? '*' : w)).join(' ');
     const program = g.words[0] as string;
     const matched = narrowAsks.filter((a) => [...g.texts, sample(g.words)].some((t) => bashRuleMatches(a.rule, t)));
@@ -483,7 +450,6 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
       asks: matched,
       sources: g.sources,
       mentioned: mentions(instruction, program),
-      merged: g.words.some((w, i) => w === null && (g.literals[i]?.size ?? 0) > 0),
       status: refusal ? 'refused' : covered ? 'covered' : 'suggested',
       refusal,
     });
@@ -530,9 +496,9 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
   };
 }
 
-/** The patterns automatic preflight may apply: suggested ones only, which are narrow and pass every filter, and whose every `*` was dynamic in each command it stands for. */
+/** The patterns automatic preflight may apply: suggested ones only, which are narrow and pass every filter. */
 export function applicable(r: PreflightReport): string[] {
-  return r.suggestions.filter((s) => s.status === 'suggested' && !s.merged).map((s) => s.pattern);
+  return r.suggestions.filter((s) => s.status === 'suggested').map((s) => s.pattern);
 }
 
 function shellQuote(s: string): string {
@@ -551,7 +517,6 @@ function why(s: Suggestion): string {
   if (files.length) out.push(`the repository runs it (${some(files)})`);
   if (sessions.length) out.push(`earlier sessions on this repository waited on it (${some(sessions)})`);
   if (s.mentioned) out.push(`the instruction mentions ${s.program}`);
-  if (s.merged) out.push('a * also stands for literal words of these commands, so automatic preflight leaves it to you');
   return out.join('; ');
 }
 
