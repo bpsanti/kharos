@@ -175,7 +175,9 @@ export function resume(paths: Paths, ref: string): string {
 export function nextCall(s: Session): string {
   switch (s.step) {
     case 'queued':
-      return `${s.id} is queued for a free slot; nothing is to be called now.`;
+      return leftToPerson(s)
+        ? `${s.id} waits for you: its queued fires did not go through (${s.queue?.blocked ?? 'no detail'}), and it no longer fires by itself. /kharos:run --resume ${s.id} fires it with you present, or puts it back in line while every slot is taken.`
+        : `${s.id} is queued for a free slot, and kharos creates it when one frees; /kharos:run --resume ${s.id} takes a slot now if one is free.`;
     case 'prepared':
       return `${s.id}: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`;
     case 'routine_created':

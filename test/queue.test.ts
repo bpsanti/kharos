@@ -287,6 +287,10 @@ test('queue: a launch left to the person is out of line until they resume it, an
   const other = prepare(sb.paths, launchOpts(sb, { now: T0 + 3 * MIN })).id;
   const shown = queueLines(sb.paths, t);
   assert.equal(shown.length, 1);
+  const denied = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: queued } }));
+  assert.equal((denied?.hookSpecificOutput as any).permissionDecision, 'deny');
+  assert.match((denied?.hookSpecificOutput as any).permissionDecisionReason, new RegExp(`^kharos: launch ${queued} waits for you: .*no longer fires by itself\\. /kharos:run --resume ${queued} fires it with you present`));
+  assert.doesNotMatch((denied?.hookSpecificOutput as any).permissionDecisionReason, /creates it when one frees/);
   assert.match(shown[0]!, new RegExp(`^queue: ${queued} waits for you, not fired: claude -p exited 1; it no longer fires by itself\\.`));
   assert.doesNotMatch(shown[0]!, /\d(st|nd|rd|th) in line/);
   assert.match(resume(sb.paths, queued), new RegExp(`^${queued} is still queued \\(1 in line\\)`));
