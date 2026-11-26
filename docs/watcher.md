@@ -1,5 +1,8 @@
 # The watcher
 
+The watcher is the advanced way to follow sessions: one session of its own, for many sessions, headless launches, and outputs that must keep going with no terminal open.
+The default is a follower per launch, started by `/kharos:run` ([follow.md](follow.md)); both read through the same hook, so the rules and events below hold for both.
+
 The watcher follows every open session and turns its log into a state.
 The rules are code (`src/classify.ts`), not the judgment of a model: they are reproducible, tested on recorded logs, and cheap.
 The model of the watcher session only makes the reads that `kharos due` lists; the hooks store, classify and answer with one short line, so the log text never reaches it.
@@ -24,15 +27,17 @@ Each pass:
 3. The hooks store the new events in `logs/<id>.jsonl`, classify, and queue events.
 4. `kharos pass-end` answers with one line: what changed, or that nothing did.
 
+A session that a live follower reads is left to it; `/kharos:list --refresh` still reads every session.
+
 The watcher session can only read: its hook denies a kharos launch (`create` of a prepared body), and `run`, `update` and `create_webhook_trigger` on a routine kharos follows.
 Routines outside kharos pass untouched.
 A session counts as the watcher while its last `kharos due` is younger than three intervals, so a session that ran `/kharos:watch` once and stopped can launch again.
 
 ## Who watches the watcher
 
-- `kharos health` exits with code 1 when sessions are open and the heartbeat is older than three intervals; call it from launchd, cron or any check.
-- `/kharos:list` shows the heartbeat.
-- Any new Claude Code session says it in one line when sessions are open and the heartbeat is stale.
+- `kharos health` exits with code 1 when an open session has no live follower and the heartbeat is older than three intervals; call it from launchd, cron or any check.
+- `/kharos:list` shows the heartbeat and the live followers.
+- Any new Claude Code session says it in one line when an open session has no live follower and the heartbeat is stale.
 
 A machine that sleeps loses no notice for good: the first read after it wakes classifies the current state.
 

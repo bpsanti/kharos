@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { claudeBin } from './account.ts';
 import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError } from './config.ts';
 import type { Paths } from './paths.ts';
-import { findSession, loadRegistry, routineUrl, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { liveFollowers } from './lease.ts';
+import { findSession, isFollowed, loadRegistry, routineUrl, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { addIntent, loadWatch } from './state.ts';
 import { readOutbox } from './events.ts';
 import { loadUndelivered, MAX_ATTEMPTS } from './outputs/index.ts';
@@ -33,11 +34,28 @@ export function sessionLine(s: Session, now: number): string {
 
 export function watcherLine(paths: Paths, now: number): string {
   const w = loadWatch(paths);
-  if (!w.last_beat) return 'watcher: never ran. Start it with /loop 10m /kharos:watch in a separate session.';
+  if (!w.last_beat) return 'watcher: never ran (the advanced mode: /loop 10m /kharos:watch in a separate session).';
   const ago = now - Date.parse(w.last_beat);
   const every = w.interval_min ?? 10;
   const stale = ago > 3 * every * 60_000;
   return `watcher: heartbeat ${minutes(ago)} ago (every ${every} min)${stale ? '. It looks stopped: start /loop ' + every + 'm /kharos:watch again.' : ''}`;
+}
+
+/** Who reads the open sessions now: live followers, and the open sessions that nobody follows. */
+export function followerLines(paths: Paths, now: number): string[] {
+  const open = Object.values(loadRegistry(paths).sessions)
+    .filter(isFollowed)
+    .map((s) => s.id)
+    .sort();
+  const live = liveFollowers(paths, now);
+  const lines: string[] = [];
+  const followed = open.filter((id) => live.has(id));
+  if (followed.length) lines.push(`followers: ${followed.join(', ')}`);
+  const w = loadWatch(paths);
+  const watcherLive = w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
+  const nobody = open.filter((id) => !live.has(id));
+  if (nobody.length && !watcherLive) lines.push(`no follower reads ${nobody.join(', ')}: type /kharos:follow to follow them from this Claude Code session.`);
+  return lines;
 }
 
 export function list(paths: Paths, opts: { all: boolean; now: number }): string {
@@ -47,6 +65,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
     .sort((a, b) => a.id.localeCompare(b.id));
   const lines = rows.map((s) => sessionLine(s, opts.now));
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
+  lines.push(...followerLines(paths, opts.now));
   lines.push(watcherLine(paths, opts.now));
   const lost = loadUndelivered(paths);
   if (lost.length) lines.push(`outputs: ${lost.length} event(s) could not be delivered after ${MAX_ATTEMPTS} tries; the last one: ${lost[lost.length - 1]?.target} (${lost[lost.length - 1]?.error})`);
@@ -55,15 +74,13 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   return lines.join('\n');
 }
 
-export function show(paths: Paths, ref: string, now: number): string {
+export function show(paths: Paths, ref: string): string {
   const s = need(paths, ref);
   const lines = [
     `${s.id} ${stateLabel(s)}  ${s.profile} (${repoSlug(s.repo)}@${s.revision})  ${s.model}  deadline ${s.deadline_min} min`,
     s.url ?? (s.trigger_id ? routineUrl(s.trigger_id) : 'no link yet'),
   ];
   if (s.error) lines.push(`error: ${s.error}`);
-  const w = loadWatch(paths);
-  if (!w.last_beat || now - Date.parse(w.last_beat) > 3 * (w.interval_min ?? 10) * 60_000) lines.push(watcherLine(paths, now));
   return lines.join('\n');
 }
 

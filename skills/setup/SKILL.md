@@ -27,4 +27,4 @@ Set up a kharos launch profile. Request: $ARGUMENTS
    Only on an explicit yes, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" repo-init <owner/repo>`, show its output, and run the doctor again.
    Never write to the repository without that yes.
 6. For any other failed line, show its fix and say which step is the person's (installing the Claude GitHub App, connecting GitHub, creating an environment); do not try to work around it.
-7. End with the next steps: `/kharos:run "<instruction>"` to launch, and `/loop 10m /kharos:watch` in a separate session (`claude --model haiku`) to follow launches.
+7. End with the next steps: `/kharos:run "<instruction>"` launches a session and starts its follower in the background, which reports here when the session needs the person or ends; `/loop 10m /kharos:watch` in a separate session (`claude --model haiku`) is the advanced mode for many sessions or headless use.

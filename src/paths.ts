@@ -18,6 +18,8 @@ export interface Paths {
   logs: string;
   /** The kharos permission hook's decisions, as the watcher read them from session logs. */
   approvals: string;
+  /** One lease file per session a follower (`kharos wait`) reads, so only one process reads it at a time. */
+  followers: string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
@@ -44,5 +46,6 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     bodies: path.join(state, 'bodies'),
     logs: path.join(state, 'logs'),
     approvals: path.join(state, 'approvals.jsonl'),
+    followers: path.join(state, 'followers'),
   };
 }
