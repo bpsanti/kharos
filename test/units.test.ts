@@ -172,6 +172,6 @@ test('schema: the JSON Schema names the same fields the validator accepts', asyn
   const { DEFAULT_WATCH, DEFAULT_PROFILE_FIELDS } = await import('../src/config.ts');
   const schema = JSON.parse(fs.readFileSync(new URL('../schema/config.schema.json', import.meta.url), 'utf8'));
   assert.deepEqual(Object.keys(schema.$defs.watch.properties).sort(), Object.keys(DEFAULT_WATCH).sort());
-  assert.deepEqual(Object.keys(schema.$defs.profile.properties).sort(), ['repo', 'environment', ...Object.keys(DEFAULT_PROFILE_FIELDS)].sort());
+  assert.deepEqual(Object.keys(schema.$defs.profile.properties).sort(), ['repo', 'environment', 'environment_name', 'permissions', 'account', ...Object.keys(DEFAULT_PROFILE_FIELDS)].sort());
   for (const [k, v] of Object.entries(DEFAULT_WATCH)) assert.equal(schema.$defs.watch.properties[k].default, v, `watch.${k}`);
 });

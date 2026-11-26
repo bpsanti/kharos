@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { claudeBin, readAuthStatus, type AuthStatus } from './account.ts';
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
-import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './config.ts';
+import { ConfigError, loadConfig, otherAccount, repoSlug, type Config, type Profile } from './config.ts';
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
@@ -11,9 +11,11 @@ import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from
 import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
-import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
+import { loadMarker, planMigration } from './accounts.ts';
+import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
+/** `info` lines show only with --verbose, so a warning is always something the person can act on. */
 export type Level = 'ok' | 'warn' | 'fail' | 'info';
 
 export interface Check {
@@ -22,6 +24,18 @@ export interface Check {
   detail: string;
   fix?: string[];
 }
+
+/** Which account a cloud session's work shows under on GitHub; kharos cannot read the environment's variables, so it says this instead of checking. */
+export const COMMIT_IDENTITY =
+  'cloud sessions push with the GitHub credential your Claude account has (the Claude GitHub App or /web-setup), and author commits as Claude <noreply@anthropic.com> unless the cloud environment sets GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL';
+
+/**
+ * Why every launch asks for its own approval. Claude Code's RemoteTrigger tool asks before it creates, changes or
+ * runs a routine, ignores an allow rule for the whole tool on those calls, and offers no "always allow"; in auto
+ * mode its classifier reviews the call instead of a person.
+ */
+export const LAUNCH_APPROVAL =
+  "each launch asks for your approval before its routine is created and run: Claude Code asks on every create and run of a routine, ignores allow rules for the whole RemoteTrigger tool on them, and offers no \"always allow\", so kharos cannot make that approval durable; a headless launch (claude -p) runs only with --permission-mode auto, where Claude Code's classifier reviews each launch instead of you";
 
 export const MIN_CLAUDE = [2, 1, 323] as const;
 const PLANS = new Set(['pro', 'max', 'team', 'enterprise', 'ultra']);
@@ -39,6 +53,8 @@ export interface DoctorDeps {
   managedPolicy: () => ManagedPolicy;
   /** The setup script the repository ships for its cloud environment. */
   setupScript: (repo: string, revision: string) => RemoteSettings;
+  /** What the person's own GitHub login may do on the repository; null when gh cannot tell. */
+  repoRole: (repo: string) => RepoRole;
 }
 
 export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
@@ -54,6 +70,7 @@ export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
     hookFiles: (repo, rev) => readRemoteHookFiles(repo, rev, env),
     managedPolicy: () => readManagedPolicy(env),
     setupScript: (repo, rev) => readRemoteFile(repo, rev, SETUP_SCRIPT_PATH, env),
+    repoRole: (repo) => readRepoRole(repo, env),
   };
 }
 
@@ -69,16 +86,24 @@ export function versionAtLeast(text: string, min: readonly number[]): boolean | 
 
 export interface DoctorOptions {
   profile?: string;
+  /** The folders every account shared, when this account has files of its own (see paths.ts). */
+  shared?: Paths | null;
   /** The session that ran the check has no RemoteTrigger tool. */
   noRemoteTool?: boolean;
   now: number;
   env: NodeJS.ProcessEnv;
 }
 
-export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): Check[] {
-  const checks: Check[] = [];
-  const add = (level: Level, name: string, detail: string, fix?: string[]) => checks.push(fix ? { level, name, detail, fix } : { level, name, detail });
+type Add = (level: Level, name: string, detail: string, fix?: string[]) => void;
 
+function collector(): { checks: Check[]; add: Add } {
+  const checks: Check[] = [];
+  return { checks, add: (level, name, detail, fix) => checks.push(fix ? { level, name, detail, fix } : { level, name, detail }) };
+}
+
+/** Claude Code, the login, the plan and the RemoteTrigger tool: what every cloud launch needs first. */
+export function accountChecks(opts: Pick<DoctorOptions, 'noRemoteTool' | 'env'>, deps: Pick<DoctorDeps, 'claudeVersion' | 'auth'>, auth: AuthStatus | null = deps.auth()): Check[] {
+  const { checks, add } = collector();
   const version = deps.claudeVersion();
   const okVersion = version ? versionAtLeast(version, MIN_CLAUDE) : null;
   if (!version) add('fail', 'claude', 'the claude binary was not found', ['Install Claude Code, or set KHAROS_CLAUDE_BIN to its path.']);
@@ -88,12 +113,11 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   if (opts.env.ANTHROPIC_API_KEY) {
     add('fail', 'login', 'ANTHROPIC_API_KEY is set, and it takes precedence over the claude.ai login', ['Unset ANTHROPIC_API_KEY where Claude Code starts, then start it again.']);
   }
-  const auth = deps.auth();
   if (!auth || !auth.loggedIn) add('fail', 'login', 'not logged in', ['Run `claude auth login` with a claude.ai account.']);
   else if (auth.authMethod !== 'claude.ai') {
     add('fail', 'login', `logged in with ${auth.authMethod ?? 'an unknown method'}; cloud sessions need a claude.ai login (API keys, Bedrock and Vertex do not work)`, ['Run `claude auth login` with a claude.ai account.']);
   } else {
-    add('ok', 'login', 'claude.ai');
+    add('ok', 'login', auth.email ? `claude.ai, ${auth.email}` : 'claude.ai');
     const plan = auth.subscriptionType ?? 'unknown';
     if (PLANS.has(plan)) {
       const managed = plan === 'team' || plan === 'enterprise';
@@ -106,11 +130,21 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
       'On Team or Enterprise, ask an owner to allow cloud sessions and scheduled tasks for the organization.',
     ]);
   }
+  return checks;
+}
+
+export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): Check[] {
+  const { checks, add } = collector();
+  const auth = deps.auth();
+  checks.push(...accountChecks(opts, deps, auth));
 
   let config: Config | null = null;
   try {
     const loaded = loadConfig(paths);
-    if (!loaded.exists) add('fail', 'config', `no configuration at ${paths.config}`, ['Run /kharos:setup.']);
+    if (!loaded.exists) {
+      add('fail', 'config', `no configuration at ${paths.config}${paths.account ? `, the files of Claude config folder ${paths.account}` : ''}`, ['Run /kharos:setup.']);
+      pendingMigration(paths, opts.shared ?? null, auth?.account ?? null, add);
+    }
     else config = loaded.config;
   } catch (err) {
     if (!(err instanceof ConfigError)) throw err;
@@ -131,7 +165,8 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   const setups = state('setups', paths.setups, () => loadSetups(paths));
   const names = opts.profile ? [opts.profile] : Object.keys(config.profiles);
   if (names.length === 0) add('fail', 'profile', 'the configuration has no profile', ['Run /kharos:setup.']);
-  add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})`);
+  add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})${paths.account ? `, the files of Claude config folder ${paths.account}` : ''}`);
+  pendingMigration(paths, opts.shared ?? null, auth?.account ?? null, add);
   const policy = deps.managedPolicy();
   if (policy.status === 'found') {
     add('info', 'managed policy', `${policy.file}: ${policy.ask.length} ask rule(s), ${policy.deny.length} deny rule(s); bypass mode ${policy.bypassDisabled ? 'disabled by the organization' : 'not disabled'}`);
@@ -166,9 +201,18 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
       add('fail', `profile ${name}`, 'does not exist');
       continue;
     }
+    if (otherAccount(p, auth?.account)) {
+      // One file serves every account on the machine, and an environment belongs to one account.
+      const detail = 'was set up on another Claude account, whose cloud environment this account cannot use';
+      if (opts.profile) add('fail', `profile ${name}`, detail, [`Run /kharos:setup ${repoSlug(p.repo)} on this account; it sets up a profile of its own.`]);
+      else add('info', `profile ${name}`, `${detail}; not checked here`);
+      continue;
+    }
     checkProfile(name, p, deps, add, repos ?? {}, config.permission_hook, policy);
     checkEnvironment(name, p, deps, add, environmentsOf(envs, account), findSetup(setups ?? {}, account, repoSlug(p.repo), p.revision));
   }
+  add('info', 'launch approval', LAUNCH_APPROVAL);
+  add('info', 'commits', COMMIT_IDENTITY, ['Set them on the environment at claude.ai/code: open the environment selector, the settings of the environment, and add one NAME=value line each under Environment variables.']);
 
   const reg = state('registry', paths.registry, () => loadRegistry(paths));
   if (reg) {
@@ -209,10 +253,12 @@ function checkProfile(
   if (!heads.readable || (!heads.empty && heads.hasRevision)) checkPermissions(name, p, deps, add, hookOn, policy);
 
   const access = repos[slug];
-  if (access?.access === 'ok') add('ok', `${name}: claude access`, `a routine for ${slug} was created on ${access.checked_at.slice(0, 10)}`);
-  else if (access?.access === 'denied') add('fail', `${name}: claude access`, `the service answered ${access.reason ?? 'access denied'} on ${access.checked_at.slice(0, 10)}`, accessFix(p.repo, deps.ownerType(p.repo)));
+  if (access?.access === 'ok') {
+    const how = access.reason === CHECKED_BY_CLAUDE_CODE ? 'Claude Code confirmed it' : `a routine for ${slug} was created`;
+    add('ok', `${name}: claude access`, `${how} on ${access.checked_at.slice(0, 10)}`);
+  } else if (access?.access === 'denied') add('fail', `${name}: claude access`, `the service answered ${access.reason ?? 'access denied'} on ${access.checked_at.slice(0, 10)}`, accessFix(p.repo, deps.ownerType(p.repo)));
   else {
-    add('info', `${name}: claude access`, 'not checked yet: the first launch checks it when it creates the routine, which is free and disabled, before any session starts', [
+    add('info', `${name}: claude access`, `${ACCESS_UNCHECKED}: the first launch checks it when it creates the routine, which is free and disabled, before any session starts`, [
       'The Claude side needs the Claude GitHub App on the repository (https://github.com/apps/claude), or GitHub connected through /web-setup.',
     ]);
   }
@@ -234,6 +280,7 @@ function checkEnvironment(
   const label = `${name}: environment`;
   const slug = repoSlug(p.repo);
   const key = slug.toLowerCase();
+  const env = p.environment_name ? `"${p.environment_name}" (${p.environment})` : p.environment;
   const seen = envs?.environments.find((e) => e.id === p.environment);
   const used = seen ? `used by ${seen.routines} routine(s)` : '';
   const known = confirmed && confirmed.environment !== p.environment ? confirmed.environment : envs?.environments.find((e) => e.id !== p.environment && e.repos?.includes(key))?.id;
@@ -249,24 +296,31 @@ function checkEnvironment(
     const script = shipped();
     if (script !== null && scriptDigest(script) !== confirmed.script_sha256) {
       add('warn', label, `the setup script changed on ${p.revision}; paste it again`, [
-        `Copy the new script with \`kharos env-guide --profile ${name} --copy\` and paste it into the "Setup script" of ${p.environment} on claude.ai/code.`,
+        `Copy the new script with \`kharos env-guide --profile ${name} --copy\` and paste it into the "Setup script" of ${env} on claude.ai/code.`,
         'Then confirm it with /kharos:setup.',
       ]);
-    } else add('ok', label, `${p.environment} (you confirmed it for ${slug}@${p.revision} on ${confirmed.confirmed_at.slice(0, 10)}${used ? `; ${used}` : ''})`);
-  } else if (seen) {
-    // A repository that ships a setup script needs an environment that runs it, which routines on others do not show.
-    if (seen.repos && !seen.repos.includes(key) && shipped() !== null) {
-      add('warn', label, `${p.environment} is ${used}, none on ${slug}, which ships ${SETUP_SCRIPT_PATH}`, [
+    } else add('ok', label, `${env} (you confirmed it for ${slug}@${p.revision} on ${confirmed.confirmed_at.slice(0, 10)}${used ? `; ${used}` : ''})`);
+  } else if (seen || p.environment_name) {
+    // A repository that ships a setup script needs an environment that runs it, which neither routines on others nor a name show.
+    const elsewhere = seen ? !!seen.repos && !seen.repos.includes(key) : true;
+    if (elsewhere && shipped() !== null) {
+      add('warn', label, seen ? `${env} is ${used}, none on ${slug}, which ships ${SETUP_SCRIPT_PATH}` : `${env} was picked by name, and ${slug} ships ${SETUP_SCRIPT_PATH}, which kharos does not know it runs`, [
         'If this environment runs that script already, say so in /kharos:setup.',
         ...assisted,
       ]);
-    } else add('ok', label, `${p.environment} (${used})`);
-  } else if (envs) {
-    add('warn', label, `${p.environment} is not used by any of your routines, and you have not confirmed it for ${slug}`, [
-      'Check its id in /schedule or on claude.ai/code; a missing environment fails the fire without starting a session.',
+    } else add('ok', label, seen ? `${env} (${used})` : `${env}, picked by name from your environments in /kharos:setup`);
+  } else if (envs && shipped() !== null) {
+    add('warn', label, `${env} is not confirmed for ${slug}, which ships ${SETUP_SCRIPT_PATH}, and kharos does not know whether the environment runs it`, [
+      'If this environment runs that script already, say so in /kharos:setup.',
       ...assisted,
     ]);
-  } else add('info', label, `${p.environment} (not compared with your routines yet: /kharos:doctor reads them)`);
+  } else if (envs && envs.environments.length > 0) {
+    // Only routines show environment ids here, so this says something only when the account has routines.
+    add('warn', label, `${p.environment} is not used by any of your routines, was not picked by name, and you have not confirmed it for ${slug}`, [
+      'Run /kharos:setup to pick the environment by name from the ones your account has; a missing environment fails the fire without starting a session.',
+      ...assisted,
+    ]);
+  } else add('info', label, `${p.environment} (not compared: no routine of yours uses an environment yet, which is expected on a new account)`);
 }
 
 /** Which permission profile the branch a session starts on is on, and what in it would hold a session at a prompt. */
@@ -301,9 +355,36 @@ function checkPermissions(
   const findings = assess(rules);
   const counts = `${rules.allow.length} allow, ${rules.ask.length} ask, ${rules.deny.length} deny`;
   const detail = [`${where} is on the ${identify(rules)} permission profile (${remote.status === 'absent' ? 'no settings file' : counts})`, ...findings.map((f) => f.text)].join('; ');
-  add(findings.some((f) => f.level === 'warn') ? 'warn' : 'ok', label, detail, fix);
+  const quiet = permissionsQuiet(p, deps.repoRole(p.repo));
+  if (!findings.some((f) => f.level === 'warn')) add('ok', label, detail, fix);
+  else if (quiet) add('info', label, `${detail} (${quiet})`, fix);
+  else add('warn', label, detail, fix);
   const mirrored = checkHook(name, p, settings, deps, add, hookOn, policy);
   checkManagedAsk(name, policy, mirrored, hookOn, add);
+}
+
+/** Says when profiles or sessions of this account still sit in the files every account shared; /kharos:setup moves them. */
+function pendingMigration(paths: Paths, shared: Paths | null, account: string | null, add: Add): void {
+  if (!shared || !account || loadMarker(paths)) return;
+  const plan = planMigration(shared, account);
+  if (!plan) return;
+  const what = [
+    plan.mine.length ? `${plan.mine.length} profile(s) of this account (${plan.mine.join(', ')})` : '',
+    plan.unknown.length ? `${plan.unknown.length} profile(s) whose account kharos cannot tell (${plan.unknown.join(', ')})` : '',
+    plan.sessions.length ? `${plan.sessions.length} session(s) it launched` : '',
+  ].filter(Boolean);
+  add('warn', 'account files', `the kharos files every account shared hold ${what.join(', ')}`, ["Run /kharos:setup once on this account: it moves them to this account's own files, and asks about the ones it cannot tell."]);
+}
+
+/**
+ * Why a permissions warning is not the person's to act on, or null when it is: they chose to leave the
+ * rules as they are in /kharos:setup, or their GitHub login cannot change the repository's settings.
+ * A login gh cannot read stays a warning, since the person may well be able to change the file.
+ */
+export function permissionsQuiet(p: Profile, role: RepoRole): string | null {
+  if (p.permissions === 'as-is') return 'you chose to leave them as they are in /kharos:setup';
+  if (role === 'write' || role === 'read') return `a change to ${SETTINGS_PATH} of ${repoSlug(p.repo)}, which its maintainers decide`;
+  return null;
 }
 
 /** Whether the branch has the kharos permission hook, and what it answers; returns the organization rules it mirrors. */
@@ -370,14 +451,32 @@ function checkManagedAsk(name: string, policy: ManagedPolicy, mirrored: readonly
   add('warn', `${name}: managed ask rules`, `${open.length} organization ask rule(s) prompt in every cloud session, which has no bypass mode, and the session waits until a person answers: ${open.join(', ')}`, fix);
 }
 
-export function formatChecks(checks: Check[]): string {
+/** The words of a claude access check whose answer is not known yet. */
+export const ACCESS_UNCHECKED = 'not checked yet';
+/** The reason recorded when Claude Code itself, through /schedule, confirmed Claude's access to a repository. */
+export const CHECKED_BY_CLAUDE_CODE = 'checked by Claude Code';
+
+export function formatChecks(checks: Check[], opts: { verbose?: boolean } = {}): string {
   const lines: string[] = [];
-  for (const c of checks) {
+  const shown = opts.verbose ? checks : checks.filter((c) => c.level !== 'info');
+  for (const c of shown) {
     lines.push(`${c.level.padEnd(4)}  ${c.name}: ${c.detail}`);
     if (c.fix && c.level !== 'ok') for (const f of c.fix) lines.push(`      ${f}`);
   }
   const fails = checks.filter((c) => c.level === 'fail').length;
   const warns = checks.filter((c) => c.level === 'warn').length;
-  lines.push(fails ? `${fails} problem(s) to fix before launching.` : warns ? `Ready to launch, with ${warns} warning(s).` : 'Ready to launch.');
+  if (fails) {
+    lines.push(`${fails} problem(s) to fix before launching.`);
+    return lines.join('\n');
+  }
+  const unchecked = checks.filter((c) => c.name.endsWith(': claude access') && c.detail.startsWith(ACCESS_UNCHECKED)).map((c) => c.name.replace(/: claude access$/, ''));
+  const ready = warns ? `Ready to launch, with ${warns} warning(s)` : 'Ready to launch';
+  lines.push(
+    unchecked.length
+      ? `${ready}; Claude's GitHub access is not confirmed yet for ${unchecked.join(', ')}: the first launch checks it before any session starts, at no cost.`
+      : `${ready}.`,
+  );
+  const hidden = checks.length - shown.length;
+  if (hidden) lines.push(`${hidden} more line(s) of information with --verbose.`);
   return lines.join('\n');
 }

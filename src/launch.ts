@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import { readAuthStatus } from './account.ts';
 import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256, sideBranchLines } from './body.ts';
-import { ConfigError, loadConfig, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
+import { ConfigError, loadConfig, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
 import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
@@ -57,13 +57,14 @@ export function defaultTitle(instruction: string): string {
 
 export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const env = opts.env ?? process.env;
+  const auth = readAuthStatus(env);
   let picked;
   let config: Config;
   try {
     const loaded = loadConfig(paths);
     if (!loaded.exists) throw new LaunchError(['kharos has no configuration yet: run /kharos:setup first.']);
     config = loaded.config;
-    picked = pickProfile(config, opts.profile);
+    picked = pickProfile(config, opts.profile, auth?.account ?? null);
   } catch (err) {
     if (err instanceof ConfigError) throw new LaunchError([err.message]);
     throw err;
@@ -79,9 +80,14 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   if (env.ANTHROPIC_API_KEY) {
     throw new LaunchError(['ANTHROPIC_API_KEY is set: it takes precedence over the claude.ai login, and cloud sessions need the login. Unset it and start Claude Code again.']);
   }
-  const auth = readAuthStatus(env);
   if (!auth || !auth.loggedIn || auth.authMethod !== 'claude.ai' || !auth.account) {
     throw new LaunchError(['Claude Code is not logged in with a claude.ai account (Pro, Max, Team or Enterprise). Run `claude auth login`, then /kharos:doctor.']);
+  }
+  if (otherAccount(profile, auth.account)) {
+    throw new LaunchError([
+      `Profile "${profileName}" was set up on another Claude account, and its cloud environment belongs to that account.`,
+      `Run /kharos:setup ${repoSlug(profile.repo)} on this account; it sets up a profile of its own.`,
+    ]);
   }
 
   // Repository readiness, before the first launch in a repository and while it is not known to work.

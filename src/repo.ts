@@ -83,6 +83,18 @@ export function readOwnerType(repo: string, env: NodeJS.ProcessEnv = process.env
   return t === 'User' || t === 'Organization' ? t : null;
 }
 
+/** What the person's own GitHub login may do on a repository: `admin` covers maintainers, who change its settings. */
+export type RepoRole = 'admin' | 'write' | 'read' | null;
+
+/** The role through gh, when gh is installed and logged in; null otherwise. */
+export function readRepoRole(repo: string, env: NodeJS.ProcessEnv = process.env): RepoRole {
+  const jq = '.permissions | if (.admin or .maintain) then "admin" elif .push then "write" elif .pull then "read" else "" end';
+  const r = spawnSync('gh', ['api', `repos/${repoSlug(repo)}`, '--jq', jq], { encoding: 'utf8', timeout: 20_000, env });
+  if (r.error || r.status !== 0) return null;
+  const t = r.stdout.trim();
+  return t === 'admin' || t === 'write' || t === 'read' ? t : null;
+}
+
 /** The fix for a repository the Claude side cannot reach, in the words of the official setup paths. */
 export function accessFix(repo: string, ownerType: OwnerType): string[] {
   const slug = repoSlug(repo);

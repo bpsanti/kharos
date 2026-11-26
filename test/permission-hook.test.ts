@@ -415,6 +415,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
     managedPolicy: () => parseManagedPolicy(JSON.stringify(POLICY), '/home/person/.claude/remote-settings.json'),
     setupScript: () => ({ status: 'absent' }),
+    repoRole: () => 'admin',
     ...over,
   };
 }

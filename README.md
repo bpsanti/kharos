@@ -40,8 +40,8 @@ Status: early development.
   - the Claude GitHub App installed with access to the repository (https://github.com/apps/claude); in an organization only an owner can install it;
   - or `/web-setup` in Claude Code, which sends your `gh` token to your Claude account.
 - The repository has at least one commit.
-- A cloud environment, created on claude.ai/code; its id (`env_...`) shows in `/schedule`.
-  You create it once per account, and `/kharos:setup` prepares what to paste into it: see [creating a cloud environment](docs/setup.md#creating-a-cloud-environment).
+- A cloud environment on claude.ai/code, once per account; Claude Code creates a first one when the account has none, and `/kharos:setup` lets you pick it by name.
+  When none fits the repository, `/kharos:setup` prepares what to paste into a new one: see [creating a cloud environment](docs/setup.md#creating-a-cloud-environment).
 
 ## Install
 
@@ -50,8 +50,13 @@ Status: early development.
 /plugin install kharos@kharos
 ```
 
-Then run `/kharos:setup` in the repository you want to launch sessions on.
-It writes a profile, checks the repository, and tells you exactly what to fix: see [docs/setup.md](docs/setup.md).
+Then run `/kharos:setup` in the repository you want to launch sessions on, once per Claude account.
+It shows one list of everything a launch needs, in order (account and plan, GitHub connection, repository access, cloud environment, commit identity, permission prompts, profile), each with its state and the one action that fixes it.
+It checks again after each fix, asks only what it cannot settle itself (the environment by name when there are several, and the permission mode, once), then writes the profile and ends with a short summary and the next action: see [docs/setup.md](docs/setup.md).
+
+Every launch asks for your approval before its routine is created and run: Claude Code ignores allow rules for that and offers no "always allow", so a headless launch needs `claude -p --permission-mode auto`, where its classifier reviews the launch ([docs/setup.md](docs/setup.md#launch-approval)).
+
+Cloud sessions push with the GitHub credential your Claude account has, and author commits as `Claude <noreply@anthropic.com>` unless the environment sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` (on claude.ai/code: the environment's settings, Environment variables).
 
 The plugin runs the `kharos` CLI by itself.
 To run it from your own shell too, for `kharos health` from cron or launchd or `kharos permissions approvals`, install it from npm:
@@ -64,8 +69,8 @@ npm install -g kharos
 
 | Command | What it does |
 |---|---|
-| `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs; with no environment that fits, prepares the setup script, variable names and network level of a new one |
-| `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment, permission rules and limits, with the fix for each gap |
+| `/kharos:setup [owner/repo]` | Takes this Claude account from zero to ready for a repository, once, then writes its launch profile |
+| `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits, the watcher and policy counts |
 | `/kharos:permissions [default\|standard\|hook\|preflight\|unblock] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session, records it, and starts its follower in the background |
 | `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again |
@@ -175,7 +180,8 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
 | `~/.local/state/kharos/org-confirmations.json` | Your confirmations to mirror the organization's ask rules and of the unblock preset, each with the fingerprint of the managed settings it holds for |
 
-`KHAROS_HOME` moves both under one folder, which is how one machine serves several accounts.
+Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/.claude`, they are under `accounts/<folder>-<hash>/` of both folders, and the first `/kharos:setup` there moves that account's profiles and sessions out of the files every account shared before.
+`KHAROS_HOME` puts everything under one folder of your choice instead.
 
 ## Limits to know
 

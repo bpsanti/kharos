@@ -9,6 +9,8 @@ export interface AuthStatus {
   authMethod: string | null;
   subscriptionType: string | null;
   account: string | null;
+  /** The login, only to say which account a check is about; never stored. */
+  email?: string | null;
 }
 
 export function claudeBin(env: NodeJS.ProcessEnv = process.env): string {
@@ -21,7 +23,7 @@ export function parseAuthStatus(raw: string): AuthStatus {
   try {
     v = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return { loggedIn: false, authMethod: null, subscriptionType: null, account: null };
+    return { loggedIn: false, authMethod: null, subscriptionType: null, account: null, email: null };
   }
   const org = typeof v.orgId === 'string' ? v.orgId : '';
   const email = typeof v.email === 'string' ? v.email : '';
@@ -31,6 +33,7 @@ export function parseAuthStatus(raw: string): AuthStatus {
     subscriptionType: typeof v.subscriptionType === 'string' ? v.subscriptionType : null,
     // Organization and login together: two people in the same organization see different routines.
     account: org || email ? 'sha256:' + sha256(`${org}\n${email}`).slice(0, 32) : null,
+    email: email || null,
   };
 }
 

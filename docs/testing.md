@@ -23,7 +23,7 @@ Each run spends plan usage, so keep the task small and the deadline short.
    ```
    claude -p --plugin-dir . --model haiku --setting-sources "" --strict-mcp-config --allowedTools RemoteTrigger Bash "/kharos:doctor"
    ```
-3. Write a profile on a branch made for the test, with `kharos setup`, and add a `command` output that appends events to a file, to see each delivery.
+3. Write a profile on a branch made for the test, with `kharos setup --repo <owner/repo> --revision <branch> --environment env_... --permissions as-is` (with no `--from-schedule`, an `env_...` id is taken as it is), and add a `command` output that appends events to a file, to see each delivery.
 4. Launch with `/kharos:run`.
    In a headless session the `run` step needs an approval that `--allowedTools` does not give; the launch then stops at `firing`, and `/kharos:run --resume <id>` (with `--permission-mode bypassPermissions` for that one call) finds no session in `list_runs` and fires once.
 5. Follow it: `/kharos:run` starts the `kharos:follow` agent in the background, and its reports arrive in the launching session.
