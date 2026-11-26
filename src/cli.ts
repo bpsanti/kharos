@@ -119,7 +119,7 @@ const USAGE = `usage: kharos <command>
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
   setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
+        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
@@ -238,6 +238,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             ...(intFlag(args, 'deadline') !== undefined ? { deadline_min: intFlag(args, 'deadline') as number } : {}),
             ...(flag(args, 'environment') !== undefined ? { environment: flag(args, 'environment') as string } : {}),
             ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
+            ...(intFlag(args, 'max-open') !== undefined ? { maxOpen: intFlag(args, 'max-open') as number } : {}),
             ...accountModeFlags(args),
             ...(tools !== undefined ? { allowed_tools: tools.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             ...(args.flags.connectors === true ? { connectors: true } : args.flags['no-connectors'] === true ? { connectors: false } : {}),

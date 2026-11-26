@@ -7,7 +7,8 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, liveFollowers } from './lease.ts';
-import { findSession, isFollowed, loadRegistry, routineUrl, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { activeCount, findSession, isFollowed, loadRegistry, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
 import { readOutbox } from './events.ts';
 import { loadUndelivered, MAX_ATTEMPTS } from './outputs/index.ts';
@@ -65,6 +66,8 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
     .sort((a, b) => a.id.localeCompare(b.id));
   const lines = rows.map((s) => sessionLine(s, opts.now));
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
+  const used = activeCount(reg);
+  if (used) lines.push(`slots: ${used} of watch.max_open ${watchConfig(paths).max_open} in use: ${slotHolders(reg, opts.now)}`);
   lines.push(...followerLines(paths, opts.now));
   lines.push(watcherLine(paths, opts.now));
   const lost = loadUndelivered(paths);

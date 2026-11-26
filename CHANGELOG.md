@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `watch.max_open` is 10 by default (5 before), and `/kharos:setup` asks it once per account, with its trade-off: each open session spends plan usage, the service publishes no limit on concurrent cloud sessions, and runs started by hand are capped at 30 per routine and 100 per account per hour. A launch refused for it names the sessions that hold the slots and how long the ones waiting on a person have waited; `kharos list` shows the slots in use.
 - Headless launches stay followed: a headless Claude Code stops its background agents 10 minutes after its last turn, so there `/kharos:run` and `/kharos:follow` start a follower process of its own (`kharos follow <id>`, the follower's loop without a model), which outlives `claude -p` and feeds the outputs; `claude -p` ends right after the launch and says how to answer from a shell. `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, when the person sets it, keeps the follower agent (`docs/follow.md`).
 - `kharos follow <id> [--detach]` follows a session from a shell or another orchestrator, one JSON line per change until it ends.
 - Right after a fire, `kharos list` and the session start no longer report the session as unfollowed while its follower starts.

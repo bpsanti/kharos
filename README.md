@@ -206,7 +206,7 @@ Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/
 |---|---|
 | Runs started by hand, per routine | 30 per hour |
 | Runs started by hand, per account | 100 per hour |
-| Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 5 by default) |
+| Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 10 by default, that `/kharos:setup` asks once) |
 | Cloud machine | 4 vCPU, 16 GB, 30 GB of disk |
 | Usage | the same plan usage as everything else: five sessions spend five times |
 

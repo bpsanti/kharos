@@ -233,7 +233,15 @@ test('launch: local checks stop an empty repository, a missing branch, and too m
     /default branch is "trunk"/,
   );
   prepare(sb.paths, { instruction: 'one', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK });
-  assert.throws(() => prepare(sb.paths, { instruction: 'two', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK }), /max_open is 1/);
+  assert.throws(
+    () => prepare(sb.paths, { instruction: 'two', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK }),
+    (e: unknown) =>
+      e instanceof LaunchError &&
+      /max_open is 1: k-0001 launch prepared\./.test(e.message) &&
+      /raise watch\.max_open in .*config\.json/.test(e.message) &&
+      /Raising it: each open session spends plan usage/.test(e.message),
+  );
+  assert.match(list(sb.paths, { all: false, now: T0 }), /^slots: 1 of watch\.max_open 1 in use: k-0001 launch prepared$/m);
   assert.throws(() => prepare(sb.paths, { instruction: '   ', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK }), /empty/);
 });
 
