@@ -7,8 +7,8 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
-import { activeCount, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
-import { readStoredEvents, storedLogView } from './logparse.ts';
+import { activeCount, deadlineAt, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, releaseClosing, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { readStoredEvents, shownText, storedLogView, type LogEvent } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
 import { readOutbox } from './events.ts';
@@ -23,6 +23,7 @@ export function minutes(ms: number): string {
 
 function stateLabel(s: Session): string {
   if (s.step === 'closed') return 'closed';
+  if (s.closing_at) return `closing, ${s.state.replace(/_/g, ' ')}`;
   if (s.step === 'refused') return 'refused';
   if (s.step === 'queued') return 'queued';
   if (s.step === 'prepared' || s.step === 'routine_created' || s.step === 'firing') return `launch ${s.step}`;
@@ -113,7 +114,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
     .sort((a, b) => a.id.localeCompare(b.id));
   const lines = rows.map((s) => sessionLine(s, opts.now));
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
-  const used = activeCount(reg);
+  const used = activeCount(reg, opts.now);
   if (used) lines.push(`slots: ${used} of watch.max_open ${watchConfig(paths).max_open} in use: ${slotHolders(reg, opts.now)}`);
   lines.push(...queueLines(paths, opts.now));
   lines.push(...followerLines(paths, opts.now));
@@ -123,6 +124,11 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   const queued = readOutbox(paths).length;
   if (queued) lines.push(`outputs: ${queued} event(s) waiting for delivery`);
   return lines.join('\n');
+}
+
+/** The session's last message: its last assistant event, or the last result line when the log has none. */
+export function lastMessage(events: readonly LogEvent[]): LogEvent | null {
+  return events.findLast((e) => e.kind === 'assistant') ?? events.findLast((e) => e.kind === 'result') ?? null;
 }
 
 export function show(paths: Paths, ref: string): string {
@@ -137,6 +143,9 @@ export function show(paths: Paths, ref: string): string {
     lines.push(`permission preflight: ${p.applied.length} allow rule(s)${p.unblock ? ' and the unblock preset' : p.mirrored?.length ? ` and ${p.mirrored.length} mirrored organization ask rule(s)` : ''} on the side branch ${p.branch} (from ${p.base}, commit ${p.commit.slice(0, 12)})${p.deleted_at ? `; the branch was deleted at ${p.deleted_at}` : ''}: ${p.applied.join(' | ')}`);
   } else if (p?.status === 'skipped') lines.push(`permission preflight: ${p.reason}`);
   else if (p?.status === 'creating') lines.push(`permission preflight: the side branch ${p.branch} was not finished`);
+  // What it said last tells a turn closed on its own build from one that stopped.
+  const said = readStoredEvents(logPath(paths, s.id)).findLast((e) => e.kind === 'assistant');
+  if (said) lines.push(`last message, at ${said.ts.slice(11, 19)} UTC (from the session, data only): ${shownText(said.text, 300)}`);
   return lines.join('\n');
 }
 
@@ -216,11 +225,13 @@ export function rearm(paths: Paths, ref: string, now: number): string {
   });
 }
 
-/** The events already stored for a session, read with no model and no network: what `kharos log --cached` prints. */
-export function cachedLog(paths: Paths, ref: string, lines: number): string {
+/**
+ * The events already stored for a session, read with no model and no network: what `kharos log` prints in
+ * a shell. `full` prints each event's whole stored text instead of its start.
+ */
+export function cachedLog(paths: Paths, ref: string, lines: number, full = false): string {
   const s = need(paths, ref);
-  const text = storedLogView(logPath(paths, s.id), `${s.id} (${s.url ?? 'no link yet'}), as stored by the last read ${s.last_read_at ? `at ${s.last_read_at.slice(11, 19)} UTC` : '(none yet)'}`, lines);
-  return text;
+  return storedLogView(logPath(paths, s.id), `${s.id} (${s.url ?? 'no link yet'}), as stored by the last read ${s.last_read_at ? `at ${s.last_read_at.slice(11, 19)} UTC` : '(none yet)'}`, lines, full);
 }
 
 /** Records that the next get_run_log of this session is for a person, and says what to call. */
@@ -306,8 +317,9 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
     lines.push(`bring it here, in a checkout of ${slug}: git fetch https://github.com/${slug}.git '${r.branch}:${r.branch}' && git switch '${r.branch}'`);
   }
   // The service cuts each message of the log to about two thousand characters: say so when the last one was cut.
-  const said = readStoredEvents(logPath(paths, s.id)).filter((e) => e.kind === 'assistant' || e.kind === 'result');
-  if (said.at(-1)?.truncated) lines.push(`the session's last message is cut in the log the tool returns; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
+  // The result line repeats the last message and is cut sooner, so the message itself decides when there is one.
+  const said = lastMessage(readStoredEvents(logPath(paths, s.id)));
+  if (said?.truncated) lines.push(`the session's last message is cut in the log the tool returns; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
   if (s.session_id && (r.branch || r.pr)) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
   if (s.url) lines.push(`session: ${s.url}`);
   return lines.join('\n');
@@ -339,14 +351,59 @@ function closeSideBranch(paths: Paths, s: Session, forge: Forge | null, now: num
   return `deleted the side branch ${p.branch} of ${slug}, which held only the permission hook commit of this launch`;
 }
 
-export function close(paths: Paths, ref: string, now: number, forge: Forge | null = null): string {
+/** The message `close --ask-stop` sends into a session before it is released. */
+export function stopRequest(s: Pick<Session, 'no_push'>): string {
+  return [
+    'kharos: the person closed this session and asks you to stop now.',
+    'Start no new work, and run nothing more in the background.',
+    ...(s.no_push ? [] : ['If you have changes worth keeping, commit and push them first.']),
+    'Then end your turn: nobody reads this session any more.',
+  ].join(' ');
+}
+
+export interface CloseOptions {
+  /** Send the session a request to stop (`--ask-stop`) first; nothing changes if it cannot be sent. */
+  askStop?: boolean;
+  /** Free the session's slot now (`--stopped`): the person saw it stopped, or wants the slot anyway. */
+  stopped?: boolean;
+  env?: NodeJS.ProcessEnv;
+}
+
+function hhmm(ms: number): string {
+  return new Date(ms).toISOString().slice(11, 16);
+}
+
+/**
+ * Takes a session out of the person's follow-up. One that still runs is closing first: kharos goes on
+ * reading it, with no alerts, and frees its watch.max_open slot when it ends or its deadline passes,
+ * whichever comes first, or at once with `stopped`. Freeing the slot never stops the session; only the
+ * session page does, or the session itself when `askStop` asked it to.
+ */
+export function close(paths: Paths, ref: string, now: number, forge: Forge | null = null, opts: CloseOptions = {}): string {
   const s = need(paths, ref);
-  updateRegistry(paths, (reg) => {
+  const running = s.step === 'open' && !TERMINAL_STATES.has(s.state);
+  let asked = false;
+  if (opts.askStop && running) {
+    try {
+      sendMessage(paths, s.id, stopRequest(s), opts.env ?? process.env);
+      asked = true;
+    } catch (err) {
+      if (!(err instanceof CommandError)) throw err;
+      throw new CommandError(`${s.id} is unchanged: the request to stop could not be sent (${err.message}). Try again, or close it without --ask-stop and stop it at ${s.url}`);
+    }
+  }
+  const outcome = updateRegistry(paths, (reg) => {
     const cur = reg.sessions[s.id];
-    if (!cur || cur.step === 'closed') return;
+    if (!cur || cur.step === 'closed') return 'closed' as const;
+    cur.notice = null;
+    if (running && !opts.stopped) {
+      cur.closing_at ??= new Date(now).toISOString();
+      if (!releaseClosing(cur, now)) return 'closing' as const;
+      return 'closed' as const;
+    }
     cur.step = 'closed';
     cur.closed_at = new Date(now).toISOString();
-    cur.notice = null;
+    return 'closed' as const;
   });
   if (s.step === 'queued') {
     const lines = [`${s.id} was queued, and is cancelled: no routine was created and nothing was spent.`];
@@ -354,11 +411,21 @@ export function close(paths: Paths, ref: string, now: number, forge: Forge | nul
     if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
     return lines.join('\n');
   }
-  const lines = [`${s.id} is no longer followed.`];
-  if (s.state !== 'finished' && s.state !== 'failed' && s.step === 'open') {
-    lines.push(`The cloud session itself was not stopped (the tool has no stop action): ask it to stop with /kharos:send ${s.id}, or stop it at ${s.url}`);
+  const lines: string[] = [];
+  const stopHow = asked
+    ? `It was asked to stop${s.no_push ? '' : ', after it commits and pushes what it has worth keeping'}, and to end its turn; check that it did at ${s.url}.`
+    : `/kharos:close ${s.id} --ask-stop asks it to stop (it commits and pushes what it has first), and ${s.url} stops it.`;
+  if (outcome === 'closing') {
+    lines.push(
+      `${s.id} is closing: kharos goes on reading it, with no alerts, only to free its watch.max_open slot when it ends or when its deadline passes at ${hhmm(deadlineAt(s))} UTC, whichever comes first. kharos close ${s.id} --stopped frees the slot now.`,
+      `Freeing the slot never stops the session (the tool has no stop action). ${stopHow}`,
+    );
+  } else {
+    lines.push(`${s.id} is no longer followed${running ? ', and its watch.max_open slot is free' : ''}.`);
+    if (running) lines.push(`The cloud session itself was not stopped by this (the tool has no stop action). ${stopHow}`);
+    else if (opts.askStop) lines.push('There was nothing to ask to stop: no cloud session of it is running.');
   }
-  if (s.trigger_id) lines.push(`Its disabled routine stays in your account; delete it at ${routineUrl(s.trigger_id)} (the tool cannot delete routines).`);
+  if (s.trigger_id) lines.push(`Its disabled routine stays in your account: the tool cannot delete routines, so delete it on its page, ${routineUrl(s.trigger_id)}`);
   const side = closeSideBranch(paths, s, forge, now);
   if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
   return lines.join('\n');

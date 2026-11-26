@@ -57,6 +57,7 @@ The adapter writes one line per event to one status file, given at launch and ne
 |---|---|---|
 | opened | `working` | `working` |
 | queued | `note` | `note` |
+| pr_opened | `note`, with the pull request | same |
 | waiting_answer | `needs-decision [key=...]` | same |
 | waiting_permission, silent, looping, overdue, usage_limit, invisible, quiet_unmarked, provisioning_slow, unfollowed, not_fired | `blocked [key=...]` | same |
 | back | `resolved [key=...]` | same |

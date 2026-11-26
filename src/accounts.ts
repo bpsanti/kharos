@@ -9,7 +9,8 @@ import path from 'node:path';
 import { defaultConfig, loadConfig, saveConfig, type Config, type Profile } from './config.ts';
 import { isObject, readState, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
-import { loadRegistry, updateRegistry, type Session } from './registry.ts';
+import { liveFollowers } from './lease.ts';
+import { isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
 
 export interface Migration {
   /** Profiles of the shared files that are this account's. */
@@ -58,7 +59,31 @@ function move(from: string, to: string): void {
 export type MigrationResult =
   | { state: 'none' }
   | { state: 'done'; profiles: string[]; sessions: number; at: string }
-  | { state: 'ask'; unknown: string[] };
+  | { state: 'ask'; unknown: string[] }
+  /** Open sessions to move are read right now by a follower that reads the shared files: nothing moves yet. */
+  | { state: 'busy'; sessions: string[] };
+
+/** What the shared files hold of this account, in words; null when nothing. */
+export function describePlan(plan: Migration): string {
+  return [
+    plan.mine.length ? `${plan.mine.length} profile(s) of this account (${plan.mine.join(', ')})` : '',
+    plan.unknown.length ? `${plan.unknown.length} profile(s) whose account kharos cannot tell (${plan.unknown.join(', ')})` : '',
+    plan.sessions.length ? `${plan.sessions.length} session(s) it launched` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/**
+ * For an account with no kharos files of its own yet: what the shared files hold of it, and the command
+ * that moves it, in place of "no configuration"; null when there is nothing of it there.
+ */
+export function unmigratedNote(paths: Paths, shared: Paths | null, account: string | null): string | null {
+  if (!shared || !account || loadMarker(paths)) return null;
+  const plan = planMigration(shared, account);
+  if (!plan) return null;
+  return `This Claude account has no kharos files of its own yet (${path.dirname(paths.config)}); the files every account on this machine shared (${shared.config}) hold ${describePlan(plan)}. Run /kharos:setup once on this account: it moves them to its own files.`;
+}
 
 /**
  * Takes this account's profiles and sessions out of the shared files, once. `adopt` names the profiles
@@ -75,6 +100,11 @@ export function migrate(paths: Paths, shared: Paths | null, account: string | nu
     writeJsonAtomic(paths.migration, { at, profiles: [], sessions: [] } satisfies Marker);
     return { state: 'none' };
   }
+  // A follower that reads the shared files (a kharos from before accounts had files of their own) would lose
+  // a session moved under it, so an open one it reads now waits.
+  const read = liveFollowers(shared, now);
+  const busy = plan.sessions.filter((id) => read.has(id) && isFollowed(loadRegistry(shared).sessions[id] as Session));
+  if (busy.length) return { state: 'busy', sessions: busy };
   if (plan.unknown.length && adopt === null) return { state: 'ask', unknown: plan.unknown };
   const take = [...plan.mine, ...plan.unknown.filter((n) => adopt?.includes(n))];
 

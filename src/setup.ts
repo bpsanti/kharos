@@ -390,7 +390,13 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   const signedIn = !failed;
   const files = `kharos files of this account: ${path.dirname(paths.config)}`;
   if (failed) add('missing', `${failed.name}: ${failed.detail}`, failed.fix?.join(' '));
-  else if (moved.state === 'ask') {
+  else if (moved.state === 'busy') {
+    add(
+      'missing',
+      `${files}; the files every account on this machine shared hold open sessions of this account that a follower reads right now from those files (${moved.sessions.join(', ')}), so nothing moved: that follower would lose them`,
+      'Run /kharos:setup again once they end, or once that follower stops; nothing of this account changes before then.',
+    );
+  } else if (moved.state === 'ask') {
     add(
       'choose',
       `${files}; the files every account on this machine shared hold profiles whose account kharos cannot tell: ${moved.unknown.join(', ')}`,
@@ -536,8 +542,10 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   let choice: PermissionChoice | null = null;
   let permQuestion: Next | null = null;
   if (input.permissions !== undefined) {
-    const picked = options.find((o) => o.id === input.permissions);
-    if (!picked || !isPermissionChoice(picked.id)) throw new SetupError(`--permissions must be one of ${PERMISSION_CHOICES.join(', ')}`);
+    // `default` is what /kharos:permissions calls leaving the rules as they are.
+    const wanted = input.permissions === 'default' ? 'as-is' : input.permissions;
+    const picked = options.find((o) => o.id === wanted);
+    if (!picked || !isPermissionChoice(picked.id)) throw new SetupError(`--permissions must be one of ${PERMISSION_CHOICES.join(', ')} (default is as-is)`);
     if (picked.unavailable && !/already in place/.test(picked.unavailable)) throw new SetupError(`${picked.title} is not available here: ${picked.unavailable}`);
     choice = picked.id;
   } else if (existing?.permissions) choice = existing.permissions;

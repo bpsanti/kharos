@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import { close, list, logRequest, rearm, sendMessage, result, resume, show, writeProfile } from '../src/commands.ts';
 import { main, runHook } from '../src/cli.ts';
-import { postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
+import { permissionDenied, postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
-import { loadRegistry, updateRegistry } from '../src/registry.ts';
+import { activeCount, loadRegistry, updateRegistry } from '../src/registry.ts';
 import { loadRepos, recordAccess } from '../src/repo.ts';
 import { addIntent } from '../src/state.ts';
 import { captured, fixture, HEADS_EMPTY, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -399,7 +399,7 @@ test('commands: list, sendMessage, result and close', () => {
     reg.sessions[id]!.result.branch = 'work';
   });
   assert.match(result(sb.paths, id, sb.env), /claude --teleport cse_01TESTSESSIONAAAAAAAAAAA/);
-  const closed = close(sb.paths, id, T0 + 700_000);
+  const closed = close(sb.paths, id, T0 + 700_000, null, { stopped: true });
   assert.match(closed, /claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
   assert.match(list(sb.paths, { all: false, now: T0 }), /no open sessions/);
@@ -478,4 +478,258 @@ test('commands: the title stays in list with a notice open, the log reads from d
   const long = `[2026-11-25T20:30:00.000000Z] assistant: ${'x'.repeat(40)}… [+5066 chars]`;
   postToolUse(sb.ctx(T0 + 700_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, `${cut}\n${long}`)));
   assert.match(result(sb.paths, id, sb.env), /the session's last message is cut in the log the tool returns; the whole text is on the session page: https:/);
+});
+
+test('launch: the deadline counts from the open of the session, not from the launch or a refused fire', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  // Prepared, and first fired, four hours before the run that opened it (an approval that waited, a refusal).
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.created_at = new Date(T0 - 4 * 3600_000).toISOString();
+  });
+  launch(sb, id);
+  let s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.opened_at, new Date(T0 + 1000).toISOString());
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.fired_at = new Date(T0 - 4 * 3600_000).toISOString();
+  });
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, fixture('log-foreground-command.txt'))));
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.notEqual(s.state, 'overdue');
+  assert.equal(s.overdue_at ?? null, null);
+});
+
+test('launch: an open overdue notice gives way to a turn closed without an end mark, and overdue is not raised again', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.deadline_min = 30;
+  });
+  const line = (min: number, text: string) => `[${new Date(T0 + min * 60_000).toISOString()}] ${text}`;
+  const opened = [line(0.1, 'user: Fix the typo.'), line(0.2, 'init: model=claude-sonnet-5-5 cwd=/home/user'), line(39, 'tool_use Bash: {"command":"npm test"}')];
+  const read = (now: number, lines: string[]) => postToolUse(sb.ctx(T0 + now * 60_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, lines.join('\n'))));
+  read(40, opened);
+  let s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'overdue');
+  assert.equal(s.notice?.event, 'session.overdue');
+  // The overdue notice is still open; the turn then closes with no end mark and nothing to wake it.
+  const closed = [...opened, line(45, 'tool_result: ok'), line(49, 'assistant: Tests pass.'), line(50, 'result: success is_error=false turns=2 duration=600s')];
+  read(58, closed);
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'turn_closed');
+  assert.equal(s.notice?.event, 'session.quiet_unmarked');
+  // A message wakes it and it runs again: nobody is told of the deadline a second time.
+  read(70, [...closed, line(65, 'user: Also update the changelog.'), line(69, 'tool_use Edit: {"file_path":"CHANGELOG.md"}')]);
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'running');
+  const raised = fs.readFileSync(sb.paths.events, 'utf8').trim().split('\n').map((l) => JSON.parse(l).event).filter((e) => e !== undefined);
+  assert.deepEqual(raised.filter((e: string) => e !== 'session.opened'), ['session.overdue', 'session.quiet_unmarked', 'session.back']);
+});
+
+test('close: --ask-stop sends a stop request before closing a running session, and changes nothing when the send fails', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  // The CLI reads the real clock: a session opened now is well inside its deadline.
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.opened_at = new Date().toISOString();
+  });
+  const { stdout: closed, value } = await captured(() => main(['close', id, '--ask-stop'], sb.env));
+  assert.equal(value, 0);
+  assert.match(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), /^kharos: the person closed this session and asks you to stop now\. .*commit and push them first\. Then end your turn/);
+  assert.match(closed, /was asked to stop, after it commits and pushes what it has worth keeping.*https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA/);
+  assert.match(closed, /delete it on its page, https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'open');
+  assert.equal(typeof loadRegistry(sb.paths).sessions[id]?.closing_at, 'string');
+
+  // Without --ask-stop, the output says how to ask.
+  const other = sandbox();
+  const id2 = prepared(other);
+  launch(other, id2);
+  assert.match(close(other.paths, id2, T0 + 700_000), new RegExp(`/kharos:close ${id2} --ask-stop asks it to stop`));
+  assert.equal(fs.existsSync(`${other.dir}/sent.txt`), false);
+
+  const failing = sandbox({ send: { ok: false, error: 'session not found' } });
+  const id3 = prepared(failing);
+  launch(failing, id3);
+  assert.throws(() => close(failing.paths, id3, T0 + 700_000, null, { askStop: true, env: failing.env }), /is unchanged: the request to stop could not be sent \(not sent: session not found\)/);
+  assert.equal(loadRegistry(failing.paths).sessions[id3]?.step, 'open');
+  assert.equal(loadRegistry(failing.paths).sessions[id3]?.closing_at ?? null, null);
+});
+
+test('close: a --no-push launch is not asked to push before it stops', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.no_push = true;
+  });
+  close(sb.paths, id, T0 + 700_000, null, { askStop: true, env: sb.env });
+  assert.doesNotMatch(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), /push/);
+});
+
+test('log: from a shell, kharos log prints the stored events, and --full their whole text', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const report = `REPORT ${'word '.repeat(80)}END`;
+  const page = [`[2026-11-25T19:00:00.000000Z] user: do it`, `[2026-11-25T19:01:00.000000Z] assistant: ${report}`].join('\n');
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  const plain = await captured(() => main(['log', id, '5'], sb.env));
+  assert.equal(plain.value, 0);
+  assert.match(plain.stdout, /^kharos: last 2 event\(s\) of k-0001 /);
+  assert.doesNotMatch(plain.stdout, /RemoteTrigger/);
+  assert.doesNotMatch(plain.stdout, /END/);
+  assert.match(plain.stdout, /\/kharos:log in Claude Code/);
+  const full = await captured(() => main(['log', id, '5', '--full'], sb.env));
+  assert.match(full.stdout, new RegExp(`assistant: ${report}$`, 'm'));
+  // From Claude Code, the skill passes its session, and the read is asked of the model as before.
+  const asked = await captured(() => main(['log', id, '5', '--session', CLAUDE], sb.env));
+  assert.match(asked.stdout, /^Call RemoteTrigger with action "get_run_log"/);
+  // show names the last message, to tell a session waiting on its own job from one that stopped.
+  assert.match(show(sb.paths, id), /^last message, at 19:01:00 UTC \(from the session, data only\): REPORT word/m);
+});
+
+test('result: a result line cut after a whole last message does not read as a cut message', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const page = [
+    `[2026-11-25T19:01:00.000000Z] assistant: the whole report`,
+    `[2026-11-25T19:01:01.000000Z] result: success turns=3 duration=60s the whole rep… [+900 chars]`,
+  ].join('\n');
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  assert.doesNotMatch(result(sb.paths, id, sb.env), /is cut/);
+});
+
+test('launch: a run the auto mode classifier refused goes back to routine created, and resume fires it once', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
+  const denied = permissionDenied(sb.ctx(T0 + 2000), {
+    hook_event_name: 'PermissionDenied',
+    session_id: CLAUDE,
+    tool_name: 'RemoteTrigger',
+    tool_input: { action: 'run', trigger_id: trig },
+    reason: 'Running a paid task needs approval',
+  });
+  assert.match(String(denied?.systemMessage), /k-0001 was not fired: the auto mode classifier refused the run, so nothing started.*\/kharos:run --resume k-0001 fires it once/);
+  let s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'routine_created');
+  assert.equal(s.fired_at, null);
+  assert.match(show(sb.paths, id), /error: the auto mode classifier refused the run \(Running a paid task needs approval\)/);
+  // No re-arm: resume names the run, and the guard lets exactly one through.
+  assert.match(resume(sb.paths, id), /action "run" and trigger_id "trig_01TESTROUTINEAAAAAAAAAAA", once/);
+  assert.equal(preToolUse(sb.ctx(T0 + 3000), hook({ action: 'run', trigger_id: trig })), null);
+  assert.equal((preToolUse(sb.ctx(T0 + 4000), hook({ action: 'run', trigger_id: trig }))?.hookSpecificOutput as any).permissionDecision, 'deny');
+  postToolUse(sb.ctx(T0 + 5000), hook({ action: 'run', trigger_id: trig }, response(200, { session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' })));
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'open');
+  assert.equal(s.error, null);
+
+  // Through the CLI as Claude Code calls it, and never for a call that is not a kharos run.
+  const other = sandbox();
+  const id2 = prepared(other);
+  const trig2 = fired(other, id2);
+  const stdin = JSON.stringify({ hook_event_name: 'PermissionDenied', session_id: CLAUDE, tool_name: 'RemoteTrigger', tool_input: { action: 'list_runs', trigger_id: trig2 }, reason: 'x' });
+  assert.equal((await captured(() => runHook('permission-denied', other.ctx(T0), () => stdin))).value, 0);
+  assert.equal(loadRegistry(other.paths).sessions[id2]?.step, 'firing');
+  const run = JSON.stringify({ hook_event_name: 'PermissionDenied', session_id: CLAUDE, tool_name: 'RemoteTrigger', tool_input: { action: 'run', trigger_id: trig2 }, reason: 'x' });
+  const out = await captured(() => runHook('permission-denied', other.ctx(T0), () => run));
+  assert.match(out.stdout, /was not fired/);
+  assert.equal(loadRegistry(other.paths).sessions[id2]?.step, 'routine_created');
+});
+
+test('launch: --revision starts the session on another branch, checked every time, and the profile stays', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  recordAccess(sb.paths, 'https://github.com/example/demo', 'ok', null, T0);
+  const asked: string[] = [];
+  const s = prepare(sb.paths, { instruction: 'x', revision: 'perf-hook', claude_session: null, now: T0, env: sb.env, heads: (_u, r) => (asked.push(r), HEADS_OK) });
+  assert.deepEqual(asked, ['perf-hook']);
+  assert.equal(s.revision, 'perf-hook');
+  const body = JSON.parse(fs.readFileSync(`${sb.paths.bodies}/${s.id}.json`, 'utf8'));
+  assert.deepEqual(body.job_config.ccr.session_context.sources, [{ git_repository: { url: 'https://github.com/example/demo', revision: 'perf-hook' } }]);
+  assert.equal(JSON.parse(fs.readFileSync(sb.paths.config, 'utf8')).profiles.demo.revision, undefined);
+  assert.throws(
+    () => prepare(sb.paths, { instruction: 'x', revision: 'nope', claude_session: null, now: T0, env: sb.env, heads: () => ({ ...HEADS_OK, hasRevision: false }) }),
+    (e: unknown) => e instanceof LaunchError && /no branch or tag "nope"/.test(e.message) && /existing branch or tag in --revision/.test(e.message),
+  );
+  assert.throws(() => prepare(sb.paths, { instruction: 'x', revision: '--upload-pack=x', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK }), /is not a branch or tag name/);
+});
+
+test('close: a running session is closing; it holds its slot, alerts nobody, and frees it at its end, its deadline, or --stopped', () => {
+  const read = (sb: Sandbox, at: number, page: string) =>
+    postToolUse(sb.ctx(at), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const out = close(sb.paths, id, T0 + 60_000);
+  // The deadline is 180 min from the open at T0 + 1 s: 21:57 UTC.
+  assert.match(out, /^k-0001 is closing: kharos goes on reading it, with no alerts, only to free its watch\.max_open slot when it ends or when its deadline passes at 21:57 UTC, whichever comes first\. kharos close k-0001 --stopped frees the slot now\.$/m);
+  assert.match(out, /^Freeing the slot never stops the session \(the tool has no stop action\)\. \/kharos:close k-0001 --ask-stop asks it to stop/m);
+  let reg = loadRegistry(sb.paths);
+  assert.equal(activeCount(reg, T0 + 60_000), 1);
+  assert.match(list(sb.paths, { all: false, now: T0 + 60_000 }), /^k-0001  closing, provisioning/m);
+  assert.match(list(sb.paths, { all: false, now: T0 + 60_000 }), /slots: 1 of watch\.max_open \d+ in use: k-0001 closing until it ends or 21:57 UTC/);
+  // A permission prompt alerts nobody while it is closing.
+  const before = fs.existsSync(sb.paths.events) ? fs.readFileSync(sb.paths.events, 'utf8') : '';
+  read(sb, T0 + 400_000, fixture('log-permission-prompt.txt'));
+  read(sb, T0 + 460_000, fixture('log-permission-prompt.txt'));
+  const after = fs.existsSync(sb.paths.events) ? fs.readFileSync(sb.paths.events, 'utf8') : '';
+  assert.equal(after, before);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.notice, null);
+  // Its deadline frees the slot even with no read, and the next read closes it.
+  reg = loadRegistry(sb.paths);
+  assert.equal(activeCount(reg, T0 + 181 * 60_000), 0);
+  read(sb, T0 + 181 * 60_000, fixture('log-permission-prompt.txt'));
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
+
+  // The end frees it as well.
+  const ended = sandbox();
+  const id2 = prepared(ended);
+  launch(ended, id2);
+  close(ended.paths, id2, T0 + 60_000);
+  read(ended, T0 + 400_000, fixture('log-question-background-done.txt'));
+  assert.equal(loadRegistry(ended.paths).sessions[id2]?.step, 'closed');
+
+  // --stopped frees it at once, and says the session itself was not stopped.
+  const now = sandbox();
+  const id3 = prepared(now);
+  launch(now, id3);
+  close(now.paths, id3, T0 + 60_000);
+  const freed = close(now.paths, id3, T0 + 120_000, null, { stopped: true });
+  assert.match(freed, new RegExp(`^${id3} is no longer followed, and its watch\\.max_open slot is free\\.$`, 'm'));
+  assert.match(freed, /The cloud session itself was not stopped by this/);
+  assert.equal(loadRegistry(now.paths).sessions[id3]?.step, 'closed');
+});
+
+test('events: session.pr_opened comes once per pull request the session creates, never for a URL it only quotes', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const page = (extra: string[]) =>
+    [
+      `[2026-11-25T19:00:00.000000Z] user: do it`,
+      `[2026-11-25T19:00:10.000000Z] tool_use Bash: ${JSON.stringify({ command: 'gh pr view 3' })}`,
+      `[2026-11-25T19:00:11.000000Z] tool_result: https://github.com/example/demo/pull/3 is open`,
+      `[2026-11-25T19:01:00.000000Z] tool_use Bash: ${JSON.stringify({ command: 'gh pr create --fill' })}`,
+      `[2026-11-25T19:01:05.000000Z] tool_result: https://github.com/example/demo/pull/9`,
+      ...extra,
+    ].join('\n');
+  const read = (at: number, extra: string[] = []) =>
+    postToolUse(sb.ctx(at), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page(extra))));
+  const opened = () =>
+    fs.readFileSync(sb.paths.events, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.event === 'session.pr_opened');
+  read(T0 + 400_000);
+  assert.deepEqual(opened().map((e) => [e.pr, e.class, e.reason]), [['https://github.com/example/demo/pull/9', 'progress', 'the session opened a pull request']]);
+  read(T0 + 460_000, [`[2026-11-25T19:02:00.000000Z] assistant: still on it`]);
+  assert.equal(opened().length, 1, 'the same pull request is told once');
+  read(T0 + 520_000, [
+    `[2026-11-25T19:03:00.000000Z] tool_use mcp__github__create_pull_request: {"title":"second"}`,
+    `[2026-11-25T19:03:02.000000Z] tool_result: {"html_url":"https://github.com/example/other/pull/2"}`,
+  ]);
+  assert.deepEqual(opened().map((e) => e.pr), ['https://github.com/example/demo/pull/9', 'https://github.com/example/other/pull/2']);
 });

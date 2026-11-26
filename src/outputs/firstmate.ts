@@ -54,6 +54,8 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
   switch (kind) {
     case 'opened':
       return `working ${at}: ${text(`kharos ${ev.session} cloud session opened (${ev.title})`)}${where}`;
+    case 'pr_opened':
+      return `note ${at}: ${text(`kharos ${ev.session} opened a pull request (${ev.title})`)}${pr}`;
     case 'queued':
       return `note ${at}: ${text(`kharos ${ev.session} queued for a free slot (${ev.title}): ${ev.reason}`)}`;
     case 'back':

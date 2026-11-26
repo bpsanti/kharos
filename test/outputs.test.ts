@@ -179,6 +179,7 @@ test('firstmate: the verb map of the shared mode never writes done or failed', (
   assert.match(line({ event: 'session.back', state: 'running' }) ?? '', /^resolved \[key=kharos-k-0001\] \[at=\d+\]: kharos k-0001 is back to running$/);
   assert.match(line({ event: 'session.finished', pr: 'https://github.com/example/demo/pull/4' }) ?? '', /^note \[at=\d+\]: kharos k-0001 finished PR https:\/\/github\.com\/example\/demo\/pull\/4$/);
   assert.match(line({ event: 'session.finished', open_notice: 'session.silent' }) ?? '', /^resolved \[key=kharos-k-0001\]/);
+  assert.equal(line({ event: 'session.pr_opened', class: 'progress', pr: 'https://github.com/example/demo/pull/7' }), 'note [at=1795632250]: kharos k-0001 opened a pull request (fix the typo) PR https://github.com/example/demo/pull/7');
   for (const e of ['session.failed', 'session.ended_unmarked', 'session.silent', 'session.looping', 'session.overdue', 'session.usage_limit', 'session.invisible', 'session.quiet_unmarked'] as const) {
     assert.match(line({ event: e }) ?? '', /^blocked \[key=kharos-k-0001\]/, e);
   }

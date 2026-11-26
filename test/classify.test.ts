@@ -19,7 +19,7 @@ function log(rows: [number, string, string | null, string][]): LogEvent[] {
 }
 
 function at(events: LogEvent[], nowSec: number, over: Partial<Parameters<typeof classify>[0]> = {}): Verdict {
-  return classify({ events, seenStart: true, createdAt: BASE, deadlineMin: 180, now: BASE + nowSec * 1000, watch: DEFAULT_WATCH, ...over });
+  return classify({ events, seenStart: true, startedAt: BASE, deadlineMin: 180, now: BASE + nowSec * 1000, watch: DEFAULT_WATCH, ...over });
 }
 
 const START: [number, string, string | null, string][] = [
@@ -34,7 +34,7 @@ function replay(events: LogEvent[], stepSec: number, extraSec: number, over: Par
   const t1 = events[events.length - 1]!.t + extraSec * 1000;
   const seen: string[] = [];
   for (let now = t0; now <= t1; now += stepSec * 1000) {
-    const v = classify({ events: events.filter((e) => e.t <= now), seenStart: true, createdAt: t0, deadlineMin: 180, now, watch: DEFAULT_WATCH, ...over });
+    const v = classify({ events: events.filter((e) => e.t <= now), seenStart: true, startedAt: t0, deadlineMin: 180, now, watch: DEFAULT_WATCH, ...over });
     const label = v.notice ? `${v.state}/${v.notice}` : v.state;
     if (seen[seen.length - 1] !== label) seen.push(label);
   }
@@ -49,13 +49,13 @@ test('classify: a question, an answer, a background command and the end, read ev
 test('classify: the end mark inside the prompt is not an end', () => {
   const page = parseLog(fixture('log-question-background-done.txt'));
   const firstTurn = page.events.filter((e) => e.t <= Date.parse('2026-11-25T18:58:00Z'));
-  assert.equal(at(firstTurn, 0, { now: Date.parse('2026-11-25T18:58:00Z'), createdAt: firstTurn[0]!.t }).state, 'running');
+  assert.equal(at(firstTurn, 0, { now: Date.parse('2026-11-25T18:58:00Z'), startedAt: firstTurn[0]!.t }).state, 'running');
 });
 
 test('classify: a short session ends finished', () => {
   const page = parseLog(fixture('log-write-done.txt'));
   const now = page.events[page.events.length - 1]!.t + 5000;
-  assert.equal(classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 60, now, watch: DEFAULT_WATCH }).state, 'finished');
+  assert.equal(classify({ events: page.events, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 60, now, watch: DEFAULT_WATCH }).state, 'finished');
 });
 
 test('classify: a ten-minute foreground command is quiet, not silent', () => {
@@ -65,12 +65,35 @@ test('classify: a ten-minute foreground command is quiet, not silent', () => {
   assert.equal(at(events.slice(0, 4), 130 + 46 * 60).notice, 'silent_severe');
 });
 
-test('classify: a closed turn is not an end; it warns only after quiet_end_min', () => {
-  const events = log([...START, [200, 'assistant', null, 'waiting for CI'], [201, 'result', null, 'success is_error=false turns=9 — waiting for CI']]);
-  assert.deepEqual(at(events, 201 + 627), { state: 'turn_closed', notice: null, reason: 'turn closed' });
-  assert.equal(at(events, 201 + 41 * 60).notice, 'quiet_unmarked');
+test('classify: a closed turn is not an end; with no background task it warns after unmarked_end_min', () => {
+  const events = log([...START, [200, 'assistant', null, 'all done'], [201, 'result', null, 'success is_error=false turns=9 — all done']]);
+  assert.deepEqual(at(events, 201 + 4 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed' });
+  assert.deepEqual(at(events, 201 + 6 * 60), { state: 'turn_closed', notice: 'quiet_unmarked', reason: 'turn closed without an end mark, quiet for 6 min; it started no background task' });
   const woke = log([...START, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success is_error=false'], [828, 'init', null, 'model=x']]);
   assert.equal(at(woke, 830).state, 'running');
+});
+
+test('classify: a turn that closed on a background task it started warns only after quiet_end_min', () => {
+  for (const started of [
+    [150, 'tool_use', 'Bash', '{"command":"cargo build","run_in_background":true}'],
+    [150, 'tool_use', 'Monitor', '{"command":"tail -f build.log"}'],
+    [150, 'tool_result', null, 'Async agent launched successfully. agentId: a1b2 (the agent works in the background; you will be notified when it completes)'],
+    [150, 'tool_result', null, 'Command running in background with ID: b01. Output is being written to: /tmp/b01.output'],
+  ] as [number, string, string | null, string][]) {
+    const events = log([...START, started, [200, 'assistant', null, 'The server is still compiling'], [201, 'result', null, 'success is_error=false']]);
+    assert.deepEqual(at(events, 201 + 10 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed; a background task it started may wake it' }, started[3]);
+    assert.equal(at(events, 201 + 41 * 60).notice, 'quiet_unmarked');
+    assert.match(at(events, 201 + 41 * 60).reason, /a background task it started may still wake it$/);
+  }
+  // A foreground agent returns its report inside the turn, so nothing is left to wake it.
+  const foreground = log([...START, [150, 'tool_use', 'Agent', '{"description":"Search the code","prompt":"..."}'], [180, 'tool_result', null, 'The parser lives in src/logparse.ts.'], [200, 'assistant', null, 'Found it'], [201, 'result', null, 'success is_error=false']]);
+  assert.equal(at(foreground, 201 + 6 * 60).notice, 'quiet_unmarked');
+  // A result that only mentions background work started none.
+  const mention = log([...START, [150, 'tool_use', 'Agent', '{"description":"Check the server"}'], [180, 'tool_result', null, 'The dev server is running in the background on port 3000, launched in the background by the setup script.'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success is_error=false']]);
+  assert.equal(at(mention, 201 + 6 * 60).notice, 'quiet_unmarked');
+  // A task of an earlier turn does not count: a person's message since then started a new turn.
+  const earlier = log([...START, [150, 'tool_use', 'Monitor', '{}'], [160, 'result', null, 'success'], [170, 'user', null, 'go on'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success']]);
+  assert.equal(at(earlier, 201 + 6 * 60).notice, 'quiet_unmarked');
 });
 
 test('classify: repeated calls that succeed, or a hook that blocks one, are not a loop', () => {
@@ -197,14 +220,14 @@ test('classify: a real permission prompt, with a parallel call answered, waits f
   const prompt = page.events.find((e) => e.kind === 'permission prompt');
   assert.equal(prompt?.tool, 'Bash');
   const now = page.events[page.events.length - 1]!.t + 60_000;
-  const v = classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
+  const v = classify({ events: page.events, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
   assert.equal(v.state, 'waiting_permission');
   // A message from a person queues behind the prompt; it does not answer it.
   const queued = log([[0, 'user', null, 'Skip that step.']]).map((e) => ({ ...e, t: now, ts: new Date(now).toISOString() }));
-  assert.equal(classify({ events: [...page.events, ...queued], seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
+  assert.equal(classify({ events: [...page.events, ...queued], seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
   // The model speaking again means the prompt was answered.
   const moved = [...page.events, { ...queued[0]!, kind: 'assistant', text: 'Skipped.' }];
-  assert.notEqual(classify({ events: moved, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
+  assert.notEqual(classify({ events: moved, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
 });
 
 test('log: kinds of several words, and MCP tool names', () => {
@@ -251,7 +274,7 @@ test('classify: a question in a turn that events woke after the end mark is wait
 
 test('classify: a question stands when a Stop hook of the repository answers right after it', () => {
   const page = parseLog(fixture('log-stop-hook-question.txt'));
-  const v = at(page.events, 0, { now: page.events[page.events.length - 1]!.t + 30_000, createdAt: page.events[0]!.t });
+  const v = at(page.events, 0, { now: page.events[page.events.length - 1]!.t + 30_000, startedAt: page.events[0]!.t });
   assert.equal(v.state, 'waiting_answer');
   assert.match(latestMarks(page.events).question ?? '', /pre-push check refused it/);
 });
@@ -259,11 +282,11 @@ test('classify: a question stands when a Stop hook of the repository answers rig
 test('classify: an end mark stands when a Stop hook makes the session push before its turn closes', () => {
   const page = parseLog(fixture('log-stop-hook-done.txt'));
   const events = page.events;
-  assert.equal(at(events, 0, { now: events[events.length - 1]!.t + 30_000, createdAt: events[0]!.t }).state, 'finished');
+  assert.equal(at(events, 0, { now: events[events.length - 1]!.t + 30_000, startedAt: events[0]!.t }).state, 'finished');
   // While the push still runs, the turn is open: not an end yet.
   const pushing = events.slice(0, 7);
   assert.equal(pushing[pushing.length - 1]!.kind, 'tool_use');
-  assert.equal(at(pushing, 0, { now: events[6]!.t + 5000, createdAt: events[0]!.t }).state, 'running');
+  assert.equal(at(pushing, 0, { now: events[6]!.t + 5000, startedAt: events[0]!.t }).state, 'running');
 });
 
 test('sinceLastUser: hook feedback and task notifications are not a message from a person', () => {
@@ -281,4 +304,26 @@ test('sinceLastUser: hook feedback and task notifications are not a message from
     [5, 'user', null, 'The second one. Stop hook feedback: is a phrase too'],
   ]);
   assert.equal(latestMarks(person).question, null);
+});
+
+test('classify: once the deadline notice was raised and closed, a session reopened past it is read as usual', () => {
+  const events = log([...START, [130, 'tool_use', 'Bash', '{}']]);
+  const s = session();
+  assert.deepEqual(transition(s, at(events, 181 * 60), BASE + 181 * 60_000, 60, false).map((e) => e.event), ['session.overdue']);
+  assert.equal(s.overdue_at, new Date(BASE + 181 * 60_000).toISOString());
+  // The overdue notice is still open: it stays while nothing else is to be said, so it is repeated every
+  // renotify_min, and a later notice (here the open turn gone silent) replaces it.
+  const busy = log([...START, [181 * 60 - 30, 'tool_use', 'Bash', '{}']]);
+  assert.equal(at(busy, 181 * 60, { overdueRaised: true, overdueOpen: true }).state, 'overdue');
+  assert.equal(at(events, 181 * 60, { overdueRaised: true, overdueOpen: true }).notice, 'silent_severe');
+  // It was raised, then closed (the session finished and a message woke it): the later checks apply.
+  assert.deepEqual(at(events, 181 * 60, { overdueRaised: true }), { state: 'silent', notice: 'silent_severe', reason: 'no new event for 179 min in an open turn' });
+  const closed = log([...START, [200, 'assistant', null, 'done'], [201, 'result', null, 'success is_error=false']]);
+  assert.equal(at(closed, 201 + 6 * 60 + 181 * 60, { overdueRaised: true }).notice, 'quiet_unmarked');
+});
+
+test('classify: the deadline counts from the start it is given', () => {
+  const events = log([...START, [130, 'tool_use', 'Bash', '{}']]);
+  assert.equal(at(events, 181 * 60).state, 'overdue');
+  assert.notEqual(at(events, 181 * 60, { startedAt: BASE + 60 * 60_000 }).state, 'overdue');
 });

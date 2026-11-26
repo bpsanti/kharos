@@ -27,7 +27,9 @@ import {
   type HookPlan,
   type HookState,
 } from './permission-hook.ts';
-import type { Paths } from './paths.ts';
+import { sharedPaths, type Paths } from './paths.ts';
+import { unmigratedNote } from './accounts.ts';
+import { readAuthStatus } from './account.ts';
 import { buildPreflight, formatPreflight, localSnapshot, readHistory, selectFiles, snapshotAsk, type FormatOptions } from './preflight.ts';
 import { recordRepoRules } from './repo.ts';
 import {
@@ -404,6 +406,8 @@ export interface PreflightRequest {
   dir: string | null;
   /** With dir null: the launch profile (the default one when absent). */
   profile?: string;
+  /** With dir null: the branch or tag the launch starts on instead of the profile's (`--revision`). */
+  revision?: string;
   /** The launch instruction, if known: a program it names comes first. */
   instruction: string;
   forge?: Forge;
@@ -446,10 +450,12 @@ export function preflight(paths: Paths, req: PreflightRequest, env: NodeJS.Proce
     try {
       picked = pickProfile(config, req.profile);
     } catch (err) {
-      if (err instanceof ConfigError) throw new CommandError(err.message);
-      throw err;
+      if (!(err instanceof ConfigError)) throw err;
+      // An account whose profiles still sit in the shared files: say where, not "known: none".
+      const note = loadConfig(paths).exists ? null : unmigratedNote(paths, sharedPaths(env), readAuthStatus(env)?.account ?? null);
+      throw new CommandError(note ?? err.message);
     }
-    const { profile } = picked;
+    const profile = req.revision === undefined ? picked.profile : { ...picked.profile, revision: req.revision };
     const slug = repoSlug(profile.repo);
     repo = profile.repo;
     const read = (req.forge ?? ghForge(realGh(env))).snapshot(profile.repo, profile.revision, selectFiles);

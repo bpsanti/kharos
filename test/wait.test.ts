@@ -272,7 +272,7 @@ test('wait: a session closed while followed ends the wait', async () => {
     now: () => t,
     sleep: async (ms) => {
       t += ms;
-      if (t > T0 + 2 * MIN) close(sb.paths, 'k-0001', t);
+      if (t > T0 + 2 * MIN) close(sb.paths, 'k-0001', t, null, { stopped: true });
     },
     read: reader(sb, () => pageAt(fixture('log-foreground-command.txt'), T0 + MIN)),
   });

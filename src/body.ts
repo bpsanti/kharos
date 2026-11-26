@@ -21,6 +21,10 @@ export function parkedRunAt(now: number): string {
   return d.toISOString().replace('.000Z', 'Z');
 }
 
+/** The service cuts each message of the log the monitor reads: a long report goes where it stays whole. */
+export const LENGTH_LINE =
+  '- The monitor reads a log that cuts each message to about 2000 characters: put a long report in the pull request description or in a file on your branch, and keep each message, the last one included, shorter than that.';
+
 /** The footer line a `--no-push` launch leaves out. */
 export const PUSH_LINE = '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.';
 
@@ -34,6 +38,7 @@ export function footer(extraLines: readonly string[] = [], push = true): string 
     `${DONE_MARK} {"status":"ok|failed","pr":"<url or null>","branch":"<name or null>","summary":"<up to 200 characters>"}`,
     `- If you need an answer to go on, send one last message that contains only this line, then stop and wait for the reply:`,
     `${QUESTION_MARK} {"question":"<up to 300 characters>"}`,
+    LENGTH_LINE,
     ...(push ? [PUSH_LINE] : []),
     ...extraLines,
   ].join('\n');
@@ -148,7 +153,7 @@ function nullableString(v: unknown, max: number): string | null {
 }
 
 /** A branch name safe to show inside a git command: a plain ref name, or null. */
-function gitBranch(b: string | null): string | null {
+export function gitBranch(b: string | null): string | null {
   if (!b || !/^[A-Za-z0-9._/-]{1,200}$/.test(b)) return null;
   if (b.startsWith('-') || b.includes('..') || b.endsWith('.lock') || b.endsWith('/')) return null;
   return b;

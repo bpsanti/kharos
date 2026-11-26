@@ -4,11 +4,11 @@ import { recordHookDecisions } from './approvals.ts';
 import { readDoneMark, readQuestionMark } from './body.ts';
 import { classify, CONFIRM_TWICE, type Verdict } from './classify.ts';
 import { ConfigError, DEFAULT_WATCH, loadConfig, type WatchConfig } from './config.ts';
-import { enqueue, transition, type KharosEvent } from './events.ts';
+import { buildEvent, enqueue, transition, type KharosEvent } from './events.ts';
 import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
-import type { Session } from './registry.ts';
+import { releaseClosing, startedAt, type Session } from './registry.ts';
 import { readManagedPolicy } from './managed-policy.ts';
 import type { AskRules } from './permission-request.ts';
 
@@ -87,10 +87,38 @@ function hookMayAnswer(s: Session, verdict: Verdict): boolean {
 
 /** Applies a verdict, queues its events for delivery, and returns them. */
 export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: WatchConfig = watchConfig(ctx.paths)): KharosEvent[] {
+  // A session the person closed is read only to free its slot: its state moves on, and nobody is alerted.
+  if (s.closing_at) {
+    const { permission: _prompt, ...quiet } = verdict;
+    transition(s, { ...quiet, notice: null }, ctx.now, watch.renotify_min, false);
+    s.notice = null;
+    releaseClosing(s, ctx.now);
+    return [];
+  }
   const confirm = CONFIRM_TWICE.has(verdict.state) || hookMayAnswer(s, verdict);
   const events = transition(s, verdict, ctx.now, watch.renotify_min, confirm);
   enqueue(ctx.paths, events);
   return events;
+}
+
+const PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/;
+
+/**
+ * The pull requests that new events show the session open: the URL in the result of a call that creates
+ * one (`gh pr create`, or a GitHub tool that creates a pull request), never a URL the session only quotes.
+ */
+export function openedPullRequests(added: readonly LogEvent[], all: readonly LogEvent[]): string[] {
+  const out: string[] = [];
+  for (const e of added) {
+    if (e.kind !== 'tool_result') continue;
+    const at = all.findIndex((x) => x.key === e.key);
+    const call = all.slice(0, at < 0 ? 0 : at).findLast((x) => x.kind === 'tool_use');
+    if (!call) continue;
+    const creates = (call.tool === 'Bash' && /\bgh pr create\b/.test(call.text)) || (call.tool !== null && /create_pull_request/i.test(call.tool));
+    const url = creates ? PR_URL_RE.exec(e.text)?.[0] : undefined;
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out;
 }
 
 /** A read that failed (HTTP error, tool failure, empty answer): two in a row make the session invisible. */
@@ -128,10 +156,15 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
     s.result = { ...s.result, status: null, pr: null, branch: null, summary: null, sheet: null };
   }
   s.result.question = marks.question;
-  const decided = recordHookDecisions(ctx.paths, s, merged.added);
+  for (const pr of openedPullRequests(merged.added, events)) {
+    if (s.prs_opened?.includes(pr)) continue;
+    s.prs_opened = [...(s.prs_opened ?? []), pr];
+    if (!s.closing_at) enqueue(ctx.paths, [{ ...buildEvent(s, 'session.pr_opened', s.state, 'the session opened a pull request', ctx.now), pr }]);
+  }
+  const decided = recordHookDecisions(ctx.paths, s, merged.added, events);
 
   const watch = watchConfig(ctx.paths);
-  const verdict = classify({ events, seenStart: s.seen_start === true, createdAt: Date.parse(s.created_at), deadlineMin: s.deadline_min, now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
+  const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, overdueRaised: typeof s.overdue_at === 'string', overdueOpen: s.notice?.event === 'session.overdue', now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
   // An older page says nothing new about an open prompt, so it is not the next read that confirms one.
   const emitted = fromCursor && hookMayAnswer(s, verdict) ? [] : settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';

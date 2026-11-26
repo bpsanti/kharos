@@ -13,7 +13,7 @@ import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHoo
 import { activeCount, loadRegistry } from './registry.ts';
 import { followerProblems, queueLines } from './commands.ts';
 import { LEASE_STALE_MS } from './lease.ts';
-import { loadMarker, planMigration } from './accounts.ts';
+import { describePlan, loadMarker, planMigration } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
@@ -221,7 +221,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   if (reg) {
     const hourAgo = opts.now - 3600_000;
     const fires = Object.values(reg.sessions).filter((s) => s.fired_at && Date.parse(s.fired_at) > hourAgo).length;
-    add('info', 'limits', `${activeCount(reg)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
+    add('info', 'limits', `${activeCount(reg, opts.now)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
   }
   if (reg) {
     const problems = followerProblems(paths, opts.now);
@@ -395,12 +395,7 @@ function pendingMigration(paths: Paths, shared: Paths | null, account: string | 
   if (!shared || !account || loadMarker(paths)) return;
   const plan = planMigration(shared, account);
   if (!plan) return;
-  const what = [
-    plan.mine.length ? `${plan.mine.length} profile(s) of this account (${plan.mine.join(', ')})` : '',
-    plan.unknown.length ? `${plan.unknown.length} profile(s) whose account kharos cannot tell (${plan.unknown.join(', ')})` : '',
-    plan.sessions.length ? `${plan.sessions.length} session(s) it launched` : '',
-  ].filter(Boolean);
-  add('warn', 'account files', `the kharos files every account shared hold ${what.join(', ')}`, ["Run /kharos:setup once on this account: it moves them to this account's own files, and asks about the ones it cannot tell."]);
+  add('warn', 'account files', `the kharos files every account shared hold ${describePlan(plan)}`, ["Run /kharos:setup once on this account: it moves them to this account's own files, and asks about the ones it cannot tell."]);
 }
 
 /**

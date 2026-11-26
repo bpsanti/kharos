@@ -39,8 +39,13 @@ export interface ClassifyInput {
   events: readonly LogEvent[];
   /** The stored events reach the start of the session (some page had no older events). */
   seenStart: boolean;
-  createdAt: number;
+  /** When the session started: the deadline and the slow-provisioning notice count from it. */
+  startedAt: number;
   deadlineMin: number;
+  /** The deadline notice was raised already: the deadline passes once, so later checks apply. */
+  overdueRaised?: boolean;
+  /** That notice is still open: it stays (and is repeated) while no later check has a notice to raise. */
+  overdueOpen?: boolean;
   now: number;
   watch: WatchConfig;
   /** The ask rules an open permission prompt is compared with, to tell why it asks; read only when one is open. */
@@ -122,11 +127,24 @@ export function sameErrorRun(events: readonly LogEvent[]): number {
   return run;
 }
 
+/**
+ * Whether the turn started work that goes on after it closes and can wake it: a command run or moved to
+ * the background, a Monitor, or an agent whose result says it was launched in the background.
+ * A foreground agent returns its report inside the turn, so it wakes nothing.
+ */
+export function startedBackground(turn: readonly LogEvent[]): boolean {
+  return turn.some(
+    (e) =>
+      (e.kind === 'tool_use' && (e.tool === 'Monitor' || /"run_in_background":\s*true/.test(e.text))) ||
+      (e.kind === 'tool_result' && /^(?:Command (?:is )?running in (?:the )?background|Command (?:was )?moved to the background|Async agent launched)/i.test(e.text)),
+  );
+}
+
 export function classify(input: ClassifyInput): Verdict {
   const { events, now, watch } = input;
   const last = events[events.length - 1];
   if (!last) {
-    if (now - input.createdAt > watch.provision_min * MIN) return { state: 'provisioning', notice: 'provisioning_slow', reason: `no event in the log ${watch.provision_min} min after the launch` };
+    if (now - input.startedAt > watch.provision_min * MIN) return { state: 'provisioning', notice: 'provisioning_slow', reason: `no event in the log ${watch.provision_min} min after the launch` };
     return { state: 'provisioning', notice: null, reason: 'waiting for the first events' };
   }
   const idleMin = (now - last.t) / MIN;
@@ -182,10 +200,17 @@ export function classify(input: ClassifyInput): Verdict {
   // a turn that ended with an error: a warning, since a message can wake the session again
   if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
-  // past the deadline
-  const ageMin = (now - input.createdAt) / MIN;
-  if (ageMin > input.deadlineMin) return { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
+  // past the deadline: raised once; while that notice is open, a later notice replaces it
+  const ageMin = (now - input.startedAt) / MIN;
+  const overdue: Verdict = { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
+  if (!input.overdueRaised && ageMin > input.deadlineMin) return overdue;
+  const later = afterDeadline(input, turn, last, idleMin);
+  return input.overdueOpen && later.notice === null ? overdue : later;
+}
 
+/** The checks below the deadline. */
+function afterDeadline(input: ClassifyInput, turn: readonly LogEvent[], last: LogEvent, idleMin: number): Verdict {
+  const { events, now, watch } = input;
   // the same failure over and over
   const run = sameErrorRun(turn);
   if (run >= watch.loop_failures) return { state: 'looping', notice: 'looping', reason: `${run} calls in a row failed with the same tool and the same error` };
@@ -197,10 +222,14 @@ export function classify(input: ClassifyInput): Verdict {
     return { state: 'provisioning', notice: null, reason: 'provisioning' };
   }
 
-  // a turn that closed without an end mark: not an end, since a background command can wake it
+  // a turn that closed without an end mark: not an end, since a background task it started can wake it;
+  // with no such task, nothing will, so it is said soon
   if (last.kind === 'result') {
-    if (idleMin > watch.quiet_end_min) return { state: 'turn_closed', notice: 'quiet_unmarked', reason: `turn closed without an end mark, quiet for ${Math.round(idleMin)} min` };
-    return { state: 'turn_closed', notice: null, reason: 'turn closed' };
+    const waking = startedBackground(turn);
+    const limit = waking ? watch.quiet_end_min : watch.unmarked_end_min;
+    const why = waking ? 'a background task it started may still wake it' : 'it started no background task';
+    if (idleMin > limit) return { state: 'turn_closed', notice: 'quiet_unmarked', reason: `turn closed without an end mark, quiet for ${Math.round(idleMin)} min; ${why}` };
+    return { state: 'turn_closed', notice: null, reason: waking ? 'turn closed; a background task it started may wake it' : 'turn closed' };
   }
 
   // an open turn with no new event

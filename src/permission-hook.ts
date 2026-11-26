@@ -155,10 +155,14 @@ export function describeHook(st: HookState): string[] {
     out.push(...listRules(st.rules).map((l) => `  ${l}`));
     const broad = broadRules(st.rules);
     if (broad.length) out.push(`  broad rules (${broad.length}) ${BROAD_RISK}: ${broad.join(', ')}`);
-    out.push(st.rules.unblock ? `  any other prompt in a cloud session: allowed, by the unblock preset (${UNBLOCK_RISK})` : '  any other prompt in a cloud session: denied, with a message that names the allowed forms');
+    out.push(st.rules.unblock ? `  any other prompt in a cloud session: allowed, by the unblock preset (${UNBLOCK_RISK})` : `  ${DENIES_THE_REST}`);
   }
   return out;
 }
+
+/** What the hook does with a prompt no rule allows, said where a person decides on it. */
+export const DENIES_THE_REST =
+  "any other prompt in a cloud session: denied, with a message that names the allowed forms; none waits for a person, and that includes Claude Code's own checks that no rule can allow (such as quoted text it cannot check) and ask rules that are not mirrored";
 
 export const UNBLOCK_RISK = "every permission prompt in this repository's cloud sessions is allowed, of any tool, with no person asked";
 
@@ -315,7 +319,7 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
     next = { settings: withHookEntry(settings), script: shippedScript(), rules: renderRules(rules) };
     lines.push(`${hasHookEntry(settings) ? 'updates' : 'installs'} the kharos permission hook; it decides only in cloud sessions (CLAUDE_CODE_REMOTE=true), and says nothing on a person's machine`);
     lines.push(listRules(rules)[0] as string, ...prefixLine(rules));
-    lines.push(unblocked ? 'any other prompt in a cloud session: allowed, by the unblock preset' : 'any other prompt in a cloud session: denied, with a message that names the allowed forms');
+    lines.push(unblocked ? 'any other prompt in a cloud session: allowed, by the unblock preset' : DENIES_THE_REST);
     if (unblock === 'on' && !base.unblock) {
       lines.push(`WARNING: this change turns on the unblock preset: ${UNBLOCK_RISK}. It opens:`, ...unblockOpens(policy).map((l) => `  ${l}`));
     } else if (unblock === 'off' && base.unblock) lines.push(
@@ -326,10 +330,10 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
     else if (broad.length) lines.push(`broad rules (${broad.length}), unchanged: ${broad.join(', ')}`);
     if (mirror) {
       lines.push(
-        `WARNING: check with your organization's administrator before approving this. The organization's managed settings ask a person before these commands; in cloud sessions on this repository the hook will allow them, as single simple commands, with no person asked.`,
+        `WARNING: check with your organization's administrator before approving this. The organization's managed settings ask a person before these commands; in cloud sessions on this repository the hook will allow them, as single simple commands, with no person asked, and deny every other prompt, those of the ask rules it does not mirror included.`,
         `organization ask rules this turns into a cloud-only allow (${mirror.converted.length}): ${mirror.converted.length ? mirror.converted.map((r) => mark(r, mirror?.broad.includes(r) === true)).join(', ') : 'none'}`,
       );
-      for (const k of mirror.kept) lines.push(`  stays a prompt: ${k.rule} (${k.why})${k.broad ? ', unless mirrored with --broad' : ''}`);
+      for (const k of mirror.kept) lines.push(`  not mirrored, so the hook denies it in cloud sessions instead of asking: ${k.rule} (${k.why})${k.broad ? '; --broad mirrors it' : ''}`);
       lines.push(`organization deny rules are never touched (${policy.status === 'found' ? policy.deny.length : 0} stay as they are)`);
     } else if (rules.mirror.length) lines.push(`mirrored organization ask rules (${rules.mirror.length}), unchanged: ${rules.mirror.map((m) => mark(m, broadRuleWhy(m) !== null)).join(', ')}`);
   }

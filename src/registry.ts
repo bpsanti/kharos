@@ -71,6 +71,12 @@ export interface Session {
   url: string | null;
   created_at: string;
   fired_at: string | null;
+  /** When the run that started the cloud session answered (or list_runs first showed it); absent in records written before it existed. */
+  opened_at?: string | null;
+  /** The pull requests the log showed the session open, oldest first; each raised session.pr_opened once. */
+  prs_opened?: string[];
+  /** When session.overdue was raised, once per session: a session a message reopens past its deadline does not raise it again. */
+  overdue_at?: string | null;
   /** When list_runs last came back empty while the launch was firing; a person may re-arm it after that. */
   runs_seen_empty_at: string | null;
   step: Step;
@@ -100,6 +106,11 @@ export interface Session {
   extra_outputs: OutputConfig[];
   cursor_reads: number;
   closed_at: string | null;
+  /**
+   * When the person closed it while it still ran: kharos goes on reading it, with no alerts, only to free its
+   * watch.max_open slot when it ends or its deadline passes, whichever comes first; then it is closed.
+   */
+  closing_at?: string | null;
   error: string | null;
   /**
    * The rules of the kharos permission hook on the branch at launch, read only when permission_hook is
@@ -175,6 +186,15 @@ export function bySessionId(reg: Registry, sessionId: string): Session | undefin
   return Object.values(reg.sessions).find((s) => s.session_id === sessionId);
 }
 
+/**
+ * When a session started, in ms: the deadline counts from it. The open of the cloud session, not the
+ * launch's preparation, so a refused fire, an approval or a queue wait are not counted; records from
+ * before kharos kept it fall back to the last fire, then to the preparation.
+ */
+export function startedAt(s: Pick<Session, 'opened_at' | 'fired_at' | 'created_at'>): number {
+  return Date.parse(s.opened_at ?? s.fired_at ?? s.created_at);
+}
+
 /** Sessions the watcher still follows: launched or launching, not terminal, not closed. */
 export function isFollowed(s: Session): boolean {
   if (s.step === 'closed' || s.step === 'refused' || s.step === 'queued' || s.step === 'prepared' || s.step === 'routine_created') return false;
@@ -193,13 +213,32 @@ export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
   }
 }
 
-/** A launch that holds a slot against max_open: anything that may run and is not finished; a queued launch waits for one. */
-function holdsSlot(s: Session): boolean {
-  return s.step !== 'closed' && s.step !== 'refused' && s.step !== 'queued' && !TERMINAL_STATES.has(s.state);
+/** When a session's deadline passes, in ms: its start plus its deadline. */
+export function deadlineAt(s: Pick<Session, 'opened_at' | 'fired_at' | 'created_at' | 'deadline_min'>): number {
+  return startedAt(s) + s.deadline_min * 60_000;
 }
 
-export function activeCount(reg: Pick<Registry, 'sessions'>): number {
-  return Object.values(reg.sessions).filter(holdsSlot).length;
+/** A session the person closed while it ran, that ended or reached its deadline: its slot is free now. */
+export function closingDone(s: Session, now: number): boolean {
+  return typeof s.closing_at === 'string' && s.step === 'open' && (TERMINAL_STATES.has(s.state) || now >= deadlineAt(s));
+}
+
+/** Closes a closing session whose slot is free now; true when it did. */
+export function releaseClosing(s: Session, now: number): boolean {
+  if (!closingDone(s, now)) return false;
+  s.step = 'closed';
+  s.closed_at = new Date(now).toISOString();
+  s.notice = null;
+  return true;
+}
+
+/** A launch that holds a slot against max_open: anything that may run and is not finished; a queued launch waits for one. */
+function holdsSlot(s: Session, now: number): boolean {
+  return s.step !== 'closed' && s.step !== 'refused' && s.step !== 'queued' && !TERMINAL_STATES.has(s.state) && !closingDone(s, now);
+}
+
+export function activeCount(reg: Pick<Registry, 'sessions'>, now: number = Date.now()): number {
+  return Object.values(reg.sessions).filter((s) => holdsSlot(s, now)).length;
 }
 
 /** Tries of one queued launch before kharos stops firing it and asks the person. */
@@ -220,10 +259,11 @@ const WAITING_ON_A_PERSON = new Set<State>(['waiting_answer', 'waiting_permissio
 /** The launches that hold a slot, each with its state; one that waits on a person says for how long. */
 export function slotHolders(reg: Registry, now: number): string {
   const rows = Object.values(reg.sessions)
-    .filter(holdsSlot)
+    .filter((s) => holdsSlot(s, now))
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((s) => {
       if (s.step !== 'open') return `${s.id} launch ${s.step.replace(/_/g, ' ')}`;
+      if (s.closing_at) return `${s.id} closing until it ends or ${new Date(deadlineAt(s)).toISOString().slice(11, 16)} UTC`;
       const label = `${s.id} ${s.state.replace(/_/g, ' ')}`;
       return WAITING_ON_A_PERSON.has(s.state) ? `${label} for ${Math.max(0, Math.round((now - Date.parse(s.state_since)) / 60_000))} min` : label;
     });

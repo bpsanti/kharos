@@ -56,11 +56,11 @@ The rules are checked in this order, and the first that matches wins.
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
 | `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
 | `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
-| `overdue` | running for longer than the profile's `deadline_min` | yes |
+| `overdue` | running for longer than the launch's deadline (`--deadline`, or the profile's `deadline_min`), counted from the open of the cloud session; raised once per session and repeated while it stays open, unless a check below it has a notice to raise, which replaces it; once it closes, a session a message reopens past its deadline is read by the checks below it (looping, silent, `quiet_unmarked`) | yes |
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
 | `silent` | an open turn with no new event for `silence_min` | at `silence_min`, again at `silence_severe_min` |
-| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `quiet_end_min` |
+| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `unmarked_end_min` (5), or after `quiet_end_min` (40) when the turn started a background task (a command run or moved to the background, a `Monitor`, an agent whose result says it was launched in the background; a foreground agent returns inside the turn and does not count) that may wake it |
 | `running` | anything else | no |
 
 A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal.
@@ -69,7 +69,8 @@ A session archived in `list_runs` without an end mark becomes `ended_unmarked`, 
 
 - A command in the foreground can run up to 10 minutes; gaps of almost 10 minutes with no event are normal, so `silence_min` is 15.
 - A closed turn is not an end, not even one that ended with an error result: a session closed its turn, stayed quiet for over 10 minutes, and woke up by itself when a background command finished.
-  A command moved to the background can run up to 30 minutes more, hence `quiet_end_min` of 40, and the notice is a warning, never an end.
+  A command moved to the background can run up to 30 minutes more, hence `quiet_end_min` of 40 for a turn that started one, and the notice is a warning, never an end.
+  A turn that started nothing in the background has nothing left to wake it, so it is said after `unmarked_end_min`.
 - Repeated calls of the same script are normal (waiting for CI, for example); only the same error in a row counts as a loop.
 - The end is said by the session itself, with a mark it sends as its own last message: the condensed log cuts each event at about a thousand characters, so a mark at the end of a long message would be lost.
 - The marks in the prompt (the footer) do not count: only `assistant` and `result` events after the last `user` event are read.
@@ -108,8 +109,9 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "permission":{"tool":"Bash","category":"org_ask_rule"}}
 ```
 
-- `class` is `progress` (`session.opened`, `session.back`, `session.queued`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
+- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
 - `session.queued` (`progress`) says a launch made with `--queue` waits for a slot; `session.not_fired` (`needs_you`) says kharos did not fire a queued launch by itself (another account is logged in, a refusal, or fires that did not go through) and the person decides.
+- `session.pr_opened` (`progress`) says the session opened a pull request, with its URL in `pr`, as soon as a read shows the result of the call that created it (`gh pr create`, or a GitHub tool that creates one); once per pull request.
 - `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.
 - `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for, with the fixed text of its category.
   Only `session.waiting_answer` carries `question`, and only `session.finished` carries `summary`, both cleaned of control characters and cut.

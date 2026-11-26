@@ -157,6 +157,11 @@
           "minimum": 1,
           "default": 40
         },
+        "unmarked_end_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5
+        },
         "loop_failures": {
           "type": "integer",
           "minimum": 1,
