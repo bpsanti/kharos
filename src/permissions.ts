@@ -404,6 +404,8 @@ export interface PreflightRequest {
   dir: string | null;
   /** With dir null: the launch profile (the default one when absent). */
   profile?: string;
+  /** With dir null: the branch or tag the launch starts on instead of the profile's (`--revision`). */
+  revision?: string;
   /** The launch instruction, if known: a program it names comes first. */
   instruction: string;
   forge?: Forge;
@@ -449,7 +451,7 @@ export function preflight(paths: Paths, req: PreflightRequest, env: NodeJS.Proce
       if (err instanceof ConfigError) throw new CommandError(err.message);
       throw err;
     }
-    const { profile } = picked;
+    const profile = req.revision === undefined ? picked.profile : { ...picked.profile, revision: req.revision };
     const slug = repoSlug(profile.repo);
     repo = profile.repo;
     const read = (req.forge ?? ghForge(realGh(env))).snapshot(profile.repo, profile.revision, selectFiles);

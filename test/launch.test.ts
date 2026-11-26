@@ -607,3 +607,21 @@ test('launch: a run the auto mode classifier refused goes back to routine create
   assert.match(out.stdout, /was not fired/);
   assert.equal(loadRegistry(other.paths).sessions[id2]?.step, 'routine_created');
 });
+
+test('launch: --revision starts the session on another branch, checked every time, and the profile stays', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  recordAccess(sb.paths, 'https://github.com/example/demo', 'ok', null, T0);
+  const asked: string[] = [];
+  const s = prepare(sb.paths, { instruction: 'x', revision: 'perf-hook', claude_session: null, now: T0, env: sb.env, heads: (_u, r) => (asked.push(r), HEADS_OK) });
+  assert.deepEqual(asked, ['perf-hook']);
+  assert.equal(s.revision, 'perf-hook');
+  const body = JSON.parse(fs.readFileSync(`${sb.paths.bodies}/${s.id}.json`, 'utf8'));
+  assert.deepEqual(body.job_config.ccr.session_context.sources, [{ git_repository: { url: 'https://github.com/example/demo', revision: 'perf-hook' } }]);
+  assert.equal(JSON.parse(fs.readFileSync(sb.paths.config, 'utf8')).profiles.demo.revision, undefined);
+  assert.throws(
+    () => prepare(sb.paths, { instruction: 'x', revision: 'nope', claude_session: null, now: T0, env: sb.env, heads: () => ({ ...HEADS_OK, hasRevision: false }) }),
+    (e: unknown) => e instanceof LaunchError && /no branch or tag "nope"/.test(e.message) && /existing branch or tag in --revision/.test(e.message),
+  );
+  assert.throws(() => prepare(sb.paths, { instruction: 'x', revision: '--upload-pack=x', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK }), /is not a branch or tag name/);
+});

@@ -148,7 +148,7 @@ function nullableString(v: unknown, max: number): string | null {
 }
 
 /** A branch name safe to show inside a git command: a plain ref name, or null. */
-function gitBranch(b: string | null): string | null {
+export function gitBranch(b: string | null): string | null {
   if (!b || !/^[A-Za-z0-9._/-]{1,200}$/.test(b)) return null;
   if (b.startsWith('-') || b.includes('..') || b.endsWith('.lock') || b.endsWith('/')) return null;
   return b;

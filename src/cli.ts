@@ -129,7 +129,7 @@ const USAGE = `usage: kharos <command>
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
   permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
-  permissions preflight [dir] | permissions preflight --launch [--profile p]   [--stdin | --file f]: the launch instruction
+  permissions preflight [dir] | permissions preflight --launch [--profile p] [--revision r]   [--stdin | --file f]: the launch instruction
   permissions auto <preflight|unblock> <on|off>
   permissions unblock show | permissions unblock confirm --fingerprint <fp>
   permissions unblock [dir]   (the same as permissions hook diff --unblock [dir]; --no-unblock turns it off)
@@ -159,6 +159,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           instruction: readInstruction(flag(args, 'file'), stdin),
           ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
           ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
+          ...(flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}),
           ...(flag(args, 'title') !== undefined ? { title: flag(args, 'title') as string } : {}),
           ...(intFlag(args, 'deadline') !== undefined ? { deadline_min: intFlag(args, 'deadline') as number } : {}),
           claude_session: flag(args, 'session') ?? null,
@@ -303,7 +304,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             if (launch && args.positional[1] !== undefined) throw new cmd.CommandError('permissions preflight takes a checkout folder or --launch, not both');
             const file = flag(args, 'file');
             const instruction = file !== undefined ? readInstruction(file, stdin) : args.flags.stdin === true ? stdin() : '';
-            out(preflight(paths, { dir: launch ? null : (args.positional[1] ?? '.'), ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), instruction }, env));
+            out(preflight(paths, { dir: launch ? null : (args.positional[1] ?? '.'), ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), ...(launch && flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}), instruction }, env));
           }
         } else if (sub === 'unblock') {
           const what = args.positional[1];

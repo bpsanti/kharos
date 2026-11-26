@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import { readAuthStatus } from './account.ts';
 import { autoModeRefusal } from './account-mode.ts';
-import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256, sideBranchLines } from './body.ts';
+import { buildCreateBody, clean, gitBranch, MAX_INSTRUCTION_CHARS, sha256, sideBranchLines } from './body.ts';
 import { ConfigError, loadConfig, MAX_OPEN_TRADEOFF, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
 import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
@@ -24,6 +24,8 @@ export interface PrepareOptions {
   instruction: string;
   profile?: string;
   model?: string;
+  /** The branch or tag the session starts on instead of the profile's (`--revision`); checked like the profile's. */
+  revision?: string;
   title?: string;
   deadline_min?: number;
   /** Outputs given to this launch only, such as the firstmate adapter. */
@@ -75,7 +77,10 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
     if (err instanceof ConfigError) throw new LaunchError([err.message]);
     throw err;
   }
-  const { name: profileName, profile } = picked;
+  const profileName = picked.name;
+  const override = opts.revision?.trim();
+  if (override !== undefined && gitBranch(override) === null) throw new LaunchError([`--revision "${clean(override, 100)}" is not a branch or tag name.`]);
+  const profile = override === undefined ? picked.profile : { ...picked.profile, revision: override };
 
   const instruction = opts.instruction.trim();
   if (instruction === '') throw new LaunchError(['The instruction is empty.']);
@@ -97,8 +102,9 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   }
 
   // Repository readiness, before the first launch in a repository and while it is not known to work.
+  // A revision given for this launch alone is checked every time: the profile's was checked when it was set up.
   const known = loadRepos(paths)[repoSlug(profile.repo)];
-  if (known?.access !== 'ok') {
+  if (known?.access !== 'ok' || override !== undefined) {
     const heads = (opts.heads ?? ((u, r) => readRemoteHeads(u, r, env)))(profile.repo, profile.revision);
     if (heads.readable && heads.empty) {
       throw new LaunchError([
@@ -109,7 +115,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
     if (heads.readable && !heads.hasRevision) {
       throw new LaunchError([
         `${repoSlug(profile.repo)} has no branch or tag "${profile.revision}"${heads.defaultBranch ? `; its default branch is "${heads.defaultBranch}"` : ''}.`,
-        `Fix "revision" of profile "${profileName}" with /kharos:setup.`,
+        override !== undefined ? 'Launch with an existing branch or tag in --revision, or without it to start on the profile\'s.' : `Fix "revision" of profile "${profileName}" with /kharos:setup.`,
       ]);
     }
   }
