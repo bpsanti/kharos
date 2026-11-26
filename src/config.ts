@@ -1,4 +1,4 @@
-// The configuration file: launch profiles, watcher thresholds and outputs.
+// The configuration file: launch profiles, the thresholds of the classifier and the cap on open sessions, and outputs.
 // The JSON Schema in schema/config.schema.json describes the same shape for editors; this module is the
 // validator that runs, with no dependency.
 
@@ -29,29 +29,41 @@ export interface Profile {
 }
 
 /**
- * The permission modes /kharos:setup offers, asked once. Recording one changes nothing else: the repository's
- * files change only through /kharos:permissions, after the person approves its diff, and the automatic modes
- * only when the person turns them on.
+ * The permission modes /kharos:setup offers, asked once: leave the rules as they are, or unblock all, which
+ * setup turns on itself after the person confirms what it frees.
  */
-export const PERMISSION_CHOICES = ['as-is', 'standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock', 'unblock-all'] as const;
+export const PERMISSION_CHOICES = ['as-is', 'unblock-all'] as const;
 export type PermissionChoice = (typeof PERMISSION_CHOICES)[number];
 
-/** Older names of a mode, still accepted from profiles and scripts, read as the mode that replaced them. */
+/** An older name of a mode, still accepted from profiles and scripts, read as the mode that replaced it. */
 const PERMISSION_ALIASES: Readonly<Record<string, PermissionChoice>> = { 'auto-unblock': 'unblock-all' };
+
+/**
+ * Modes that earlier versions of setup offered and that are gone. The stored choice only recorded the
+ * person's answer, so a profile that holds one still loads, read as as-is; the configuration switches the
+ * answer led to stay as they are.
+ */
+const RETIRED_PERMISSION_CHOICES: ReadonlySet<string> = new Set(['standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock']);
 
 export function isPermissionChoice(v: unknown): v is PermissionChoice {
   return typeof v === 'string' && (PERMISSION_CHOICES as readonly string[]).includes(v);
 }
 
-/** The mode a stored or typed name stands for, an older alias read as its mode; null when it names none. */
+/** The mode a typed name stands for, an older alias read as its mode; null when it names none. */
 export function permissionChoice(v: unknown): PermissionChoice | null {
   if (isPermissionChoice(v)) return v;
   return typeof v === 'string' && Object.hasOwn(PERMISSION_ALIASES, v) ? (PERMISSION_ALIASES[v] as PermissionChoice) : null;
 }
 
+/** The mode a stored profile holds: also a retired mode, read as as-is. */
+function storedPermissionChoice(v: unknown): PermissionChoice | null {
+  return typeof v === 'string' && RETIRED_PERMISSION_CHOICES.has(v) ? 'as-is' : permissionChoice(v);
+}
+
+/** How kharos reads and judges the sessions it follows, and how many may be open at once. */
 export interface WatchConfig {
+  /** The model of the headless readers and of a queued launch's fire. */
   model: string;
-  interval_min: number;
   provision_min: number;
   silence_min: number;
   silence_severe_min: number;
@@ -106,7 +118,6 @@ export interface Config {
 
 export const DEFAULT_WATCH: WatchConfig = {
   model: 'haiku',
-  interval_min: 10,
   provision_min: 15,
   silence_min: 15,
   silence_severe_min: 45,
@@ -213,7 +224,7 @@ export function parseProfile(v: unknown, where: string): Profile {
   const environment = str(o.environment, `${where}.environment`);
   if (!ENV_RE.test(environment)) throw new ConfigError(`${where}.environment must be a cloud environment id (env_...)`);
   if (o.connectors !== undefined && typeof o.connectors !== 'boolean') throw new ConfigError(`${where}.connectors must be true or false`);
-  const permissions = o.permissions === undefined ? undefined : permissionChoice(o.permissions);
+  const permissions = o.permissions === undefined ? undefined : storedPermissionChoice(o.permissions);
   if (permissions === null) throw new ConfigError(`${where}.permissions must be one of ${PERMISSION_CHOICES.join(', ')}`);
   const profile: Profile = {
     repo,
@@ -276,6 +287,8 @@ export function parseConfig(v: unknown): Config {
   const w = obj(o.watch ?? {}, 'config.watch');
   const watch: WatchConfig = { ...DEFAULT_WATCH };
   for (const k of Object.keys(w)) {
+    // The cadence of the watcher, which is gone: a configuration that still sets it loads, and the next write drops it.
+    if (k === 'interval_min') continue;
     if (!(k in DEFAULT_WATCH)) throw new ConfigError(`watch.${k} is not a known field`);
     if (k === 'model') watch.model = str(w.model, 'watch.model');
     else (watch as unknown as Record<string, number>)[k] = posInt(w[k], `watch.${k}`);

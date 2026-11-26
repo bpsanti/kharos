@@ -88,7 +88,7 @@ export function staleMirror(policy: ManagedPolicy, mirror: readonly string[]): s
   if (policy.status !== 'found' || !policy.bypassDisabled || mirror.length === 0) return null;
   return (
     `the hook mirrors ${mirror.length} organization ask rule(s), but the organization's managed settings now set disableBypassPermissionsMode, so those rules bind every session; ` +
-    'remove them with `kharos permissions hook diff --unmirror` (or remove the hook with --uninstall)'
+    'take them out of the branch\'s .claude/kharos-permissions.json, or remove the hook from the branch'
   );
 }
 
@@ -103,7 +103,7 @@ export interface MirrorPlan {
   converted: string[];
   /** The converted rules that are broad: they allow any command they cover. */
   broad: string[];
-  /** Ask rules that stay as they are, each with why; `broad` marks the ones --broad would convert. */
+  /** Ask rules that stay as they are, each with why; `broad` marks the ones a mirror of broad rules converts. */
   kept: { rule: string; why: string; broad?: true }[];
 }
 

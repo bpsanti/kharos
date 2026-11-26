@@ -24,8 +24,8 @@ import { recordAccess, readOwnerType, refusalFix, type OwnerType } from './repo.
 import { loadSetups, saveEnvironments, setupsFor, takeIntent } from './state.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
-import { health, isActiveWatcher } from './watch.ts';
-import { rearmFollowers, ROLE_ENV, type Spawner } from './follow.ts';
+import { health, rearmFollowers, type Spawner } from './follow.ts';
+import { READER_ROLE, ROLE_ENV } from './wait.ts';
 import { kickQueue } from './queue.ts';
 import { nextCall } from './commands.ts';
 
@@ -123,7 +123,10 @@ function withRegistry(ctx: Ctx, r: ReturnType<typeof readToolResponse>, fn: (reg
   }
 }
 
-const WATCHER_DENIED = (action: string) => deny(`kharos: this session runs /kharos:watch, which only reads; RemoteTrigger "${action}" on a kharos launch is not allowed here.`);
+const READER_DENIED = (action: string) => deny(`kharos: this session is a kharos reader, which only reads; RemoteTrigger "${action}" on a kharos launch is not allowed here.`);
+
+/** A reader session that `kharos wait` started: it may read, never create, fire or change a kharos routine. */
+const isReader = (ctx: Ctx): boolean => ctx.env[ROLE_ENV] === READER_ROLE;
 
 export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
   if (input.tool_name !== 'RemoteTrigger') return null;
@@ -134,7 +137,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
     const launch = str(rec(ti.body)?.kharos_launch);
     if (!launch) return null;
     return launchCheck(ctx, (reg) => {
-      if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return WATCHER_DENIED(action);
+      if (isReader(ctx)) return READER_DENIED(action);
       const s = reg.sessions[launch];
       if (!s) return deny(`kharos: there is no prepared launch ${launch}. Run /kharos:run again.`);
       if (s.step === 'queued') return deny(`kharos: launch ${nextCall(s)}`);
@@ -162,10 +165,9 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
     return launchCheck(ctx, (reg) => {
-      const watcher = isActiveWatcher(ctx.paths, input.session_id, ctx.now);
       const s = byTrigger(reg, trig);
       if (!s) return null;
-      if (watcher) return WATCHER_DENIED(action);
+      if (isReader(ctx)) return READER_DENIED(action);
       if (s.step === 'routine_created') {
         s.step = 'firing';
         s.fired_at = new Date(ctx.now).toISOString();
@@ -179,13 +181,13 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
     });
   }
 
-  // The watcher session only reads: it may not change a routine kharos follows.
+  // A reader only reads: it may not change a routine kharos follows.
   if (action === 'update' || action === 'create_webhook_trigger') {
     const trig = str(ti.trigger_id);
     if (!trig) return null;
     try {
       if (!byTrigger(loadRegistry(ctx.paths), trig)) return null;
-      return isActiveWatcher(ctx.paths, input.session_id, ctx.now) ? WATCHER_DENIED(action) : null;
+      return isReader(ctx) ? READER_DENIED(action) : null;
     } catch (err) {
       return deny(stateUnreadable(ctx, err));
     }
@@ -418,7 +420,7 @@ function logView(ctx: Ctx, s: Session, lines: number): string {
   return storedLogView(logPath(ctx.paths, s.id), `${s.id} (${s.url ?? 'no link yet'})`, lines);
 }
 
-/** At the start of any session: one line when sessions are open and the watcher looks stopped. */
+/** At the start of any session: one line when an open session has no live follower. */
 export function sessionStart(ctx: Ctx, input: HookInput): HookOutput {
   void input;
   const h = health(ctx.paths, ctx.now);
@@ -428,12 +430,12 @@ export function sessionStart(ctx: Ctx, input: HookInput): HookOutput {
 /**
  * At every turn end: an open session that no follower reads gets a follower process of its own, which
  * goes on after this Claude Code exits. Nothing happens in kharos's own sessions (a reader, a follower
- * process, a queued launch's fire, the watcher), and nothing reaches the network unless a follower is
+ * process, a queued launch's fire), and nothing reaches the network unless a follower is
  * missing; the hook never holds the turn.
  */
 export function stop(ctx: Ctx, input: HookInput): HookOutput {
+  void input;
   if (ctx.env[ROLE_ENV]) return null;
-  if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return null;
   const r = rearmFollowers(ctx.paths, ctx.now, ctx.env, ctx.spawner);
   return r.lines.length ? { systemMessage: r.lines.join('\n') } : null;
 }

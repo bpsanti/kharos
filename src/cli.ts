@@ -13,52 +13,38 @@ import {
   buildGuide,
   copyToClipboard,
   CREATE_URL,
-  defaultEnvironment,
   formatGuide,
   GuideError,
   openBrowser,
-  waitForEnvironment,
 } from './environment.ts';
 import { kick, KICKS_QUEUE, permissionDenied, postToolUse, postToolUseFailure, preToolUse, sessionStart, stop, type Ctx, type HookInput } from './hook.ts';
 import { dispatchQueued, kickQueue } from './queue.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
-import { diffAccountMode, writeAccountMode } from './account-mode.ts';
-import { readManagedPolicy } from './managed-policy.ts';
 import { formatSetup, parseScheduleView, runSetup, SetupError } from './setup.ts';
 import { formatHookDecisions } from './approvals.ts';
 import { applyUnblockAll, showUnblockAll } from './unblock-all.ts';
-import { diffHook, diffPermissions, preflight, readRemoteFile, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
-import type { HookChange } from './permission-hook.ts';
+import { preflight, readRemoteFile } from './permissions.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
 import { readOutbox } from './events.ts';
-import { deliver, deliveryLine } from './outputs/index.ts';
+import { deliver } from './outputs/index.ts';
 import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
-import { due, formatReads, health, passEnd } from './watch.ts';
-import { detachFollower, followLoop, startFollowers } from './follow.ts';
+import { detachFollower, followLoop, health, startFollowers } from './follow.ts';
 import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'full', 'ask-stop', 'stopped', 'no-push', 'queue']);
-/** Flags that may be given more than once; each value is kept, in order. */
-const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
+const BOOLEAN_FLAGS = new Set(['all', 'no-remote-tool', 'from-schedule', 'verbose', 'launch', 'stdin', 'confirmed', 'copy', 'open', 'detach', 'full', 'ask-stop', 'stopped', 'no-push', 'queue']);
 
 export interface Args {
   positional: string[];
   flags: Record<string, string | true>;
-  lists: Record<string, string[]>;
 }
 
 export function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
-  const lists: Record<string, string[]> = {};
-  const set = (name: string, v: string) => {
-    if (LIST_FLAGS.has(name)) (lists[name] ??= []).push(v);
-    else flags[name] = v;
-  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a === '--') {
@@ -68,7 +54,7 @@ export function parseArgs(argv: string[]): Args {
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq > 0) {
-        set(a.slice(2, eq), a.slice(eq + 1));
+        flags[a.slice(2, eq)] = a.slice(eq + 1);
         continue;
       }
       const name = a.slice(2);
@@ -76,14 +62,14 @@ export function parseArgs(argv: string[]): Args {
       else {
         const v = argv[i + 1];
         if (v === undefined) throw new cmd.CommandError(`--${name} needs a value`);
-        set(name, v);
+        flags[name] = v;
         i++;
       }
       continue;
     }
     positional.push(a);
   }
-  return { positional, flags, lists };
+  return { positional, flags };
 }
 
 function flag(args: Args, name: string): string | undefined {
@@ -113,32 +99,20 @@ function need(args: Args, i: number, what: string): string {
 }
 
 const USAGE = `usage: kharos <command>
-  prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--no-push] [--queue] [--session id]   (instruction on stdin)
+  prepare [--profile p] [--model m] [--revision r] [--title t] [--deadline min] [--file f] [--no-push] [--queue] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] [--full] (stored events, from a shell) | log <id> [lines] --session id (a read, from Claude Code)
   send <id>   (text on stdin) | result <id> | close <id> [--ask-stop] [--stopped]
   doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
-  env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
-  env-wait --since <env_...|none> [--timeout s]
-  setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is (or default)|standard|hook|standard+hook|auto-preflight|unblock|unblock-all [--unblock-expect token]>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
-  repo-init <owner/name>
-  action [name] [--session id]
+  env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open] | repo-init <owner/name>
+  setup --repo owner/name [--profile name] [--revision r] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
+        [--permissions <as-is|unblock-all [--unblock-expect token]>] [--adopt <profile,...|none>] [--max-open n] [--no-remote-tool]
   permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token>   (everything kharos can free for this account, in one step, or what it turned on taken back)
-  permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
-  permissions hook show [dir] | permissions hook enable | permissions hook disable
-  permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
-  permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
-  permissions approvals [--all] [--session k-0001] [--limit n]
-  permissions preflight [dir] | permissions preflight --launch [--profile p] [--revision r]   [--stdin | --file f]: the launch instruction
-  permissions auto preflight <on|off>
-  permissions unblock [dir]   (the same as permissions hook diff --unblock [dir]; --no-unblock turns it off)
-  advanced, one part of unblock-all at a time (docs/permissions.md): permissions unblock show | permissions unblock confirm --fingerprint <fp>
-    | permissions auto unblock <on|off> | permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
-  due [--watcher id] [--all] | pass-end [--watcher id] | health
-  wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
+  permissions preflight [--profile p] [--revision r] (--stdin | --file f)   (the prompts a launch is likely to hit; the instruction on stdin or in a file)
+  permissions approvals [--all] [--session k-0001] [--limit n]   (what the permission hook allowed, as kharos read it from the session logs)
+  wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id] | health
   follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
-  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start|stop>`;
+  action [name] [--session id] | dispatch | hook <pre-tool-use|post-tool-use|post-tool-use-failure|permission-denied|session-start|stop>   (used by the plugin itself)`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
   const paths = resolvePaths(env);
@@ -198,9 +172,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         if (!Number.isInteger(lines) || lines <= 0 || lines > 200) throw new cmd.CommandError('lines must be between 1 and 200');
         // From a shell (no Claude Code session to make the read): what the last read stored.
         const session = flag(args, 'session');
-        if (args.flags.cached === true || args.flags.full === true || session === undefined) {
+        if (args.flags.full === true || session === undefined) {
           out(cmd.cachedLog(paths, need(args, 0, 'session id'), lines, args.flags.full === true));
-          if (args.flags.cached !== true && session === undefined) out('Newer events are read by the follower, the watcher, or /kharos:log in Claude Code.');
+          if (session === undefined) out('Newer events are read by the follower, or by /kharos:log in Claude Code.');
           return 0;
         }
         out(cmd.logRequest(paths, need(args, 0, 'session id'), lines, session, now));
@@ -228,29 +202,16 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'env-guide':
         out(envGuide(args, paths, env));
         return 0;
-      case 'env-wait': {
-        const since = flag(args, 'since');
-        if (since === undefined) throw new cmd.CommandError('--since needs the default environment that env-guide printed, or "none"');
-        const seconds = Math.min(intFlag(args, 'timeout') ?? ENV_WAIT_S, 3600);
-        const id = await waitForEnvironment(since === 'none' ? null : since, seconds * 1000, env);
-        out(
-          id
-            ? `/remote-env saved ${id}. Confirm with the person that it is the environment for this repository before writing it into a profile.`
-            : `no new default environment after ${seconds} s. Ask the person for its env_... id (/schedule shows it), or wait again.`,
-        );
-        return id ? 0 : 1;
-      }
       case 'doctor': {
         const checks = runDoctor(
           paths,
           { ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), noRemoteTool: args.flags['no-remote-tool'] === true, shared: sharedPaths(env), now, env },
           realDeps(env),
         );
-        out(args.flags.json === true ? JSON.stringify(checks, null, 2) : formatChecks(checks, { verbose: args.flags.verbose === true }));
+        out(formatChecks(checks, { verbose: args.flags.verbose === true }));
         return checks.some((c) => c.level === 'fail') ? 1 : 0;
       }
       case 'setup': {
-        const tools = flag(args, 'tools');
         const repo = flag(args, 'repo') ?? args.positional[0];
         if (!repo) throw new cmd.CommandError('missing --repo (owner/name)');
         const r = runSetup(
@@ -259,16 +220,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             repo,
             ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
             ...(flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}),
-            ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
-            ...(intFlag(args, 'deadline') !== undefined ? { deadline_min: intFlag(args, 'deadline') as number } : {}),
             ...(flag(args, 'environment') !== undefined ? { environment: flag(args, 'environment') as string } : {}),
             ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
             ...(intFlag(args, 'max-open') !== undefined ? { maxOpen: intFlag(args, 'max-open') as number } : {}),
-            ...accountModeFlags(args),
             ...(flag(args, 'unblock-expect') !== undefined ? { unblockExpect: flag(args, 'unblock-expect') as string } : {}),
-            ...(tools !== undefined ? { allowed_tools: tools.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
-            ...(args.flags.connectors === true ? { connectors: true } : args.flags['no-connectors'] === true ? { connectors: false } : {}),
-            makeDefault: args.flags.default === true,
             view: args.flags['from-schedule'] === true ? parseScheduleView(stdin()) : null,
             here: currentRepo(env),
             shared: sharedPaths(env),
@@ -280,7 +235,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           },
           realDeps(env),
         );
-        out(args.flags.json === true ? JSON.stringify(r, null, 2) : formatSetup(r));
+        out(formatSetup(r));
         return r.next.kind === 'not-ready' ? 1 : 0;
       }
       case 'repo-init': {
@@ -290,62 +245,20 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       }
       case 'permissions': {
         const sub = args.positional[0];
-        if (sub === 'show') out(showPermissions(paths, args.positional[1] ?? '.', env));
-        else if (sub === 'diff') out(diffPermissions(args.positional[2] ?? '.', need(args, 1, 'default or standard'), env));
-        else if (sub === 'write') out(writePermissions(paths, args.positional[2] ?? '.', need(args, 1, 'default or standard'), flag(args, 'expect'), env));
-        else if (sub === 'hook') {
-          const what = args.positional[1];
-          const dir = args.positional[2] ?? '.';
-          if (what === 'show') out(showHook(paths, dir, env));
-          else if (what === 'enable' || what === 'disable') out(switchHook(paths, what === 'enable'));
-          else if (what === 'diff') out(diffHook(paths, dir, hookChange(args), env));
-          else if (what === 'write') out(writeHook(paths, dir, hookChange(args), flag(args, 'expect'), args.flags['org-confirmed'] === true, env));
-          else throw new cmd.CommandError('permissions hook takes show, enable, disable, diff or write');
-        } else if (sub === 'preflight') {
-          {
-            const launch = args.flags.launch === true || flag(args, 'profile') !== undefined;
-            if (launch && args.positional[1] !== undefined) throw new cmd.CommandError('permissions preflight takes a checkout folder or --launch, not both');
-            const file = flag(args, 'file');
-            const instruction = file !== undefined ? readInstruction(file, stdin) : args.flags.stdin === true ? stdin() : '';
-            out(preflight(paths, { dir: launch ? null : (args.positional[1] ?? '.'), ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), ...(launch && flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}), instruction }, env));
-          }
-        } else if (sub === 'unblock-all') {
+        if (sub === 'unblock-all') {
           const [what, target] = [args.positional[1], args.positional[2]];
           if (what === 'show' && (target === undefined || target === 'on' || target === 'off')) out(showUnblockAll(paths, env, target ?? 'on'));
           else if ((what === 'on' || what === 'off') && target === undefined) out(applyUnblockAll(paths, env, what, flag(args, 'expect'), now));
           else throw new cmd.CommandError('permissions unblock-all takes show [on|off], or on or off with --expect <token>');
-        } else if (sub === 'unblock') {
-          const what = args.positional[1];
-          if (what === 'show') out(unblockShow(paths, env));
-          else if (what === 'confirm') out(unblockConfirm(paths, flag(args, 'fingerprint'), env));
-          else out(diffHook(paths, what ?? '.', { ...hookChange(args), unblock: args.flags['no-unblock'] === true ? 'off' : 'on' }, env));
-        } else if (sub === 'auto') {
-          // Switches of the configuration, apart from the read-only commands a skill may pre-approve.
-          const [what, v] = [args.positional[1], args.positional[2]];
-          if ((what !== 'preflight' && what !== 'unblock') || (v !== 'on' && v !== 'off')) throw new cmd.CommandError('permissions auto takes preflight or unblock, then on or off');
-          out(what === 'preflight' ? switchPreflightAuto(paths, v === 'on') : switchUnblockAuto(paths, v === 'on', env));
-        } else if (sub === 'account-mode') {
-          const [what, target] = [args.positional[1], args.positional[2]];
-          const policy = readManagedPolicy(env);
-          if ((what === 'diff' || what === 'write') && (target === 'auto' || target === 'off')) {
-            out(what === 'diff' ? diffAccountMode(paths, env, target, policy) : writeAccountMode(paths, env, target, flag(args, 'expect'), policy));
-          } else throw new cmd.CommandError('permissions account-mode takes diff or write, then auto or off');
+        } else if (sub === 'preflight') {
+          // `--launch` named the only form there is now; it stays accepted.
+          if (args.positional[1] !== undefined) throw new cmd.CommandError('permissions preflight reads the branch a launch profile starts on, not a checkout folder');
+          const file = flag(args, 'file');
+          const instruction = file !== undefined ? readInstruction(file, stdin) : args.flags.stdin === true ? stdin() : '';
+          out(preflight(paths, { ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), ...(flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}), instruction }, env));
         } else if (sub === 'approvals') {
           out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
-        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock-all, unblock, auto, account-mode or approvals');
-        return 0;
-      }
-      case 'due': {
-        const r = due(paths, { watcher: flag(args, 'watcher') ?? null, all: args.flags.all === true, now, env });
-        out(args.flags.json === true ? JSON.stringify(r, null, 2) : formatReads(r));
-        return 0;
-      }
-      case 'pass-end': {
-        const report = await deliver({ paths, env, now, platform: process.platform, inHook: false });
-        const line = passEnd(paths, { watcher: flag(args, 'watcher') ?? null, now });
-        kickQueue(paths, now, env);
-        const extraLine = deliveryLine(report);
-        out(extraLine ? `${line}; ${extraLine}` : line);
+        } else throw new cmd.CommandError('permissions takes unblock-all, preflight or approvals');
         return 0;
       }
       case 'wait': {
@@ -405,9 +318,6 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
   }
 }
 
-/** How long env-wait waits for /remote-env, unless told otherwise. */
-const ENV_WAIT_S = 600;
-
 /** What to paste into a new cloud environment for a repository, put on the clipboard and the browser when asked. */
 function envGuide(args: Args, paths: Paths, env: NodeJS.ProcessEnv): string {
   let repo = flag(args, 'repo');
@@ -424,22 +334,10 @@ function envGuide(args: Args, paths: Paths, env: NodeJS.ProcessEnv): string {
   // gh answers a missing branch like a missing file, which would pass for a repository without a setup script.
   if (heads?.readable && !heads.hasRevision) throw new cmd.CommandError(`"${revision}" is not a branch or tag of ${repoSlug(url)}`);
   const guide = buildGuide(url, revision, (file) => readRemoteFile(url, revision, file, env));
-  const since = defaultEnvironment(env);
   return formatGuide(guide, {
-    since,
     ...(args.flags.copy === true ? { copied: copyToClipboard(guide.script, env) } : {}),
     ...(args.flags.open === true ? { opened: openBrowser(CREATE_URL, env) } : {}),
   });
-}
-
-/** --account-mode auto|as-is, with --account-expect <token> for auto: the person's answer about this account's mode. */
-function accountModeFlags(args: Args): { accountMode?: 'auto' | 'as-is'; accountExpect?: string } {
-  const mode = flag(args, 'account-mode');
-  if (mode === undefined) return {};
-  if (mode !== 'auto' && mode !== 'as-is') throw new cmd.CommandError('--account-mode takes auto or as-is');
-  const expect = flag(args, 'account-expect');
-  if (mode === 'auto' && !expect) throw new cmd.CommandError('--account-mode auto needs --account-expect <token>, the change token setup printed with the diff');
-  return { accountMode: mode, ...(expect !== undefined ? { accountExpect: expect } : {}) };
 }
 
 /** owner/name of the current folder's GitHub origin: the repository the /schedule skill checks Claude's access to. */
@@ -448,20 +346,6 @@ function currentRepo(env: NodeJS.ProcessEnv): string | null {
   if (r.error || r.status !== 0) return null;
   const url = normalizeRepo(r.stdout.trim());
   return /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(url) ? repoSlug(url) : null;
-}
-
-/** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */
-export function hookChange(args: Args): HookChange {
-  return {
-    allow: args.lists.allow ?? [],
-    prefix: args.lists['allow-prefix'] ?? [],
-    drop: args.lists.drop ?? [],
-    mirror: args.flags.mirror === true,
-    unmirror: args.flags.unmirror === true,
-    uninstall: args.flags.uninstall === true,
-    broad: args.flags.broad === true,
-    unblock: args.flags.unblock === true ? 'on' : args.flags['no-unblock'] === true ? 'off' : null,
-  };
 }
 
 /** How long delivery may run inside each hook that delivers, well inside its timeout in hooks.json. */

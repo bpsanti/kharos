@@ -11,13 +11,13 @@ import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
 import { unmigratedNote } from './accounts.ts';
 import { sharedPaths, type Paths } from './paths.ts';
-import { activeCount, bodyPath, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
+import { activeCount, bodyPath, collectGarbage, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, loadConfirmation } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
-import { SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
-import { EMPTY_CHANGE, readRemoteHookFiles, type RemoteHookFiles } from './permissions.ts';
+import { SETTINGS_PATH, SettingsError } from './settings.ts';
+import { readRemoteHookFiles, type RemoteHookFiles } from './permissions.ts';
 import { applicable, buildPreflight, hookFilesOf, readHistory, selectFiles, snapshotAsk } from './preflight.ts';
 import { loadRepos, readRemoteHeads, recentRepoRules, recordRepoRules, type RemoteHeads } from './repo.ts';
 
@@ -126,7 +126,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const title = (opts.title?.trim() || defaultTitle(instruction)).slice(0, 120);
   const createdAt = new Date(opts.now).toISOString();
   // With the opt-in permission hook, the rules on the branch now are the ones the session's hook uses,
-  // so the watcher can attribute its decisions. An unreadable branch gives no rules, and no attribution;
+  // so kharos can attribute its decisions. An unreadable branch gives no rules, and no attribution;
   // nor does a managed policy that runs no repository hook.
   const policy = config.permission_hook || config.preflight_auto ? (opts.managedPolicy ?? (() => readManagedPolicy(env)))() : null;
   let hookRules = null;
@@ -141,6 +141,8 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   // A queued launch is fired later from a headless Claude Code in auto mode, where Claude Code's classifier approves the fire.
   const autoOff = opts.queue ? autoModeRefusal(readManagedPolicy(env)) : null;
   const prepared = updateRegistry(paths, (reg) => {
+    // Each launch also deletes what sessions closed more than 14 days ago left on disk.
+    collectGarbage(paths, reg, opts.now);
     const ahead = queuedLaunches(Object.values(reg.sessions));
     const full = activeCount(reg, opts.now) + ahead.length >= config.watch.max_open;
     if (full && !opts.queue) {
@@ -243,8 +245,7 @@ type AutoPlan = { patterns: string[]; mirrored: string[]; unblock: boolean; note
 
 /**
  * What automatic permission preflight writes for this launch: the suggested allow patterns and prefix rules, through
- * the same plan and filters as `kharos permissions hook diff`, with no broad pattern of its own; the
- * organization's ask rules are mirrored while a remembered mirror confirmation matches the managed settings.
+ * the hook's plan and filters, with no broad pattern of its own, and the unblock preset while it is confirmed.
  */
 function planAuto(paths: Paths, config: Config, profile: Profile, instruction: string, policy: ManagedPolicy, forge: Forge, now: number): AutoPlan {
   if (!config.permission_hook) return { skipped: 'preflight_auto is on, but permission_hook is off, so nothing was applied' };
@@ -259,32 +260,25 @@ function planAuto(paths: Paths, config: Config, profile: Profile, instruction: s
   const unreadable = [SETTINGS_PATH, HOOK_SCRIPT_PATH, HOOK_RULES_PATH].filter((p) => snap.unreadable.has(p));
   if (unreadable.length) return { skipped: `${unreadable.join(', ')} could not be read as text; nothing was applied` };
   const history = readHistory(paths, profile.repo);
-  const confirmation = confirmationState(loadConfirmation(paths, 'mirror'), policy);
-  const report = buildPreflight({ snapshot: snap, repo: profile.repo, policy, history: history.prompts, sessionsRead: history.sessions, instruction, confirmation, autoMirror: true });
+  const report = buildPreflight({ snapshot: snap, repo: profile.repo, policy, history: history.prompts, sessionsRead: history.sessions, instruction });
   const suggested = applicable(report);
   const patterns = [...suggested.allow, ...suggested.prefix];
-  // The organization's ask rules are mirrored only with the person's remembered confirmation, while
-  // its managed settings still match it, and never as broad rules.
-  // The unblock preset, with permission_unblock, only while its own remembered confirmation matches.
+  // The unblock preset, with permission_unblock, only while the person's remembered confirmation matches
+  // the organization's managed settings; it also mirrors the organization's Bash ask rules.
   const unblockState = config.permission_unblock ? confirmationState(loadConfirmation(paths, 'unblock'), policy) : null;
   const unblock = unblockState?.state === 'valid' && mirrorRefusal(policy) === null;
-  const mirror = !unblock && confirmation.state === 'valid' && mirrorRefusal(policy) === null;
-  const notes: string[] = [];
+  let note: string | null = null;
   if (unblockState && !unblock) {
     const refusal = mirrorRefusal(policy);
-    notes.push(
-      refusal
-        ? `the unblock preset was not applied: ${refusal}`
-        : `the unblock preset was not applied: ${unblockState.state === 'changed' ? describeConfirmation(unblockState, 'unblock') : 'it is not confirmed'}; \`kharos permissions unblock-all show\` lists what it opens and confirms it again, in one step`,
-    );
+    note = refusal
+      ? `the unblock preset was not applied: ${refusal}`
+      : `the unblock preset was not applied: ${unblockState.state === 'changed' ? describeConfirmation(unblockState, 'unblock') : 'it is not confirmed'}; /kharos:permissions lists what it opens and confirms it again, in one step`;
   }
-  if (!unblock && confirmation.state === 'changed') notes.push(`${describeConfirmation(confirmation)}, so the organization's ask rules were not mirrored: \`kharos permissions hook diff --mirror\` in a checkout asks again`);
-  const note = notes.length ? notes.join('; ') : null;
-  if (patterns.length === 0 && !mirror && !unblock) return { skipped: `the preflight found no narrow rule to apply${note ? `; ${note}` : ''}` };
+  if (patterns.length === 0 && !unblock) return { skipped: `the preflight found no narrow rule to apply${note ? `; ${note}` : ''}` };
   let changes: FileChange[];
   let mirrored: string[] = [];
   try {
-    const plan = planHook(hookFilesOf(snap), { ...EMPTY_CHANGE, allow: suggested.allow, prefix: suggested.prefix, mirror, unblock: unblock ? 'on' : null }, policy);
+    const plan = planHook(hookFilesOf(snap), { allow: suggested.allow, prefix: suggested.prefix, unblock }, policy);
     if (!plan.token) return { skipped: `the suggested rules are on the branch already${note ? `; ${note}` : ''}` };
     changes = plan.changes;
     mirrored = plan.mirror?.converted ?? [];

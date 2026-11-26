@@ -17,7 +17,7 @@ import path from 'node:path';
 import { claudeBin, readAuthStatus } from './account.ts';
 import { clean } from './body.ts';
 import { nextCall } from './commands.ts';
-import { detachedSpawner, detachFollower, ROLE_ENV, type Spawner } from './follow.ts';
+import { detachedSpawner, detachFollower, type Spawner } from './follow.ts';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { pidAlive } from './lease.ts';
@@ -25,7 +25,7 @@ import { deliver } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, findSession, leftToPerson, loadRegistry, MAX_FIRE_TRIES, queuedLaunches, updateRegistry, type Session } from './registry.ts';
 import { watchConfig } from './track.ts';
-import { PLUGIN_ROOT } from './wait.ts';
+import { PLUGIN_ROOT, ROLE_ENV } from './wait.ts';
 
 /** The wait before a queued launch whose fire did not go through is tried again. */
 export const RETRY_AFTER_MS = 10 * 60_000;

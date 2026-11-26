@@ -14,11 +14,13 @@ import { loadConfig, type OutputConfig } from './config.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { claimFollower, followerMayBeStarting, LEASE_STALE_MS, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import { childEnv } from './outputs/env.ts';
-import { loadWatch } from './state.ts';
+import { clean } from './body.ts';
 import { deliver, filePath } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
-import { acknowledge, followersToStart, followTargets, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
+import { acknowledge, followersToStart, followTargets, ROLE_ENV, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
+
+export { ROLE_ENV } from './wait.ts';
 
 /** Claude Code runs without a terminal: `claude -p` says `sdk-cli`, the Agent SDK `sdk-ts` or `sdk-py`. */
 export function isHeadless(env: NodeJS.ProcessEnv): boolean {
@@ -125,12 +127,6 @@ export type Spawner = (args: string[], log: string, env: NodeJS.ProcessEnv) => n
 
 const CLI = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './cli.ts' : './cli.js', import.meta.url));
 
-/**
- * Set in the environment of the processes kharos starts itself (a follower process, a reader, a fire of a
- * queued launch), whose Claude Code sessions are kharos's own: the Stop hook does nothing there.
- */
-export const ROLE_ENV = 'KHAROS_ROLE';
-
 export const detachedSpawner: Spawner = (args, log, env) => {
   fs.mkdirSync(path.dirname(log), { recursive: true });
   const fd = fs.openSync(log, 'a', 0o600);
@@ -197,7 +193,7 @@ export function outputsLine(paths: Paths, ids: string[]): string {
 }
 
 /**
- * What `/kharos:run` and `/kharos:follow` start: in an interactive Claude Code, the prompts of
+ * What `/kharos:run` starts: in an interactive Claude Code, the prompts of
  * kharos:follow agents; in a headless one, follower processes of their own, unless the person set
  * CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 so the headless process waits for its agents.
  */
@@ -219,24 +215,18 @@ export function startFollowers(paths: Paths, ref: string | null, now: number, en
   return lines.join('\n');
 }
 
-/** Whether the watcher beat within three of its intervals: it reads the sessions nobody follows. */
-function watcherLive(paths: Paths, now: number): boolean {
-  const w = loadWatch(paths);
-  return w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
-}
-
 /**
  * What the Stop hook does at every turn end: starts a follower process for each open session that no
  * follower reads (no live lease and no handover) and whose launch is past its first minute. It reads only
- * local files, and starts nothing while the watcher runs, which reads those sessions already. A follower
- * process is started under the lease's lock, so two turn ends never start two for one session.
+ * local files. A follower process is started under the lease's lock, so two turn ends never start two for
+ * one session.
  */
 export function rearmFollowers(paths: Paths, now: number, env: NodeJS.ProcessEnv, spawner: Spawner = detachedSpawner): { started: string[]; lines: string[] } {
   const open = Object.values(loadRegistry(paths).sessions).filter(isFollowed);
   if (open.length === 0) return { started: [], lines: [] };
   const live = liveFollowers(paths, now);
   const missing = open.filter((s) => !live.has(s.id) && !followerMayBeStarting(s, now)).sort((a, b) => a.id.localeCompare(b.id));
-  if (missing.length === 0 || watcherLive(paths, now)) return { started: [], lines: [] };
+  if (missing.length === 0) return { started: [], lines: [] };
   const started: string[] = [];
   const lines: string[] = [];
   for (const s of missing) {
@@ -245,7 +235,38 @@ export function rearmFollowers(paths: Paths, now: number, env: NodeJS.ProcessEnv
     if ('started' in r) {
       started.push(s.id);
       lines.push(`kharos: ${s.id} had no follower; a follower process reads it now (pid ${r.started}), and writes to ${log}.`);
-    } else if ('failed' in r) lines.push(`kharos: ${s.id} has no follower, and a follower process could not be started; type /kharos:follow ${s.id}.`);
+    } else if ('failed' in r) lines.push(`kharos: ${s.id} has no follower, and a follower process could not be started; run kharos follow ${s.id} --detach.`);
   }
   return { started, lines };
+}
+
+const TITLE_MAX = 40;
+
+/** A session's id, with its title when the title is short enough for one line. */
+function named(s: Session): string {
+  const title = clean(s.title, TITLE_MAX + 1);
+  return title && title.length <= TITLE_MAX ? `${s.id} "${title}"` : s.id;
+}
+
+export interface Health {
+  ok: boolean;
+  line: string;
+}
+
+/** Fails when a session is open that no live follower reads: nobody would notice when it needs the person. */
+export function health(paths: Paths, now: number): Health {
+  const open = Object.values(loadRegistry(paths).sessions)
+    .filter(isFollowed)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  if (open.length === 0) return { ok: true, line: 'kharos: no open session' };
+  const followers = liveFollowers(paths, now);
+  const nobody = open.filter((s) => !followers.has(s.id) && !followerMayBeStarting(s, now));
+  if (nobody.length === 0) return { ok: true, line: `kharos: ${open.length} open session(s), each read by a follower` };
+  const more = open.length - nobody.length;
+  return {
+    ok: false,
+    line:
+      `kharos: ${nobody.length} open session(s) with no follower: ${nobody.map(named).join(', ')}${more ? ` (${more} more read by a follower)` : ''}. ` +
+      `The next turn end of a Claude Code session with kharos starts a follower process for each; kharos follow <id> --detach starts one now.`,
+  };
 }

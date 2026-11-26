@@ -98,7 +98,7 @@ export interface Session {
   /** The permission prompt the session waits on, while it is open; absent in records written before it existed. */
   permission?: PermissionRequest | null;
   result: Result;
-  /** A next older page the watcher must read because the newest page did not reach the events it had. */
+  /** A next older page a reader must read because the newest page did not reach the events it had. */
   pending_cursor: string | null;
   /** Some read reached the start of the session, so a missing init line means it is still provisioning. */
   seen_start: boolean;
@@ -114,7 +114,7 @@ export interface Session {
   error: string | null;
   /**
    * The rules of the kharos permission hook on the branch at launch, read only when permission_hook is
-   * on; null when the hook would not answer there. The watcher attributes the hook's decisions with them.
+   * on; null when the hook would not answer there. kharos attributes the hook's decisions with them.
    */
   permission_hook?: HookRules | null;
   /**
@@ -195,7 +195,7 @@ export function startedAt(s: Pick<Session, 'opened_at' | 'fired_at' | 'created_a
   return Date.parse(s.opened_at ?? s.fired_at ?? s.created_at);
 }
 
-/** Sessions the watcher still follows: launched or launching, not terminal, not closed. */
+/** Sessions kharos still follows: launched or launching, not terminal, not closed. */
 export function isFollowed(s: Session): boolean {
   if (s.step === 'closed' || s.step === 'refused' || s.step === 'queued' || s.step === 'prepared' || s.step === 'routine_created') return false;
   return !TERMINAL_STATES.has(s.state);

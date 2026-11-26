@@ -7,7 +7,7 @@ import { enqueue, readOutbox, type KharosEvent } from '../src/events.ts';
 import { checkTarget, statusLine, writeStatus } from '../src/outputs/firstmate.ts';
 import { preToolUse } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
-import { deliver, deliveryLine, loadUndelivered, matches, MAX_ATTEMPTS, type SendCtx } from '../src/outputs/index.ts';
+import { deliver, loadUndelivered, matches, MAX_ATTEMPTS, type SendCtx } from '../src/outputs/index.ts';
 import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 function event(over: Partial<KharosEvent> = {}): KharosEvent {
@@ -125,7 +125,6 @@ test('outputs: an unreadable configuration keeps every event queued and says why
   enqueue(sb.paths, [event(), event({ id: 'k-0001:finished:1', event: 'session.finished', class: 'terminal' })]);
   const r = await deliver(ctx(sb));
   assert.match(r.configError ?? '', /invalid JSON/);
-  assert.match(deliveryLine(r), /stay queued until the configuration can be read/);
   assert.equal(readOutbox(sb.paths).length, 2);
 });
 

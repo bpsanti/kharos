@@ -1,5 +1,5 @@
 // The log of the kharos permission hook's decisions. The hook runs in the cloud session, where kharos
-// state does not exist, so the watcher writes the log here: each `permission prompt` line of a session
+// state does not exist, so kharos writes the log here as it reads: each `permission prompt` line of a session
 // whose branch had the hook at launch goes through the same decision code the hook runs, with the rules
 // read from that branch. A line records the time, the session, the tool, the decision and the rule that
 // matched; never the command or any other input of the call.
@@ -131,6 +131,6 @@ export function formatHookDecisions(paths: Paths, q: ApprovalQuery): string {
           : `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : d.source === 'prefix' ? 'prefix rule' : 'allow pattern'} ${d.rule}`;
     return `${d.at.slice(0, 19)}Z  ${d.kharos}  ${d.tool}  ${what}`;
   });
-  const head = `${rows.length} ${q.all ? 'decision(s)' : 'approval(s)'} of the kharos permission hook, as the watcher read them from the session logs${shown.length < rows.length ? `; the last ${shown.length}` : ''}:`;
+  const head = `${rows.length} ${q.all ? 'decision(s)' : 'approval(s)'} of the kharos permission hook, as kharos read them from the session logs${shown.length < rows.length ? `; the last ${shown.length}` : ''}:`;
   return [head, ...lines].join('\n');
 }

@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { decide, readHookRules } from '../cloud/kharos-permission.mjs';
-import { hookChange, main, parseArgs } from '../src/cli.ts';
+import { main } from '../src/cli.ts';
 import { close, show } from '../src/commands.ts';
 import { parseConfig } from '../src/config.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
@@ -12,8 +11,8 @@ import { ghForge, type Forge, type Gh, type GhResult, type RepoSnapshot } from '
 import { preToolUse, postToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { parseManagedPolicy, type ManagedPolicy } from '../src/managed-policy.ts';
-import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, planHook, shippedScript } from '../src/permission-hook.ts';
-import { changeFlags, EMPTY_CHANGE, switchPreflightAuto, switchUnblockAuto } from '../src/permissions.ts';
+import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, planHook, shippedScript, type HookChange } from '../src/permission-hook.ts';
+import { preflight } from '../src/permissions.ts';
 import { applicable, buildPreflight, commandLines, formatPreflight, selectFiles, simpleCommands, toCandidate, type HistoryPrompt, type PreflightReport } from '../src/preflight.ts';
 import { loadRegistry, logPath, updateRegistry } from '../src/registry.ts';
 import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -27,6 +26,7 @@ const POLICY_JSON = {
 };
 const POLICY = parseManagedPolicy(JSON.stringify(POLICY_JSON), '/home/test/.claude/remote-settings.json');
 const NO_POLICY: ManagedPolicy = { status: 'absent', file: '/home/test/.claude/remote-settings.json' };
+const NO_CHANGE: HookChange = { allow: [], prefix: [], unblock: false };
 
 const PACKAGE = JSON.stringify({ scripts: { 'db:count': 'psql -h 127.0.0.1 -U dev -d app -c "select count(*) from orders"', test: 'node --test' } });
 const DB_SCRIPT = ['#!/bin/sh', '# restore the dev database', 'PGPASSWORD=dev pg_restore -h 127.0.0.1 -U dev -d app "$1"', 'psql -h prod.example -c "select 1"'].join('\n');
@@ -98,11 +98,9 @@ test('preflight: a prompt of an earlier session becomes a prefix rule of its pro
   assert.equal(r.suggestions.filter((s) => s.status === 'review').length, 1);
   assert.deepEqual(r.suggestions.find((s) => s.pattern === 'Bash(git push:*)')?.sources, [{ kind: 'history', session: 'k-0001' }], 'the same prefix from two prompts is one rule');
   assert.deepEqual(applicable(r).allow, []);
-  const text = formatPreflight(r, { addCommand: 'kharos permissions hook diff {flags} /work/demo', after: [], hookOn: true, auto: false });
+  const text = formatPreflight(r, { after: [], auto: false });
   assert.match(text, /\d\. psql <any arguments>\n {5}-> Bash\(psql:\*\)\n {5}-> the organization's ask rule Bash\(psql:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows psql with any arguments/);
-  assert.match(text, /kharos permissions hook diff .*--allow-prefix 'Bash\(psql:\*\)'.* \/work\/demo/);
-  assert.match(text, /review before adding: Bash\(git:\*\) \(the subcommand of git could not be told apart from its options; it would allow git with any arguments; so it is not in the command below/);
-  assert.doesNotMatch(text, /--allow-prefix 'Bash\(git:\*\)'/);
+  assert.match(text, /review before adding: Bash\(git:\*\) \(the subcommand of git could not be told apart from its options; it would allow git with any arguments; so it is never applied on its own\)/);
   for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin', 'feature-x', '-n prod', 'view 12', '--no-pager', 'x.yml', '--unknown-option']) assert.equal(text.includes(word), false, word);
 });
 
@@ -148,10 +146,9 @@ test('preflight: a prefix rule that a deny rule covers, or whose program runs ot
 
 test('permission hook: prefix rules are planned with the same deny and broad checks, written to the rules file and read back by the hook', () => {
   const empty = { settings: null, script: null, rules: null };
-  const plan = planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(psql:*)', 'Bash(git push:*)'] }, POLICY);
+  const plan = planHook(empty, { ...NO_CHANGE, prefix: ['Bash(psql:*)', 'Bash(git push:*)'] }, POLICY);
   const written = plan.changes.find((c) => c.path === HOOK_RULES_PATH)?.after ?? '';
   assert.deepEqual(JSON.parse(written), { version: 1, allow: [], prefix: ['Bash(psql:*)', 'Bash(git push:*)'], mirror: [] });
-  assert.match(plan.lines.join('\n'), /prefix rules, any arguments \(2\): Bash\(psql:\*\), Bash\(git push:\*\)/);
   const rules = readHookRules(JSON.parse(written));
   const ask = (command: string) => decide({ tool_name: 'Bash', tool_input: { command } }, rules);
   assert.deepEqual(ask(`psql -h x -c 'select 1'`), { behavior: 'allow', rule: 'Bash(psql:*)', source: 'prefix', broad: false });
@@ -160,16 +157,13 @@ test('permission hook: prefix rules are planned with the same deny and broad che
   assert.equal(ask(`psql -h x -c 'select 1' && rm -rf /tmp/x`).behavior, 'deny', 'a chained command is never allowed');
   assert.equal(ask('PGPASSWORD=x psql -h x').behavior, 'deny', 'nor one with a variable in front');
   // The organization's deny rule Bash(psql -h prod.example:*) covers this prefix; a program that runs other commands is broad.
-  assert.throws(() => planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(psql -h prod.example:*)'] }, POLICY), /prefix rule "Bash\(psql -h prod\.example:\*\)" is refused: the deny rule Bash\(psql -h prod\.example:\*\) covers it/);
-  assert.throws(() => planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(bash:*)'] }, POLICY), /is refused: it is broad \(bash runs other commands/);
-  assert.throws(() => planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(git *:*)'] }, POLICY), /its words must be literal/);
+  assert.throws(() => planHook(empty, { ...NO_CHANGE, prefix: ['Bash(psql -h prod.example:*)'] }, POLICY), /prefix rule "Bash\(psql -h prod\.example:\*\)" is refused: the deny rule Bash\(psql -h prod\.example:\*\) covers it/);
+  assert.throws(() => planHook(empty, { ...NO_CHANGE, prefix: ['Bash(bash:*)'] }, POLICY), /is refused: it is broad \(bash runs other commands/);
+  assert.throws(() => planHook(empty, { ...NO_CHANGE, prefix: ['Bash(git *:*)'] }, POLICY), /its words must be literal/);
   assert.throws(() => readHookRules({ version: 1, allow: [], prefix: ['Bash(sh:*)'], mirror: [] }), /prefix rule "Bash\(sh:\*\)" is not valid: it is broad/);
-  // The flags state the same change, word for word.
-  const change = hookChange(parseArgs(['--allow-prefix', 'Bash(git push:*)', '--drop', 'Bash(psql:*)']));
-  assert.deepEqual([change.prefix, change.drop], [['Bash(git push:*)'], ['Bash(psql:*)']]);
-  assert.deepEqual(changeFlags(change), ['--allow-prefix', `'Bash(git push:*)'`, '--drop', `'Bash(psql:*)'`]);
-  const dropped = planHook({ ...empty, rules: written }, { ...EMPTY_CHANGE, drop: ['Bash(psql:*)'] }, POLICY);
-  assert.deepEqual(JSON.parse(dropped.changes.find((c) => c.path === HOOK_RULES_PATH)?.after ?? '').prefix, ['Bash(git push:*)']);
+  // A later launch adds to the rules the branch has, and keeps them.
+  const more = planHook({ ...empty, rules: written }, { ...NO_CHANGE, prefix: ['Bash(git push:*)', 'Bash(pg_dump:*)'] }, POLICY);
+  assert.deepEqual(JSON.parse(more.changes.find((c) => c.path === HOOK_RULES_PATH)?.after ?? '').prefix, ['Bash(psql:*)', 'Bash(git push:*)', 'Bash(pg_dump:*)']);
 });
 
 test('automatic preflight: earlier prompts reach the side branch as prefix rules, and none of their words do', () => {
@@ -246,7 +240,7 @@ test('preflight: earlier prompts on the same repository are prefix suggestions, 
   assert.deepEqual([psql?.status, psql?.sources], ['suggested', [{ kind: 'history', session: 'k-0001' }]]);
   const fromRepo = r.suggestions.find((s) => s.pattern === 'psql -h 127.0.0.1 -U dev -d app -c *');
   assert.deepEqual([fromRepo?.status, fromRepo?.coveredBy], ['covered', 'Bash(psql:*)']);
-  assert.match(formatPreflight(r, { addCommand: null, after: [], hookOn: true, auto: false }), /covered by the suggested prefix rule Bash\(psql:\*\): psql -h 127\.0\.0\.1 -U dev -d app -c \*/);
+  assert.match(formatPreflight(r, { after: [], auto: false }), /covered by the suggested prefix rule Bash\(psql:\*\): psql -h 127\.0\.0\.1 -U dev -d app -c \*/);
   const redis = r.suggestions[0];
   assert.equal(redis?.pattern, 'Bash(redis-cli:*)', 'what the instruction names comes first');
   assert.equal(redis?.mentioned, true);
@@ -287,48 +281,30 @@ test('preflight: the repository ask rules count too, and with no managed setting
   assert.match(r.notes.join('\n'), /no copy of the organization's managed settings/);
 });
 
-test('preflight: the output lists likely prompt, rule and why, and the exact command that adds them', () => {
+test('preflight: the output lists likely prompt, rule and why, and what answers them at launch', () => {
   const r = report({ 'package.json': PACKAGE }, { history: [{ session: 'k-0001', tool: 'WebFetch', command: null }] });
-  const text = formatPreflight(r, { addCommand: 'kharos permissions hook diff {flags} /work/demo', after: ['then commit it'], hookOn: false, auto: false });
+  const text = formatPreflight(r, { after: ['unblock all answers them'], auto: false });
   assert.match(text, /^permission preflight for example\/demo@main:/);
   assert.match(text, /likely prompt -> suggested narrow rule -> why:\n  1\. psql -h 127\.0\.0\.1 -U dev -d app -c <arg>\n     -> --allow 'psql -h 127\.0\.0\.1 -U dev -d app -c \*'\n     -> the organization's ask rule Bash\(psql:\*\) prompts in every cloud session; the repository runs it \(package\.json\)/);
-  assert.match(text, /Bash\(redis-cli:\*\) \(the organization's ask rule\)\n     -> no narrow rule to suggest: nothing in the repository or in earlier sessions runs redis-cli\n     -> if the task needs it, add its exact form .*, or mirror the organization's ask rules/);
-  assert.match(text, /to add them:\n  kharos permissions hook enable {3}\(the hook is opt-in and off\)\n  kharos permissions hook diff --allow 'psql -h 127\.0\.0\.1 -U dev -d app -c \*' \/work\/demo\n  then commit it/);
+  assert.match(text, /Bash\(redis-cli:\*\) \(the organization's ask rule\)\n     -> no narrow rule to suggest: nothing in the repository or in earlier sessions runs redis-cli\n     -> if the task needs it, its exact form as a narrow allow rule \(redis-cli and its words, \* for one argument\)$/m);
+  assert.match(text, /\nat launch:\n  unblock all answers them\n/);
   assert.match(text, /other tools that prompted in earlier sessions \(the hook answers only Bash calls\): WebFetch \(1\)/);
   assert.match(text, /preflight: 1 rule\(s\) to suggest, 2 ask rule\(s\) with none; automatic preflight off$/);
-  const bypassOff = buildPreflight({ snapshot: snapshot({}), repo: null, policy: parseManagedPolicy(JSON.stringify({ permissions: { ask: ['Bash(redis-cli:*)'], disableBypassPermissionsMode: 'disable' } }), 'f'), history: [], sessionsRead: 0, instruction: '' });
-  assert.doesNotMatch(formatPreflight(bypassOff, { addCommand: null, after: [], hookOn: true, auto: false }), /mirror/, 'no mirroring offered where kharos refuses it');
+  assert.doesNotMatch(text, /mirror|kharos permissions hook/, 'no removed command is named');
+  assert.doesNotMatch(formatPreflight(report({ 'README.md': 'nothing' }, { policy: NO_POLICY }), { after: ['x'], auto: false }), /at launch/, 'nothing to answer, nothing said');
 });
 
-// --- the CLI on a local checkout -------------------------------------------------------------
-
-function checkoutWith(sb: Sandbox, files: Record<string, string>): string {
-  const dir = path.join(sb.dir, 'checkout');
-  const git = (...args: string[]) => {
-    const r = spawnSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.test', ...args], { encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stderr);
-  };
-  for (const [f, text] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
-    fs.writeFileSync(path.join(dir, f), text);
-  }
-  git('init', '-q', '-b', 'main');
-  git('remote', 'add', 'origin', 'git@github.com:example/demo.git');
-  git('add', '.');
-  git('commit', '-q', '-m', 'init');
-  return fs.realpathSync(dir);
-}
+// --- the launch preflight --------------------------------------------------------------------
 
 function writePolicy(sb: Sandbox): void {
   fs.mkdirSync(path.join(sb.dir, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(sb.dir, '.claude', 'remote-settings.json'), JSON.stringify(POLICY_JSON));
 }
 
-test('preflight: `kharos permissions preflight <checkout>` reads the checkout, the managed settings and earlier logs', async () => {
+test('preflight: `kharos permissions preflight` reads the launch branch, the managed settings and earlier logs', () => {
   const sb = sandbox();
   writeConfig(sb, { permission_hook: true });
   writePolicy(sb);
-  const dir = checkoutWith(sb, { 'package.json': PACKAGE, 'docs/ops.md': '```bash\nredis-cli -h 127.0.0.1 ping\n```\n' });
   // An earlier session on the same repository waited on a pg_dump prompt.
   updateRegistry(sb.paths, (reg) => {
     reg.sessions['k-0001'] = { id: 'k-0001', repo: 'https://github.com/example/demo' } as never;
@@ -338,30 +314,25 @@ test('preflight: `kharos permissions preflight <checkout>` reads the checkout, t
   fs.mkdirSync(sb.paths.logs, { recursive: true });
   fs.writeFileSync(logPath(sb.paths, 'k-0001'), prompt('pg_dump -h 127.0.0.1 -U dev app') + '\n');
   fs.writeFileSync(logPath(sb.paths, 'k-0002'), prompt('pg_dump -h other') + '\n');
-  const r = await captured(() => main(['permissions', 'preflight', dir], sb.env, () => 'Dump the orders table with pg_dump.'));
-  assert.equal(r.value, 0, r.stderr);
-  assert.match(r.stdout, /1\. pg_dump <any arguments>\n     -> Bash\(pg_dump:\*\)\n     -> the organization's ask rule Bash\(pg_dump:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows pg_dump with any arguments\n/);
-  assert.match(r.stdout, /redis-cli -h 127\.0\.0\.1 ping[\s\S]*the repository runs it \(docs\/ops\.md\)/);
-  assert.doesNotMatch(r.stdout, /pg_dump -h/, 'no word of an earlier prompt is shown');
-  assert.doesNotMatch(r.stdout, /the instruction mentions/, 'no instruction is read without --stdin or --file');
-  assert.match(r.stdout, new RegExp(`kharos permissions hook diff --allow-prefix 'Bash\\(pg_dump:\\*\\)' --allow .* ${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`));
-  assert.doesNotMatch(r.stdout, /kharos permissions hook enable/, 'the hook is on already');
-  const withTask = await captured(() => main(['permissions', 'preflight', dir, '--stdin'], sb.env, () => 'Dump the orders table with pg_dump.'));
-  assert.match(withTask.stdout, /the instruction mentions pg_dump/);
+  const forge = fakeForge({ 'package.json': PACKAGE, 'docs/ops.md': '```bash\nredis-cli -h 127.0.0.1 ping\n```\n' });
+  const out = preflight(sb.paths, { instruction: '', forge, now: T0 }, sb.env);
+  assert.match(out, /1\. pg_dump <any arguments>\n     -> Bash\(pg_dump:\*\)\n     -> the organization's ask rule Bash\(pg_dump:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows pg_dump with any arguments\n/);
+  assert.match(out, /redis-cli -h 127\.0\.0\.1 ping[\s\S]*the repository runs it \(docs\/ops\.md\)/);
+  assert.doesNotMatch(out, /pg_dump -h/, 'no word of an earlier prompt is shown');
+  assert.doesNotMatch(out, /the instruction mentions/);
+  assert.match(out, /\nat launch:\n  \/kharos:permissions \(unblock all\) answers every prompt at each launch, on a side branch of example\/demo made from main, after one confirmation; main is never changed\.\n/);
+  assert.match(preflight(sb.paths, { instruction: 'Dump the orders table with pg_dump.', forge, now: T0 }, sb.env), /the instruction mentions pg_dump/);
 });
 
-test('preflight: automatic mode is switched on only while the permission hook is on', async () => {
+test('preflight: the CLI reads only the branch a launch profile starts on, never a checkout folder', async () => {
   const sb = sandbox();
   writeConfig(sb);
-  assert.throws(() => switchPreflightAuto(sb.paths, true), /kharos permissions hook enable/);
-  writeConfig(sb, { permission_hook: true });
-  assert.match(switchPreflightAuto(sb.paths, true), /preflight_auto is on/);
-  assert.equal(JSON.parse(fs.readFileSync(sb.paths.config, 'utf8')).preflight_auto, true);
-  const r = await captured(() => main(['permissions', 'auto', 'preflight', 'maybe'], sb.env));
+  const r = await captured(() => main(['permissions', 'preflight', '/some/checkout'], sb.env, () => ''));
   assert.equal(r.value, 1);
-  assert.match(switchPreflightAuto(sb.paths, false), /applies nothing/);
-  assert.equal((await captured(() => main(['permissions', 'auto', 'preflight', 'on'], sb.env))).value, 0);
-  assert.equal(JSON.parse(fs.readFileSync(sb.paths.config, 'utf8')).preflight_auto, true);
+  assert.match(r.stderr, /reads the branch a launch profile starts on, not a checkout folder/);
+});
+
+test('config: automatic preflight is a switch of its own, off by default', () => {
   assert.throws(() => parseConfig({ version: 1, preflight_auto: 'yes' }), /preflight_auto must be true or false/);
   assert.equal(parseConfig({ version: 1 }).preflight_auto, false);
 });
@@ -486,13 +457,13 @@ test('automatic preflight: the narrow rules go to a side branch kharos/<id>, the
   const s = autoPrepare(sb, forge);
   assert.equal(s.revision, 'kharos/k-0001');
   assert.deepEqual(s.preflight, { status: 'applied', branch: 'kharos/k-0001', base: 'main', commit: N, applied: ['psql -h 127.0.0.1 -U dev -d app -c *'], mirrored: [], unblock: false, note: null, deleted_at: null });
-  // The three files of the hook, through the same plan as `kharos permissions hook diff`: no broad rule, no mirror.
+  // The three files of the hook, through the hook's own plan: no broad rule, no mirror.
   const written = Object.fromEntries((forge.created[0]?.files ?? []).map((f) => [f.path, f.content]));
   assert.deepEqual(Object.keys(written).sort(), ['.claude/hooks/kharos-permission.mjs', '.claude/kharos-permissions.json', '.claude/settings.json']);
   assert.deepEqual(JSON.parse(written[HOOK_RULES_PATH] as string), { version: 1, allow: ['psql -h 127.0.0.1 -U dev -d app -c *'], mirror: [] });
   assert.equal(written[HOOK_SCRIPT_PATH], shippedScript());
   assert.deepEqual(JSON.parse(written['.claude/settings.json'] as string).permissions, { deny: ['Bash(rm:*)'] }, 'every other key of the settings stays');
-  // The watcher attributes the hook's decisions with the rules of the side branch.
+  // kharos attributes the hook's decisions with the rules of the side branch.
   assert.equal(decide({ tool_name: 'Bash', tool_input: { command: 'psql -h 127.0.0.1 -U dev -d app -c "select 1"' } }, s.permission_hook!).behavior, 'allow');
   // The log of what was applied, per session.
   const logged = JSON.parse(fs.readFileSync(sb.paths.preflight, 'utf8').trim());
@@ -583,68 +554,12 @@ test('doctor: says whether automatic preflight is on, and warns when it cannot a
 
 // --- remembered confirmations, and the unblock preset ------------------------------------------------
 
-async function kharos(sb: Sandbox, ...argv: string[]): Promise<{ code: number; out: string; err: string }> {
-  const r = await captured(() => main(argv, sb.env, () => ''));
-  return { code: r.value, out: r.stdout, err: r.stderr };
-}
-
-const tokenOf = (out: string) => /change ([0-9a-f]{12}):/.exec(out)?.[1] ?? '';
-
 function writePolicyJson(sb: Sandbox, policy: unknown): void {
   fs.mkdirSync(path.join(sb.dir, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(sb.dir, '.claude', 'remote-settings.json'), JSON.stringify(policy));
 }
 
-test('mirror confirmation: asked once, reused while the managed settings match, asked again with what changed', async () => {
-  const sb = sandbox();
-  writeConfig(sb, { permission_hook: true });
-  const policy = { permissions: { ask: ['Bash(psql:*)'], deny: [] } };
-  writePolicyJson(sb, policy);
-  const dir = checkoutWith(sb, { 'README.md': '# demo\n' });
-  const first = await kharos(sb, 'permissions', 'hook', 'diff', '--mirror', dir);
-  assert.match(first.out, /--mirror --org-confirmed/);
-  assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(first.out), '--mirror', '--org-confirmed', dir)).code, 0);
-  // Take the mirror out and put it back: no second confirmation.
-  const off = await kharos(sb, 'permissions', 'hook', 'diff', '--unmirror', dir);
-  assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(off.out), '--unmirror', dir)).code, 0);
-  const again = await kharos(sb, 'permissions', 'hook', 'diff', '--mirror', dir);
-  assert.match(again.out, /you confirmed mirroring the organization's ask rules on \d{4}-\d\d-\d\d, and the organization's managed settings have not changed since: no new confirmation is needed/);
-  assert.doesNotMatch(again.out, /--org-confirmed/);
-  assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(again.out), '--mirror', dir)).code, 0);
-  // Broad mirroring is not covered by a narrow confirmation.
-  writePolicyJson(sb, { permissions: { ask: ['Bash(psql:*)', 'Bash(mysql:*)', 'Bash(*.rds.amazonaws.com*)'], deny: [] } });
-  const changed = await kharos(sb, 'permissions', 'hook', 'diff', '--mirror', dir);
-  assert.match(changed.out, /changed since you confirmed mirroring the organization's ask rules on .* \(ask rules added: Bash\(mysql:\*\), Bash\(\*\.rds\.amazonaws\.com\*\)\): it needs your confirmation again/);
-  assert.match(changed.out, /--mirror --org-confirmed/);
-  const refused = await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(changed.out), '--mirror', dir);
-  assert.equal(refused.code, 1);
-  assert.match(refused.err, /written only with --org-confirmed.*ask rules added/);
-  assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(changed.out), '--mirror', '--org-confirmed', dir)).code, 0);
-  const broad = await kharos(sb, 'permissions', 'hook', 'diff', '--mirror', '--broad', dir);
-  assert.match(broad.out, /covered narrow rules only, and this change mirrors broad ones/);
-  assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(broad.out), '--mirror', '--broad', '--org-confirmed', dir)).code, 0);
-});
 
-test('automatic preflight: the organization ask rules are mirrored with a remembered confirmation that still matches, and never broad ones', async () => {
-  const { saveConfirmation } = await import('../src/org-confirmations.ts');
-  const sb = sandbox();
-  if (POLICY.status !== 'found') throw new Error('test policy');
-  saveConfirmation(sb.paths, 'mirror', POLICY, T0);
-  const forge = fakeForge({ 'package.json': PACKAGE });
-  const s = autoPrepare(sb, forge);
-  assert.equal(s.preflight?.status, 'applied');
-  if (s.preflight?.status !== 'applied') return;
-  assert.deepEqual(s.preflight.mirrored, ['Bash(psql:*)', 'Bash(pg_dump:*)', 'Bash(redis-cli:*)']);
-  const rules = JSON.parse(forge.created[0]?.files.find((f) => f.path === HOOK_RULES_PATH)?.content ?? '{}');
-  assert.equal(rules.broad, undefined);
-  assert.equal(rules.unblock, undefined);
-
-  const changed = sandbox();
-  saveConfirmation(changed.paths, 'mirror', { ...POLICY, ask: ['Bash(psql:*)'] }, T0);
-  const s2 = autoPrepare(changed, fakeForge({ 'package.json': PACKAGE }));
-  assert.equal(s2.preflight?.status === 'applied' && s2.preflight.mirrored?.length, 0);
-  assert.match(s2.preflight?.status === 'applied' ? (s2.preflight.note ?? '') : '', /ask rules added: Bash\(pg_dump:\*\), Bash\(redis-cli:\*\), Bash, WebFetch.*were not mirrored/);
-});
 
 test('unblock: the hook allows every prompt of any tool, still naming a rule that matched, and never with unusable rules', () => {
   const rules = readHookRules({ version: 1, unblock: true, allow: ['psql -d *'], mirror: [] });
@@ -655,73 +570,25 @@ test('unblock: the hook allows every prompt of any tool, still naming a rule tha
   assert.equal(decide({ tool_name: 'WebFetch' }, { error: 'broken' }).behavior, 'deny');
 });
 
-test('unblock: refused when the organization disabled bypass mode, or with no copy of its managed settings', async () => {
-  const sb = sandbox();
-  writeConfig(sb, { permission_hook: true });
-  const dir = checkoutWith(sb, { 'README.md': '# demo\n' });
-  const none = await kharos(sb, 'permissions', 'unblock', dir);
-  assert.equal(none.code, 1);
-  assert.match(none.err, /the unblock preset: mirroring is unavailable: there is no copy/);
-  writePolicyJson(sb, { permissions: { ask: ['Bash(psql:*)'], disableBypassPermissionsMode: 'disable' } });
-  const disabled = await kharos(sb, 'permissions', 'unblock', dir);
-  assert.match(disabled.err, /the unblock preset: refused: the organization's managed settings set disableBypassPermissionsMode/);
-  assert.match((await kharos(sb, 'permissions', 'unblock', 'show')).out, /it is not available: refused/);
-});
 
-test('unblock: one confirmation of what it opens, for the managed settings fingerprint, then the diff and the write', async () => {
-  const sb = sandbox();
-  writeConfig(sb, { permission_hook: true });
-  writePolicyJson(sb, POLICY_JSON);
-  const dir = checkoutWith(sb, { 'README.md': '# demo\n', '.claude/settings.json': '{"permissions": {"deny": ["Bash(rm:*)"]}}\n' });
-  const shown = await kharos(sb, 'permissions', 'unblock', 'show');
-  assert.match(shown.out, /every permission prompt in this repository's cloud sessions is allowed, of any tool, with no person asked/);
-  assert.match(shown.out, /Amazon RDS, ElastiCache, DocumentDB, or MongoDB Atlas through a connection string/);
-  assert.match(shown.out, /what stays: the organization's deny rules \(1\)/);
-  const fp = /--fingerprint ([0-9a-f]{16})/.exec(shown.out)?.[1] ?? '';
-  const diff = await kharos(sb, 'permissions', 'unblock', dir);
-  assert.match(diff.out, /WARNING: this change turns on the unblock preset/);
-  assert.equal(diff.out, (await kharos(sb, 'permissions', 'hook', 'diff', '--unblock', dir)).out, 'the alias is the same diff as hook diff --unblock');
-  assert.match(diff.out, /first the person confirms what the unblock preset opens \(listed above\), once: `kharos permissions unblock-all show` confirms it/);
-  assert.doesNotMatch(diff.out, /--org-confirmed/, 'the unblock confirmation covers the mirroring');
-  const early = await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(diff.out), '--unblock', dir);
-  assert.equal(early.code, 1);
-  assert.match(early.err, /turns on the unblock preset, and the person has not confirmed what it opens/);
-  assert.equal((await kharos(sb, 'permissions', 'unblock', 'confirm', '--fingerprint', '0123456789abcdef')).code, 1);
-  assert.match((await kharos(sb, 'permissions', 'unblock', 'confirm', '--fingerprint', fp)).out, /confirmed the unblock preset/);
-  const wrote = await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(diff.out), '--unblock', dir);
-  assert.equal(wrote.code, 0, wrote.err);
-  const rules = JSON.parse(fs.readFileSync(path.join(dir, HOOK_RULES_PATH), 'utf8'));
-  assert.equal(rules.unblock, true);
-  assert.equal(rules.broad, true);
-  assert.deepEqual(rules.mirror, ['Bash(psql:*)', 'Bash(pg_dump:*)', 'Bash(redis-cli:*)', 'Bash'], 'every Bash ask rule, broad ones too');
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8')).permissions, { deny: ['Bash(rm:*)'] }, 'deny rules stay');
-  assert.match((await kharos(sb, 'permissions', 'hook', 'show', dir)).out, /any other prompt in a cloud session: allowed, by the unblock preset/);
-  const back = await kharos(sb, 'permissions', 'hook', 'diff', '--no-unblock', dir);
-  assert.match(back.out, /turns off the unblock preset/);
-  assert.equal((await kharos(sb, 'permissions', 'unblock', '--no-unblock', dir)).out, back.out, 'the alias with --no-unblock turns it off too');
-  assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(back.out), '--no-unblock', dir)).code, 0);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, HOOK_RULES_PATH), 'utf8')).unblock, undefined);
-});
 
 test('unblock: the automatic mode puts it on each side branch while the confirmation matches, logs every allow, and the doctor warns', async () => {
   const { saveConfirmation } = await import('../src/org-confirmations.ts');
   const { recordHookDecisions, formatHookDecisions } = await import('../src/approvals.ts');
   const sb = sandbox();
-  writeConfig(sb, { permission_hook: true });
   writePolicyJson(sb, POLICY_JSON);
-  assert.throws(() => switchUnblockAuto(sb.paths, true, sb.env), /not confirmed/);
   if (POLICY.status !== 'found') throw new Error('test policy');
   saveConfirmation(sb.paths, 'unblock', POLICY, T0);
-  assert.match(switchUnblockAuto(sb.paths, true, sb.env), /permission_unblock and preflight_auto are on/);
-  const config = JSON.parse(fs.readFileSync(sb.paths.config, 'utf8'));
-  assert.equal(config.permission_unblock && config.preflight_auto, true);
+  // What unblock all turns on in the configuration.
+  const config = { permission_hook: true, preflight_auto: true, permission_unblock: true };
+  writeConfig(sb, config);
 
   const forge = fakeForge({ 'README.md': 'nothing to run' });
   const s = autoPrepare(sb, forge, config);
   assert.equal(s.preflight?.status === 'applied' && s.preflight.unblock, true);
   assert.equal(JSON.parse(forge.created[0]?.files.find((f) => f.path === HOOK_RULES_PATH)?.content ?? '{}').unblock, true);
   assert.equal(s.permission_hook?.unblock, true);
-  // The watcher logs each allow with its tool and the rule that matched.
+  // Each allow is logged with its tool and the rule that matched.
   const ev = (tool: string, text: string) => ({ t: T0, ts: '2026-11-25T19:00:00.000Z', kind: 'permission prompt', tool, text, truncated: false, key: tool + text, seq: 0 });
   const logged = recordHookDecisions(sb.paths, s, [ev('WebFetch', '{"url":"https://internal.example"}'), ev('Bash', '{"command":"redis-cli -h 127.0.0.1 ping"}')]);
   assert.deepEqual(logged.map((d) => [d.tool, d.decision, d.rule, d.source]), [['WebFetch', 'allow', 'unblock', 'unblock'], ['Bash', 'allow', 'Bash(redis-cli:*)', 'mirror']]);

@@ -7,12 +7,9 @@
 //      recipes, shell scripts, the docker compose commands of a compose file, and shell blocks of its docs;
 //   3. the Bash permission prompts kharos recorded in earlier sessions on the same repository, each
 //      reduced to a prefix rule of its program and subcommands, so none of its values reaches a rule.
-// A suggestion goes through the same safety filter as `kharos permissions hook diff`: never a broad
-// pattern, and never one a deny rule covers. Mirroring the organization's ask rules is separate: only
-// automatic preflight does it, while a remembered mirror confirmation matches the managed settings.
+// A suggestion goes through the same safety filter as the hook's own plan: never a broad pattern, and
+// never one a deny rule covers.
 
-import fs from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { bashRuleMatches, broadRuleWhy, commandHead, decide, MAX_ALLOWED_LENGTH, parsePattern, prefixMatches, prefixOf, showPattern, splitCommand, type HookRules } from '../cloud/kharos-permission.mjs';
 import { promptCommand } from './approvals.ts';
@@ -20,16 +17,14 @@ import { isPermissionPrompt } from './classify.ts';
 import { normalizeRepo } from './config.ts';
 import type { RepoSnapshot } from './forge.ts';
 import { readStoredEvents } from './logparse.ts';
-import { hooksBlocked, mirrorRefusal, planMirror, type ManagedPolicy } from './managed-policy.ts';
-import { describeConfirmation, type ConfirmationState } from './org-confirmations.ts';
+import { hooksBlocked, type ManagedPolicy } from './managed-policy.ts';
 import { allowRefusal, HOOK_RULES_PATH, HOOK_SCRIPT_PATH, hookState, prefixRefusal, type HookFiles } from './permission-hook.ts';
-import { parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
+import { parseSettings, readRules, SETTINGS_PATH, SettingsError } from './settings.ts';
 import type { Paths } from './paths.ts';
 import { loadRegistry, logPath } from './registry.ts';
 
 /** Most files the preflight reads from a branch, besides the three of the permission hook. */
 export const MAX_FILES = 60;
-const MAX_FILE_BYTES = 256 * 1024;
 
 const ROOT_FILES = ['package.json', 'Makefile', 'makefile', 'GNUmakefile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'README.md', 'CONTRIBUTING.md'];
 const COMPOSE_FILES = new Set(['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']);
@@ -49,29 +44,6 @@ export function selectFiles(all: readonly string[]): string[] {
     ...ok.filter((p) => /^docs\/.+\.md$/.test(p) && depth(p) <= 3),
   ];
   return [...hook, ...[...new Set(picked)].filter((p) => !hook.includes(p)).slice(0, MAX_FILES)];
-}
-
-/** The files of a local checkout, the same selection as a branch read through gh. */
-export function localSnapshot(root: string, env: NodeJS.ProcessEnv): RepoSnapshot {
-  const r = spawnSync('git', ['-C', root, 'ls-files', '-z'], { encoding: 'utf8', timeout: 15_000, env: { ...env, GIT_TERMINAL_PROMPT: '0' } });
-  const all = r.status === 0 ? r.stdout.split('\0').filter((p) => p !== '') : fs.readdirSync(root);
-  const files = new Map<string, string>();
-  const unreadable = new Set<string>();
-  for (const p of selectFiles(all)) {
-    const file = path.join(root, p);
-    try {
-      const st = fs.statSync(file);
-      if (!st.isFile()) continue;
-      if (st.size > MAX_FILE_BYTES) {
-        unreadable.add(p);
-        continue;
-      }
-      files.set(p, fs.readFileSync(file, 'utf8'));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.add(p);
-    }
-  }
-  return { label: root, paths: all, files, unreadable, base: null };
 }
 
 export function hookFilesOf(s: RepoSnapshot): HookFiles {
@@ -292,7 +264,7 @@ export interface Suggestion {
 
 export interface AskEntry extends AskRule {
   /** What answers it: a suggestion of this report, the hook as it is now, nothing, or nothing possible. */
-  state: 'suggested' | 'hook' | 'mirror' | 'open' | 'not-bash' | 'every-command';
+  state: 'suggested' | 'hook' | 'open' | 'not-bash' | 'every-command';
   mentioned: boolean;
 }
 
@@ -310,9 +282,6 @@ export interface PreflightReport {
   notes: string[];
   /** The hook's rules on this branch now, when they are usable. */
   current: HookRules | null;
-  /** Why the organization's ask rules cannot be mirrored, or null when they can. */
-  mirrorRefusal: string | null;
-  confirmation: ConfirmationState;
 }
 
 export interface PreflightInput {
@@ -323,10 +292,6 @@ export interface PreflightInput {
   history: HistoryPrompt[];
   sessionsRead: number;
   instruction: string;
-  /** The person's remembered confirmation to mirror the organization's ask rules. */
-  confirmation?: ConfirmationState;
-  /** Automatic preflight is on: it mirrors at launch while that confirmation holds. */
-  autoMirror?: boolean;
 }
 
 export interface HistoryPrompt {
@@ -536,8 +501,6 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
   }
   suggestions.sort((a, b) => Number(b.mentioned) - Number(a.mentioned) || b.sources.length - a.sources.length || a.pattern.localeCompare(b.pattern));
 
-  const confirmation = input.confirmation ?? { state: 'none' };
-  const autoMirrors = input.autoMirror && confirmation.state === 'valid' && mirrorRefusal(policy) === null && policy.status === 'found' ? planMirror(policy.ask).converted : [];
   // 1. Every ask rule, and what answers it.
   const entries: AskEntry[] = asks.map((a) => {
     const program = programOf(a.rule);
@@ -557,7 +520,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
           return w.ok && bashRuleMatches(a.rule, sample(w.words));
         }));
     if (byHook) return { ...a, state: 'hook', mentioned };
-    return { ...a, state: a.origin === 'organization' && autoMirrors.includes(a.rule) ? 'mirror' : 'open', mentioned };
+    return { ...a, state: 'open', mentioned };
   });
   entries.sort((a, b) => Number(b.mentioned) - Number(a.mentioned));
 
@@ -576,8 +539,6 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     sessionsRead: input.sessionsRead,
     notes,
     current,
-    mirrorRefusal: mirrorRefusal(policy),
-    confirmation,
   };
 }
 
@@ -586,8 +547,6 @@ export function applicable(r: PreflightReport): { allow: string[]; prefix: strin
   const suggested = r.suggestions.filter((s) => s.status === 'suggested');
   return { allow: suggested.filter((s) => s.kind === 'pattern').map((s) => s.pattern), prefix: suggested.filter((s) => s.kind === 'prefix').map((s) => s.pattern) };
 }
-
-const addFlag = (s: Suggestion) => `${s.kind === 'prefix' ? '--allow-prefix' : '--allow'} ${shellQuote(s.pattern)}`;
 
 function shellQuote(s: string): string {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -610,11 +569,9 @@ function why(s: Suggestion): string {
 }
 
 export interface FormatOptions {
-  /** The command that adds the suggested patterns, without its --allow flags; null when none can. */
-  addCommand: string | null;
-  /** Lines that say where the change goes and what follows it. */
+  /** Lines that say what answers the likely prompts at launch. */
   after: string[];
-  hookOn: boolean;
+  /** Automatic preflight is on, and the permission hook with it. */
   auto: boolean;
 }
 
@@ -636,21 +593,15 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
     lines.push(
       `  ${++n}. ${a.rule} (${a.origin === 'organization' ? "the organization's" : "the repository's"} ask rule${a.mentioned ? `; the instruction mentions ${program}` : ''})`,
       `     -> no narrow rule to suggest: nothing in the repository or in earlier sessions runs ${program}`,
-      `     -> if the task needs it, add its exact form with --allow '<${program} and its words, * for one argument>'${a.origin === 'organization' && r.mirrorRefusal === null ? ", or mirror the organization's ask rules (kharos permissions hook diff --mirror) after its administrator agrees" : ''}`,
+      `     -> if the task needs it, its exact form as a narrow allow rule (${program} and its words, * for one argument)`,
     );
   }
-  const mirrored = r.asks.filter((a) => a.state === 'mirror');
-  if (mirrored.length && r.confirmation.state === 'valid') {
-    lines.push(`mirrored at each launch by automatic preflight, with your confirmation of ${r.confirmation.at.slice(0, 10)} (it holds while the organization's managed settings do not change): ${some(mirrored.map((a) => a.rule), 8)}`);
-  }
-  const remembered = describeConfirmation(r.confirmation);
-  if (remembered && r.mirrorRefusal === null && (open.some((a) => a.origin === 'organization') || r.confirmation.state === 'changed')) lines.push(`mirroring: ${remembered}`);
   const covered = r.suggestions.filter((s) => s.status === 'covered' && s.coveredBy === null);
   for (const s of r.suggestions.filter((x) => x.status === 'covered' && x.coveredBy !== null)) lines.push(`covered by the suggested prefix rule ${s.coveredBy}: ${s.pattern}`);
   const byHook = r.asks.filter((a) => a.state === 'hook');
   if (covered.length || byHook.length) lines.push(`already answered by the kharos permission hook on this branch: ${some([...covered.map((s) => s.pattern), ...byHook.map((a) => a.rule)], 6)}`);
   for (const s of r.suggestions.filter((x) => x.status === 'refused')) lines.push(`not suggested: ${s.refusal}`);
-  for (const s of r.suggestions.filter((x) => x.status === 'review')) lines.push(`review before adding: ${s.pattern} (${s.refusal}; so it is not in the command below and never applied on its own)`);
+  for (const s of r.suggestions.filter((x) => x.status === 'review')) lines.push(`review before adding: ${s.pattern} (${s.refusal}; so it is never applied on its own)`);
   const every = r.asks.filter((a) => a.state === 'every-command');
   if (every.length) lines.push(`${some(every.map((a) => a.rule))}: an ask rule for every command makes every Bash call prompt; only commands found above are suggested`);
   const notBash = r.asks.filter((a) => a.state === 'not-bash');
@@ -659,15 +610,10 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
   if (r.chained) lines.push(`${r.chained} earlier prompt(s) were for chained or piped commands that no ask rule explains; the hook allows only single simple commands`);
   if (r.repo) lines.push(`earlier sessions on this repository read: ${r.sessionsRead} (kharos keeps a session's log for 14 days after it is closed)`);
 
-  const flags = suggested.map(addFlag);
-  if (flags.length) {
-    lines.push('to add them:');
-    if (o.addCommand) {
-      if (!o.hookOn) lines.push('  kharos permissions hook enable   (the hook is opt-in and off)');
-      lines.push(`  ${o.addCommand.replace('{flags}', flags.join(' '))}`);
-    }
+  if (suggested.length || open.length) {
+    lines.push('at launch:');
     for (const a of o.after) lines.push(`  ${a}`);
   }
-  lines.push(`preflight: ${suggested.length} rule(s) to suggest, ${open.length} ask rule(s) with none; automatic preflight ${o.auto ? (o.hookOn ? 'on' : 'on, but inactive while permission_hook is off') : 'off'}`);
+  lines.push(`preflight: ${suggested.length} rule(s) to suggest, ${open.length} ask rule(s) with none; automatic preflight ${o.auto ? 'on' : 'off'}`);
   return lines.join('\n');
 }

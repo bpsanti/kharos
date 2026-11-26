@@ -17,7 +17,6 @@ test('config: a minimal profile gets the documented defaults', () => {
   assert.equal(p.revision, 'main');
   assert.equal(p.connectors, false);
   assert.equal(p.deadline_min, 180);
-  assert.equal(c.watch.interval_min, 10);
   assert.equal(c.outputs.length, 2);
 });
 
@@ -172,9 +171,9 @@ test('account: only a hash of organization and login is kept', () => {
 });
 
 test('cli: arguments and versions', () => {
-  assert.deepEqual(parseArgs(['k-0001', '--all', '--profile', 'demo', '--title=a b']), { positional: ['k-0001'], flags: { all: true, profile: 'demo', title: 'a b' }, lists: {} });
-  // --allow and --drop may repeat, and every value is kept in order
-  assert.deepEqual(parseArgs(['hook', 'diff', '--allow', 'psql -d *', '--allow=pg_isready', '--mirror', '.']), { positional: ['hook', 'diff', '.'], flags: { mirror: true }, lists: { allow: ['psql -d *', 'pg_isready'] } });
+  assert.deepEqual(parseArgs(['k-0001', '--all', '--profile', 'demo', '--title=a b']), { positional: ['k-0001'], flags: { all: true, profile: 'demo', title: 'a b' } });
+  // A boolean flag takes no value; `--` ends the flags.
+  assert.deepEqual(parseArgs(['close', 'k-0001', '--ask-stop', '--', '--stopped']), { positional: ['close', 'k-0001', '--stopped'], flags: { 'ask-stop': true } });
   assert.equal(versionAtLeast('2.1.332 (Claude Code)', [2, 1, 323]), true);
   assert.equal(versionAtLeast('2.1.300', [2, 1, 323]), false);
   assert.equal(versionAtLeast('3.0.0', [2, 1, 323]), true);

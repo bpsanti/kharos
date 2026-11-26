@@ -1,5 +1,5 @@
 // Small state files besides the registry: intents (what a command asked the next RemoteTrigger answer
-// to be turned into), the environments seen in the account's routines, and the watcher heartbeat.
+// to be turned into), the environments seen in the account's routines, and the account logged in.
 
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { EnvironmentUse } from './remote.ts';
@@ -109,31 +109,17 @@ export function environmentsOf(book: EnvironmentBook | null, account: string | n
   return book && (!book.account || !account || book.account === account) ? book : null;
 }
 
-export interface WatchState {
-  last_beat: string | null;
-  interval_min: number | null;
-  /** When the current watcher pass began, to tell what changed during it. */
-  pass_started_at: string | null;
-  /** Claude Code sessions that run the watcher: they may read, never create or fire. */
-  watchers: Record<string, string>;
-  /** The account the watcher read last, to tell a switched login from a finished session. */
+/** The account logged in when kharos last read it, kept as a hash, to tell a switched login from a finished session. */
+export interface LoginState {
   account: string | null;
-  account_read_at: string | null;
+  read_at: string | null;
 }
 
-const EMPTY_WATCH: WatchState = { last_beat: null, interval_min: null, pass_started_at: null, watchers: {}, account: null, account_read_at: null };
-
-export function loadWatch(paths: Paths): WatchState {
-  const w = readState<Partial<WatchState>>(paths.watch, isObject, 'an object');
-  if (!w) return { ...EMPTY_WATCH, watchers: {} };
-  return { ...EMPTY_WATCH, ...w, watchers: isObject(w.watchers) ? (w.watchers as Record<string, string>) : {} };
+export function loadLogin(paths: Paths): LoginState {
+  const l = readState<Partial<LoginState>>(paths.login, isObject, 'an object');
+  return { account: typeof l?.account === 'string' ? l.account : null, read_at: typeof l?.read_at === 'string' ? l.read_at : null };
 }
 
-export function updateWatch<T>(paths: Paths, fn: (w: WatchState) => T): T {
-  return withLock(paths.watch, () => {
-    const w = loadWatch(paths);
-    const out = fn(w);
-    writeJsonAtomic(paths.watch, w);
-    return out;
-  });
+export function saveLogin(paths: Paths, login: LoginState): void {
+  withLock(paths.login, () => writeJsonAtomic(paths.login, login));
 }

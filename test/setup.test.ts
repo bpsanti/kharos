@@ -12,7 +12,7 @@ import { updateRegistry } from '../src/registry.ts';
 import { result as showResult } from '../src/commands.ts';
 import { saveEnvironments } from '../src/state.ts';
 import { applyUnblockAll, preview } from '../src/unblock-all.ts';
-import { formatSetup, parseScheduleView, readGitHub, runSetup, SetupError, type SetupInput } from '../src/setup.ts';
+import { formatSetup, parseScheduleView, readGitHub, runSetup, type SetupInput } from '../src/setup.ts';
 import { HEADS_EMPTY, HEADS_OK, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const ME = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -39,7 +39,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 }
 
 function input(sb: Sandbox, over: Partial<SetupInput> = {}): SetupInput {
-  return { repo: 'example/demo', makeDefault: false, view: parseScheduleView(LISTED), here: 'example/demo', noRemoteTool: false, shared: null, adopt: null, now: T0, env: sb.env, accountMode: 'as-is', maxOpen: 10, ...over };
+  return { repo: 'example/demo', view: parseScheduleView(LISTED), here: 'example/demo', noRemoteTool: false, shared: null, adopt: null, now: T0, env: sb.env, maxOpen: 10, ...over };
 }
 
 test('setup: reads the environments and the GitHub heads-up the /schedule skill shows', () => {
@@ -89,34 +89,30 @@ test('setup: one list up front, then each step in order, and the profile only on
   if (r.next.kind === 'ask-environment') assert.deepEqual(r.next.options, [{ name: 'demo', recommended: true }, { name: 'Default', recommended: false }]);
   assert.doesNotMatch(formatSetup(r).split('Environments, best fit first')[1] ?? '', /env_/, 'the person never sees an id');
 
-  // Then the permission modes, every one of them, asked once.
+  // Then the permission mode, asked once: leave the rules as they are, or unblock all.
   r = runSetup(sb.paths, input(sb, { environment: 'Demo' }), deps());
   assert.equal(r.next.kind, 'ask-permissions');
   if (r.next.kind === 'ask-permissions') {
-    assert.deepEqual(r.next.options.map((o) => o.id), ['as-is', 'standard', 'hook', 'standard+hook', 'mirror', 'broad', 'auto-preflight', 'unblock', 'unblock-all']);
-    assert.match(r.next.options.find((o) => o.id === 'mirror')?.unavailable ?? '', /no copy of the organization's managed settings/);
-    assert.match(r.next.options.find((o) => o.id === 'unblock')?.unavailable ?? '', /no copy/);
-    assert.equal(r.next.offer[0], 'standard', 'the recommended mode comes first');
-    assert.equal(r.next.offer[1], 'unblock-all', 'the one step that frees everything is always offered');
+    assert.deepEqual(r.next.options.map((o) => o.id), ['as-is', 'unblock-all']);
+    assert.deepEqual(r.next.offer, ['as-is', 'unblock-all'], 'as-is, the recommended mode, comes first');
     assert.match(r.next.options.find((o) => o.id === 'unblock-all')?.note ?? '', /here it leaves out: the unblock preset, .*no copy/);
-    assert.ok(r.next.offer.length <= 4);
   }
   assert.match(formatSetup(r), /trade-off: /);
   assert.equal(loadConfig(sb.paths).exists, false);
 
   // Settled: the profile is written, with the name, the choice and the account, and the summary is short.
-  r = runSetup(sb.paths, input(sb, { environment: 'demo', permissions: 'standard' }), deps());
+  r = runSetup(sb.paths, input(sb, { environment: 'demo', permissions: 'as-is' }), deps());
   assert.equal(r.next.kind, 'ready');
   if (r.next.kind === 'ready') {
     assert.ok(r.next.summary.length <= 6, r.next.summary.join('\n'));
     assert.match(r.next.summary[0] ?? '', /^Ready: profile demo \(default\) launches on example\/demo@main in "demo"\.$/);
     assert.match(r.next.summary.join('\n'), /GitHub: Claude reaches example\/demo\./);
-    assert.match(r.next.summary.at(-1) ?? '', /^Next: \/kharos:permissions standard$/);
+    assert.match(r.next.summary.at(-1) ?? '', /^Next: \/kharos:run/);
   }
   const p = loadConfig(sb.paths).config.profiles.demo;
   assert.equal(p?.environment, 'env_01DEMO');
   assert.equal(p?.environment_name, 'demo');
-  assert.equal(p?.permissions, 'standard');
+  assert.equal(p?.permissions, 'as-is');
   assert.equal(p?.account, ME);
 
   // Run again: nothing is asked a second time.
@@ -162,35 +158,41 @@ test('setup: an empty --from-schedule paste reads as not listed, so an existing 
 
 test('setup: a repository other than this folder keeps GitHub unconfirmed, and the summary says the first launch checks it', () => {
   const sb = sandbox();
-  const r = runSetup(sb.paths, input(sb, { here: 'other/repo', environment: 'demo', permissions: 'standard' }), deps());
+  const r = runSetup(sb.paths, input(sb, { here: 'other/repo', environment: 'demo', permissions: 'as-is' }), deps());
   assert.equal(r.steps[1]?.state, 'check');
   assert.equal(r.next.kind, 'ready');
-  if (r.next.kind === 'ready') {
-    assert.match(r.next.summary.join('\n'), /GitHub: not confirmed for example\/demo yet; the first launch checks it/);
-    assert.match(r.next.summary.at(-1) ?? '', /\/kharos:permissions standard in a checkout of example\/demo/);
-  }
+  if (r.next.kind === 'ready') assert.match(r.next.summary.join('\n'), /GitHub: not confirmed for example\/demo yet; the first launch checks it/);
 });
 
-test('setup: modes the organization rules out are listed with the reason, and cannot be chosen', () => {
+test('setup: the parts of unblock all the organization rules out are named, and a mode earlier versions offered is refused', () => {
   const sb = sandbox();
   const strict: ManagedPolicy = { status: 'found', file: 'f', ask: ['Bash(psql *)'], deny: [], bypassDisabled: true, managedHooksOnly: false };
   const r = runSetup(sb.paths, input(sb, { environment: 'demo' }), deps({ managedPolicy: () => strict }));
   assert.equal(r.next.kind, 'ask-permissions');
   if (r.next.kind === 'ask-permissions') {
-    assert.match(r.next.options.find((o) => o.id === 'mirror')?.unavailable ?? '', /disableBypassPermissionsMode/);
     assert.equal(r.next.options.find((o) => o.id === 'unblock-all')?.unavailable, null, 'auto mode for the account is still possible');
     assert.match(r.next.options.find((o) => o.id === 'unblock-all')?.note ?? '', /automatic unblock: .*disableBypassPermissionsMode/);
-    assert.equal(r.next.options.find((o) => o.id === 'hook')?.unavailable, null);
-    assert.ok(!r.next.offer.includes('unblock'));
+    assert.deepEqual(r.next.offer, ['as-is', 'unblock-all']);
   }
-  assert.throws(() => runSetup(sb.paths, input(sb, { environment: 'demo', permissions: 'unblock' }), deps({ managedPolicy: () => strict })), SetupError);
+  for (const gone of ['standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock']) {
+    assert.throws(() => runSetup(sb.paths, input(sb, { environment: 'demo', permissions: gone }), deps({ managedPolicy: () => strict })), /--permissions must be one of as-is, unblock-all/, gone);
+  }
 
   const hooksOnly: ManagedPolicy = { status: 'found', file: 'f', ask: [], deny: [], bypassDisabled: false, managedHooksOnly: true };
   const h = runSetup(sb.paths, input(sb, { environment: 'demo' }), deps({ managedPolicy: () => hooksOnly }));
   if (h.next.kind === 'ask-permissions') {
-    for (const id of ['hook', 'standard+hook', 'auto-preflight', 'broad']) assert.match(h.next.options.find((o) => o.id === id)?.unavailable ?? '', /allowManagedHooksOnly/, id);
-    assert.deepEqual(h.next.offer, ['standard', 'unblock-all', 'as-is']);
+    assert.match(h.next.options.find((o) => o.id === 'unblock-all')?.note ?? '', /allowManagedHooksOnly/);
+    assert.deepEqual(h.next.offer, ['as-is', 'unblock-all']);
   } else assert.fail(`expected the permission question, got ${h.next.kind}`);
+});
+
+test('setup: a profile that stored a mode of an earlier version loads, read as as-is, and is not asked again', () => {
+  const sb = sandbox();
+  for (const old of ['standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock']) {
+    writeConfig(sb, { profiles: { demo: { repo: 'https://github.com/example/demo', environment: 'env_01DEMO', permissions: old } } });
+    assert.equal(loadConfig(sb.paths).config.profiles.demo?.permissions, 'as-is', old);
+  }
+  assert.equal(runSetup(sb.paths, input(sb, { environment: 'demo' }), deps()).next.kind, 'ready');
 });
 
 test('setup: a profile of another account keeps its name, and this account gets one of its own', () => {
@@ -373,10 +375,7 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   fs.writeFileSync(settingsFile, JSON.stringify({ model: 'opus', permissions: { defaultMode: 'acceptEdits', allow: ['Read'] } }, null, 2) + '\n');
   const env = { ...sb.env, CLAUDE_CONFIG_DIR: conf };
   const policy: ManagedPolicy = { status: 'found', file: path.join(conf, 'remote-settings.json'), ask: ['Bash(psql:*)'], deny: ['Bash(rm:*)'], bypassDisabled: false, managedHooksOnly: false };
-  const unanswered = (s: Sandbox): SetupInput => {
-    const { accountMode: _, ...rest } = input(s);
-    return rest;
-  };
+  const unanswered = (s: Sandbox): SetupInput => input(s);
   const ask = (over: Partial<SetupInput> = {}) => runSetup(sb.paths, { ...unanswered(sb), env, environment: 'demo', ...over }, deps({ managedPolicy: () => policy }));
 
   // No separate question about the account's mode: it is part of unblock all, offered with what it frees.
@@ -403,7 +402,7 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   if (done.next.kind === 'ready') {
     assert.match(done.next.summary.join('\n'), /Permissions: unblock all: .*\(now on: all three parts/);
     assert.match(done.next.summary.join('\n'), /launches need no approval prompt/);
-    assert.doesNotMatch(done.next.summary.join('\n'), /Next: \/kharos:permissions unblock-all/, 'what setup just turned on is not the next step');
+    assert.doesNotMatch(done.next.summary.join('\n'), /Next: \/kharos:permissions/, 'what setup just turned on is not the next step');
   }
   const cfg = loadConfig(sb.paths).config;
   assert.deepEqual([cfg.permission_hook, cfg.preflight_auto, cfg.permission_unblock], [true, true, true]);
@@ -418,7 +417,7 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits');
   const back = loadConfig(sb.paths).config;
   assert.deepEqual([back.permission_hook, back.preflight_auto, back.permission_unblock], [false, false, false]);
-  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps({ managedPolicy: () => policy }))), /ok {4}unblock all: off: none of the three parts is on; `\/kharos:permissions unblock-all` frees/);
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps({ managedPolicy: () => policy }))), /ok {4}unblock all: off: none of the three parts is on; `\/kharos:permissions` frees/);
 
   // auto-unblock, the older name, is unblock-all: the same confirmation and token, and a stored profile reads as it.
   const alias = sandbox();
@@ -507,7 +506,7 @@ test('accounts: open sessions that a follower reads from the shared files right 
   assert.equal(unmigratedNote(mine, shared, ME), null);
 });
 
-test('setup: --permissions default is the name /kharos:permissions uses for as-is', () => {
+test('setup: --permissions default, an older name, is as-is', () => {
   const sb = sandbox();
   const r = runSetup(sb.paths, { ...input(sb), permissions: 'default', environment: 'demo' }, deps());
   assert.equal(loadConfig(sb.paths).config.profiles.demo?.permissions, 'as-is');

@@ -1,6 +1,6 @@
 # Outputs
 
-Events (see [watcher.md](watcher.md#events)) go to the outputs listed in the configuration, plus the outputs given to one launch.
+Events (see [states.md](states.md#events)) go to the outputs listed in the configuration, plus the outputs given to one launch.
 Each output has an `events` filter: event classes (`progress`, `needs_you`, `terminal`), event names (`session.finished` or `finished`), or `*`.
 
 ```json
@@ -15,7 +15,7 @@ Each output has an `events` filter: event classes (`progress`, `needs_you`, `ter
 | Type | Fields | What it does |
 |---|---|---|
 | `notification` | `events` | A desktop notification: `osascript` on macOS, `notify-send` on Linux |
-| `file` | `path`, `events` | Appends the event as one JSON line; `{state}` is kharos's state folder, `~` is your home. `{state}/events.jsonl` is kharos's journal, which holds every event and the marks of its delivery and acknowledgement whatever the outputs are ([watcher.md](watcher.md#the-journal-delivered-and-acknowledged)), so a `file` output there adds nothing |
+| `file` | `path`, `events` | Appends the event as one JSON line; `{state}` is kharos's state folder, `~` is your home. `{state}/events.jsonl` is kharos's journal, which holds every event and the marks of its delivery and acknowledgement whatever the outputs are ([states.md](states.md#the-journal-delivered-and-acknowledged)), so a `file` output there adds nothing |
 | `slack` | `webhook_env`, `events` | Posts the title, state, reason, pull request and link to a Slack incoming webhook; `<`, `>` and `&` are escaped, so no text can mention a channel |
 | `command` | `argv`, `timeout_s`, `events` | Runs the program with no shell, the event as JSON on stdin, and a deadline (10 s by default) |
 | `firstmate` | `status_file`, `home`, `mode`, `events` | The firstmate adapter, below |
@@ -24,7 +24,7 @@ Any other destination is a `command`: nothing in the plugin needs to change.
 
 ## Delivery
 
-- Events go out right away from the hook that saw the change, and again at the end of each watcher pass for what is left.
+- Events go out right away from the hook that saw the change; what is left goes out at the next delivery, from the next hook or a follower process.
 - Delivery is at least once: the event `id` lets a receiver drop a repeat.
 - An output that fails is tried again on the next delivery, five times at most; after that the event is set aside and `/kharos:list` says so.
 - Inside a hook, delivery has a time budget well inside the hook timeout (20 s after a call, 10 s after a failed call): each output is cut short at the end of the budget, and the outputs left over wait for the next delivery, without counting a failed try.

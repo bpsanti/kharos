@@ -10,7 +10,7 @@ import { followerMayBeStarting, followerReport, type FollowerInfo } from './leas
 import { activeCount, deadlineAt, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, releaseClosing, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, shownText, storedLogView, type LogEvent } from './logparse.ts';
 import { watchConfig } from './track.ts';
-import { addIntent, loadWatch } from './state.ts';
+import { addIntent } from './state.ts';
 import { readOutbox } from './events.ts';
 import { loadUndelivered, MAX_ATTEMPTS } from './outputs/index.ts';
 
@@ -36,15 +36,6 @@ export function sessionLine(s: Session, now: number): string {
   const line = `${s.id}  ${stateLabel(s).padEnd(20)} ${age.padStart(8)}  turn ${s.closed_turns}  ${last.padEnd(12)} ${s.title}`;
   // The title always names the work; the link goes under it while the session needs a look.
   return (s.notice || s.state === 'waiting_permission') && s.url ? `${line}\n        ${s.url}` : line;
-}
-
-export function watcherLine(paths: Paths, now: number): string {
-  const w = loadWatch(paths);
-  if (!w.last_beat) return 'watcher: never ran (the advanced mode: /loop 10m /kharos:watch in a separate session).';
-  const ago = now - Date.parse(w.last_beat);
-  const every = w.interval_min ?? 10;
-  const stale = ago > 3 * every * 60_000;
-  return `watcher: heartbeat ${minutes(ago)} ago (every ${every} min)${stale ? '. It looks stopped: start /loop ' + every + 'm /kharos:watch again.' : ''}`;
 }
 
 function seconds(ms: number): string {
@@ -81,7 +72,7 @@ export function followerProblems(paths: Paths, now: number): FollowerProblem[] {
             id: f.id,
             state: f.state,
             detail: `the follower of ${f.id} (${whoFollows(f)}) stopped ${ago} ago without handing over: nobody reads the session`,
-            fix: `The next turn end of a Claude Code session with kharos starts another; /kharos:follow ${f.id}, or kharos follow ${f.id} --detach, does now.`,
+            fix: `The next turn end of a Claude Code session with kharos starts another, or kharos follow ${f.id} --detach does now.`,
           };
     });
 }
@@ -100,10 +91,8 @@ export function followerLines(paths: Paths, now: number): string[] {
     .map((f) => (f.state === 'handover' ? `${f.id} (starting again)` : `${f.id} (${whoFollows(f)}, heartbeat ${seconds(now - Date.parse(f.beat))} ago)`));
   if (followed.length) lines.push(`followers: ${followed.join(', ')}`);
   for (const p of followerProblems(paths, now)) lines.push(`follower heartbeat ${p.state === 'stale' ? 'stale' : 'stopped'}: ${p.detail}. ${p.fix}`);
-  const w = loadWatch(paths);
-  const watcherLive = w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
   const nobody = sessions.filter((s) => !live.has(s.id) && !followerMayBeStarting(s, now)).map((s) => s.id);
-  if (nobody.length && !watcherLive) lines.push(`no follower reads ${nobody.join(', ')}: type /kharos:follow to follow them from this Claude Code session.`);
+  if (nobody.length) lines.push(`no follower reads ${nobody.join(', ')}: the next turn end of a Claude Code session with kharos starts a follower process for each, or kharos follow <id> --detach does now.`);
   return lines;
 }
 
@@ -118,7 +107,6 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   if (used) lines.push(`slots: ${used} of watch.max_open ${watchConfig(paths).max_open} in use: ${slotHolders(reg, opts.now)}`);
   lines.push(...queueLines(paths, opts.now));
   lines.push(...followerLines(paths, opts.now));
-  lines.push(watcherLine(paths, opts.now));
   const lost = loadUndelivered(paths);
   if (lost.length) lines.push(`outputs: ${lost.length} event(s) could not be delivered after ${MAX_ATTEMPTS} tries; the last one: ${lost[lost.length - 1]?.target} (${lost[lost.length - 1]?.error})`);
   const queued = readOutbox(paths).length;
@@ -436,14 +424,9 @@ export interface SetupInput {
   repo: string;
   environment: string;
   revision?: string;
-  model?: string;
-  deadline_min?: number;
-  allowed_tools?: string[];
-  connectors?: boolean;
   environment_name?: string;
   permissions?: PermissionChoice;
   account?: string;
-  makeDefault: boolean;
 }
 
 /** Writes or updates one profile; the rest of the configuration stays as it is. */
@@ -454,10 +437,6 @@ export function writeProfile(paths: Paths, input: SetupInput): string {
   const prev = config.profiles[input.name];
   const raw: Record<string, unknown> = { ...(prev ?? {}), repo: input.repo, environment: input.environment };
   if (input.revision !== undefined) raw.revision = input.revision;
-  if (input.model !== undefined) raw.model = input.model;
-  if (input.deadline_min !== undefined) raw.deadline_min = input.deadline_min;
-  if (input.allowed_tools !== undefined) raw.allowed_tools = input.allowed_tools;
-  if (input.connectors !== undefined) raw.connectors = input.connectors;
   if (input.environment_name !== undefined) raw.environment_name = input.environment_name;
   else if (prev && prev.environment !== input.environment) delete raw.environment_name; // the name was the old environment's
   if (input.permissions !== undefined) raw.permissions = input.permissions;
@@ -470,7 +449,7 @@ export function writeProfile(paths: Paths, input: SetupInput): string {
     throw err;
   }
   config.profiles[input.name] = profile;
-  if (input.makeDefault || config.default_profile === null) config.default_profile = input.name;
+  if (config.default_profile === null) config.default_profile = input.name;
   saveConfig(paths, config);
   return `${prev ? 'updated' : 'wrote'} profile ${input.name}: ${repoSlug(profile.repo)}@${profile.revision}, ${profile.environment}, ${profile.model}, deadline ${profile.deadline_min} min${config.default_profile === input.name ? ' (default)' : ''}\nconfig: ${paths.config}`;
 }

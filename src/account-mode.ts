@@ -11,7 +11,7 @@ import { CommandError } from './commands.ts';
 import { isObject, readState, writeJsonAtomic } from './fsutil.ts';
 import type { ManagedPolicy } from './managed-policy.ts';
 import type { Paths } from './paths.ts';
-import { changeToken, renderSettings, unifiedDiff } from './permission-profiles.ts';
+import { changeToken, renderSettings } from './settings.ts';
 
 export type AccountTarget = 'auto' | 'off';
 
@@ -105,16 +105,6 @@ export function planAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: Ac
   return { file: cur.file, before: cur.text, after, token: changeToken(cur.text, after), summary };
 }
 
-export function diffAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, policy: ManagedPolicy): string {
-  const p = planAccountMode(paths, env, target, policy);
-  if (!p.after || !p.token) return p.summary;
-  return [
-    p.summary,
-    unifiedDiff(p.before, p.after, path.basename(p.file)),
-    `change ${p.token}: nothing is written until the person approves this diff; then run \`kharos permissions account-mode write ${target} --expect ${p.token}\`; \`kharos permissions account-mode diff ${target === 'auto' ? 'off' : 'auto'}\` undoes it.`,
-  ].join('\n');
-}
-
 export interface ApprovedChange {
   target: AccountTarget;
   plan: Plan;
@@ -122,17 +112,13 @@ export interface ApprovedChange {
 
 /** The change an approved diff names, checked against the file as it is now; throws, having written nothing, when it no longer matches. */
 export function approveAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, expect: string | undefined, policy: ManagedPolicy): ApprovedChange {
-  if (!expect) throw new CommandError('--expect needs the change token that `kharos permissions account-mode diff` printed, so only an approved diff is written');
+  if (!expect) throw new CommandError('the change to the account mode needs the token of the diff the person approved, so only an approved diff is written');
   const p = planAccountMode(paths, env, target, policy);
   if (p.after && p.token !== expect) throw new CommandError(`${p.file} is not what that diff was made from (the file changed, or the diff was for another change); nothing was written. Show the diff again.`);
   return { target, plan: p };
 }
 
-export function writeAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, expect: string | undefined, policy: ManagedPolicy): string {
-  return applyAccountMode(paths, env, approveAccountMode(paths, env, target, expect, policy));
-}
-
-export function applyAccountMode(paths: Paths, env: NodeJS.ProcessEnv, { target, plan: p }: ApprovedChange, undo = '`kharos permissions account-mode diff off`'): string {
+export function applyAccountMode(paths: Paths, env: NodeJS.ProcessEnv, { target, plan: p }: ApprovedChange, undo: string): string {
   if (!p.after) return p.summary;
   if (target === 'auto') {
     const cur = readAccountMode(env);

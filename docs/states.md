@@ -1,45 +1,18 @@
-# The watcher
+# Session states and events
 
-The watcher is the advanced way to follow sessions: one session of its own, for many sessions, headless launches, and outputs that must keep going with no terminal open.
-The default is a follower per launch, started by `/kharos:run` ([follow.md](follow.md)); both read through the same hook, so the rules and events below hold for both.
-
-The watcher follows every open session and turns its log into a state.
+kharos follows every open session and turns its log into a state.
 The rules are code (`src/classify.ts`), not the judgment of a model: they are reproducible, tested on recorded logs, and cheap.
-The model of the watcher session only makes the reads that `kharos due` lists; the hooks store, classify and answer with one short line, so the log text never reaches it.
+A follower ([follow.md](follow.md)) makes the reads; the hooks store, classify and answer with one short line, so the log text never reaches a model.
 
-## Running it
+## Reads
 
-In a separate terminal:
-
-```
-claude --model haiku
-/loop 10m /kharos:watch
-```
-
-Use a fixed interval: a fixed-interval `/loop` comes back with `claude --resume`, a self-paced one does not.
-`/loop` runs only while Claude Code is open and idle and the machine is awake; `/bg` moves it to a background session that goes on without a terminal.
-When no session is open, the pass ends the loop by itself.
-
-Each pass:
-
-1. `kharos due` writes the heartbeat and lists the reads due now (no network).
-2. The model makes those `RemoteTrigger` reads: `get_run_log` for a session, `list_runs` while the session id is unknown and every sixth read, to see whether the session was archived.
-3. The hooks store the new events in `logs/<id>.jsonl`, classify, and queue events.
-4. `kharos pass-end` answers with one line: what changed, or that nothing did.
-
-A session that a live follower reads is left to it; `/kharos:list --refresh` still reads every session.
-
-The watcher session can only read: its hook denies a kharos launch (`create` of a prepared body), and `run`, `update` and `create_webhook_trigger` on a routine kharos follows.
-Routines outside kharos pass untouched.
-A session counts as the watcher while its last `kharos due` is younger than three intervals, so a session that ran `/kharos:watch` once and stopped can launch again.
-
-## Who watches the watcher
-
-- `kharos health` exits with code 1 when an open session has no live follower and the heartbeat is older than three intervals; call it from launchd, cron or any check.
-- `/kharos:list` shows the heartbeat and the live followers.
-- Any new Claude Code session says it in one line when an open session has no live follower and the heartbeat is stale.
-
-A machine that sleeps loses no notice for good: the first read after it wakes classifies the current state.
+- `kharos wait` reads a session's log every 15 to 60 seconds: the interval starts at 15 seconds, doubles while nothing new comes, and goes back to 15 seconds when new events come.
+- A read is `get_run_log` for a session, or `list_runs` while the session id is unknown and every sixth read, to see whether the session was archived.
+- When more than 200 events happened between two reads, the newest page does not reach the stored events; the hook asks for older pages until one reaches them, at most two.
+- Each read is made by a kharos reader, the minimal headless `claude -p` a follower starts for that one read.
+  A reader may only read: its hook denies `create`, `run`, `update` and `create_webhook_trigger` on a kharos routine.
+  Routines outside kharos pass untouched.
+- A machine that sleeps loses no notice for good: the first read after it wakes classifies the current state.
 
 ## States
 
@@ -82,19 +55,11 @@ A session archived in `list_runs` without an end mark becomes `ended_unmarked`, 
   Why a cloud session prompts at all, and how to change it: [permissions.md](permissions.md).
 - A prompt that the opt-in permission hook answers shows the same `permission prompt` line, followed by its refusal, which starts with `Refused by the kharos permission hook`, or by the call's result once the call ends.
   A read can land between the two lines, so when the session's branch had the hook at launch, a prompt counts only when the next read of the newest page still finds that same prompt open; without the hook it counts on the first read.
-  The watcher reads such a session again on its next pass.
+  The follower reads such a session again on its next read.
   The log has no line for the hook's answer, so an allowed call that is still running at that next read raises the notice too.
-  When the session's branch had the hook at launch, the watcher puts each such line through the hook's own decision code with the branch's rules, and logs the decision with the rule that matched, never the command ([permissions.md](permissions.md#the-log-of-the-hooks-decisions)).
+  When the session's branch had the hook at launch, kharos puts each such line through the hook's own decision code with the branch's rules, and logs the decision with the rule that matched, never the command ([permissions.md](permissions.md#the-log-of-the-hooks-decisions)).
 
 If the cloud environment raises the Bash timeout, raise `silence_min` with it.
-
-## Reads and usage
-
-- A session is read on every pass during its first 20 minutes, while a notice is open and while a permission prompt waits for its second read, every second pass up to two hours, and every third pass after that.
-  A `/loop` pass can come up to half an interval late, and the cadence allows for that.
-- When more than 200 events happened between two reads, the newest page does not reach the stored events; the hook asks for older pages until one reaches them, at most two.
-- Run the watcher with a small model.
-  Its context grows with each pass; restart the watcher session once a day if it gets large.
 
 ## Events
 

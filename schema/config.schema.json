@@ -38,7 +38,7 @@
     "permission_hook": {
       "type": "boolean",
       "default": false,
-      "description": "Opt-in: kharos may install a PermissionRequest hook in a repository, which answers permission prompts in its cloud sessions, and the watcher logs the hook's decisions. See docs/permissions.md."
+      "description": "Opt-in: kharos may install a PermissionRequest hook in a repository, which answers permission prompts in its cloud sessions, and kharos logs the hook's decisions as it reads the session logs. See docs/permissions.md."
     },
     "preflight_auto": {
       "type": "boolean",
@@ -109,15 +109,15 @@
         "permissions": {
           "enum": [
             "as-is",
+            "unblock-all",
+            "auto-unblock",
             "standard",
             "hook",
             "standard+hook",
             "auto-preflight",
-            "unblock",
-            "unblock-all",
-            "auto-unblock"
+            "unblock"
           ],
-          "description": "What the person chose in /kharos:setup for this profile's permission prompts (auto-unblock is an older name of unblock-all, read as it). The repository's files change only through /kharos:permissions."
+          "description": "What the person chose in /kharos:setup for this profile's permission prompts: as-is or unblock-all. auto-unblock is an older name of unblock-all, read as it; standard, hook, standard+hook, auto-preflight and unblock are modes of earlier versions, read as as-is."
         },
         "account": {
           "type": "string",
@@ -132,11 +132,6 @@
         "model": {
           "type": "string",
           "default": "haiku"
-        },
-        "interval_min": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 10
         },
         "provision_min": {
           "type": "integer",
