@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Follower heartbeat: `/kharos:list` shows each follower with its heartbeat, and `/kharos:list` and `/kharos:doctor` flag a follower of an open session whose heartbeat is older than 3 minutes, as stuck (its process runs) or stopped (it ended without handing over). A wait that returns for the next follower hands its lease over for two minutes, and a follower process gets the lease under its lock before it starts, so nothing starts a second follower for a session.
 - A permission alert names a fixed category of why the prompt asks, next to the tool: an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell (`docs/permissions.md`). kharos tells it on the machine that reads, from the call and the rules it knows; only the tool name and the category leave the machine. The launch preflight keeps the repository's ask rules of the branch for the launch that follows.
 - `/kharos:run --no-push` leaves out the footer line that asks the session to commit and push work in progress every 30 minutes; `kharos show` says so.
 - `kharos log <id> [lines] --cached` prints the events already stored for a session, from a shell and with no model.

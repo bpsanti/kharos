@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { claudeBin } from './account.ts';
 import { clean } from './body.ts';
 import { CommandError } from './commands.ts';
-import { liveFollowers, releaseLease, takeLease } from './lease.ts';
+import { expectFollower, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { updateWatch } from './state.ts';
@@ -284,8 +284,12 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   let failures = 0;
   let lastError = '';
   let leased = false;
-  const done = (key: string, changed: boolean, error?: string) =>
-    outcome(s, key, changed, { waitedMs: now() - start, reads, cost, ...(error ? { error } : {}), ...(opts.follower ? { follower: opts.follower } : {}) });
+  // A wait that returns for the next one to go on hands its lease over; an end or an error gives it back.
+  let handover = false;
+  const done = (key: string, changed: boolean, error?: string) => {
+    handover = !error && !settled(key);
+    return outcome(s, key, changed, { waitedMs: now() - start, reads, cost, ...(error ? { error } : {}), ...(opts.follower ? { follower: opts.follower } : {}) });
+  };
   try {
     for (;;) {
       s = find();
@@ -294,7 +298,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       if (settled(key) || now() - start >= opts.maxMs) return done(key, false);
       const t = now();
       // The lease says this wait follows the session from its first look, not only from its first read.
-      const holds = takeLease(paths, id, t);
+      const holds = takeLease(paths, id, t, process.pid, opts.follower ?? 'agent');
       leased ||= holds;
       const lastRead = s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
@@ -334,7 +338,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       await sleep(Math.max(0, Math.min(t >= dueAt ? SLICE_MS : dueAt - t, SLICE_MS, left)));
     }
   } finally {
-    if (leased) releaseLease(paths, id);
+    if (leased) releaseLease(paths, id, process.pid, handover ? now() : null);
   }
 }
 
@@ -378,6 +382,10 @@ export function followersToStart(paths: Paths, ref: string | null, now: number):
   if (targets.busy.length) lines.push(`a live follower already reads ${targets.busy.join(', ')}.`);
   if (targets.start.length === 0) return lines.join('\n');
   lines.push('Start one kharos:follow agent for each line below, in the background (Agent tool, subagent_type "kharos:follow", run_in_background true), with the line as its whole prompt:');
-  for (const id of targets.start) lines.push(followerPrompt(id, null));
+  for (const id of targets.start) {
+    // The agent takes a few seconds to start: until then the session counts as followed, so nothing starts a second follower.
+    expectFollower(paths, id, now);
+    lines.push(followerPrompt(id, null));
+  }
   return lines.join('\n');
 }

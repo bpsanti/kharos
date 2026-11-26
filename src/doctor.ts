@@ -11,6 +11,7 @@ import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from
 import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
+import { FOLLOWER_STALE_MS, followerProblems } from './commands.ts';
 import { loadMarker, planMigration } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
@@ -220,6 +221,10 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     const hourAgo = opts.now - 3600_000;
     const fires = Object.values(reg.sessions).filter((s) => s.fired_at && Date.parse(s.fired_at) > hourAgo).length;
     add('info', 'limits', `${activeCount(reg)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
+  }
+  if (reg) {
+    const problems = followerProblems(paths, opts.now);
+    for (const p of problems) add('warn', `follower ${p.id}`, `${p.detail} (a follower beats every few seconds; past ${Math.round(FOLLOWER_STALE_MS / 60_000)} min it counts as stale)`, [p.fix]);
   }
   const w = state('watcher', paths.watch, () => loadWatch(paths));
   if (w) add('info', 'watcher', w.last_beat ? `last heartbeat ${w.last_beat}` : 'never ran (the advanced mode; /kharos:run starts a follower for each launch)');

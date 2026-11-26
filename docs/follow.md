@@ -54,8 +54,12 @@ The key is the open notice and when it opened, or `end:<state>` at the end, so t
 ## Followers, the watcher, and the registry
 
 - Each read goes through the same hook and the same locked registry as a watcher read, and an event is emitted once whichever process read: a notification, a Slack message or a firstmate line comes once in either mode.
-- A follower that reads a session holds a lease on it (`followers/<id>.json` in the state folder, with its process id and a heartbeat).
+- A follower that reads a session holds a lease on it (`followers/<id>.json` in the state folder, with its process id, whether an agent or a follower process holds it, and a heartbeat it renews every few seconds).
   A second `kharos wait` on the same session does not read: it watches the registry and returns on the same change.
+- A wait that returns for the next follower to go on (a report your session starts the follower again for, or the next turn of a follower process) hands the lease over: for two minutes the session still counts as followed, so nothing starts a second follower while the next one starts.
+  `kharos followers` does the same for each agent it asks your session to start.
+  A follower process is started under the lease's lock, and gets the lease before it runs, so two callers never start two.
+- `/kharos:list` shows each follower with its heartbeat, and `/kharos:list` and `/kharos:doctor` flag a follower of an open session whose heartbeat is older than 3 minutes: stuck, when its process still runs (stop it, and another starts), or stopped, when it ended without handing over.
 - A watcher pass leaves a session with a live lease to its follower, and `/kharos:list --refresh` still reads every session.
 - `kharos health`, `/kharos:list` and the message at the start of a Claude Code session count a live follower as following its session.
 

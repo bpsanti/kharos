@@ -51,10 +51,16 @@ test('follow: an interactive Claude Code gets follower agents, a headless one fo
   assert.match(interactive, /^The kharos command is: .*The session id is k-0001\.$/m);
   assert.equal(r.calls.length, 0);
 
+  // The agent is starting: the session counts as followed, so nothing starts a second follower.
+  assert.equal(startFollowers(sb.paths, id, T0 + MIN, { ...sb.env, ...HEADLESS }, r.spawner), 'a live follower already reads k-0001.');
+  assert.equal(r.calls.length, 0);
+  fs.rmSync(sb.paths.followers, { recursive: true, force: true });
+
   // A person who lifted the ceiling keeps the follower agent inside the headless launch.
   const waits = startFollowers(sb.paths, id, T0 + MIN, { ...sb.env, ...HEADLESS, CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' }, r.spawner);
   assert.match(waits, /^The kharos command is:/m);
   assert.equal(r.calls.length, 0);
+  fs.rmSync(sb.paths.followers, { recursive: true, force: true });
 
   const headless = startFollowers(sb.paths, id, T0 + MIN, { ...sb.env, ...HEADLESS }, r.spawner);
   assert.deepEqual(r.calls, [{ args: ['follow', id], log: followerLog(sb.paths, id) }]);

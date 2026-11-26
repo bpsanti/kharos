@@ -6,7 +6,7 @@ import { claudeBin } from './account.ts';
 import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError, type PermissionChoice } from './config.ts';
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
-import { followerMayBeStarting, liveFollowers } from './lease.ts';
+import { followerMayBeStarting, followerReport, LEASE_STALE_MS, type FollowerInfo } from './lease.ts';
 import { activeCount, findSession, isFollowed, loadRegistry, logPath, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, storedLogView } from './logparse.ts';
 import { watchConfig } from './track.ts';
@@ -45,21 +45,68 @@ export function watcherLine(paths: Paths, now: number): string {
   return `watcher: heartbeat ${minutes(ago)} ago (every ${every} min)${stale ? '. It looks stopped: start /loop ' + every + 'm /kharos:watch again.' : ''}`;
 }
 
-/** Who reads the open sessions now: live followers, and the open sessions that nobody follows. */
+function seconds(ms: number): string {
+  return ms < 120_000 ? `${Math.max(0, Math.round(ms / 1000))} s` : minutes(ms);
+}
+
+function whoFollows(f: FollowerInfo): string {
+  return f.kind === 'shell' ? `process ${f.pid}` : f.kind === 'agent' ? 'agent' : `pid ${f.pid}`;
+}
+
+/** A follower of an open session whose heartbeat stopped: its process is stuck, or it ended without handing over. */
+export interface FollowerProblem {
+  id: string;
+  state: 'stale' | 'gone';
+  detail: string;
+  fix: string;
+}
+
+/** The open sessions' followers whose heartbeat is older than LEASE_STALE_MS. */
+export function followerProblems(paths: Paths, now: number): FollowerProblem[] {
+  const open = new Set(Object.values(loadRegistry(paths).sessions).filter(isFollowed).map((s) => s.id));
+  return followerReport(paths, now)
+    .filter((f): f is FollowerInfo & { state: 'stale' | 'gone' } => open.has(f.id) && (f.state === 'stale' || f.state === 'gone'))
+    .map((f) => {
+      const ago = minutes(now - Date.parse(f.beat));
+      return f.state === 'stale'
+        ? {
+            id: f.id,
+            state: f.state,
+            detail: `the follower of ${f.id} (${whoFollows(f)}) has not beaten for ${ago} while its process still runs: it looks stuck`,
+            fix: `Stop it (kill ${f.pid}); the next turn end of a Claude Code session with kharos starts another, or kharos follow ${f.id} --detach does now.`,
+          }
+        : {
+            id: f.id,
+            state: f.state,
+            detail: `the follower of ${f.id} (${whoFollows(f)}) stopped ${ago} ago without handing over: nobody reads the session`,
+            fix: `The next turn end of a Claude Code session with kharos starts another; /kharos:follow ${f.id}, or kharos follow ${f.id} --detach, does now.`,
+          };
+    });
+}
+
+/** Who reads the open sessions now, each with its heartbeat; the followers that look stuck or stopped; and the open sessions that nobody follows. */
 export function followerLines(paths: Paths, now: number): string[] {
   const sessions = Object.values(loadRegistry(paths).sessions)
     .filter(isFollowed)
     .sort((a, b) => a.id.localeCompare(b.id));
-  const live = liveFollowers(paths, now);
+  const open = new Set(sessions.map((s) => s.id));
+  const report = followerReport(paths, now).filter((f) => open.has(f.id));
+  const live = new Set(report.filter((f) => f.state === 'live' || f.state === 'handover').map((f) => f.id));
   const lines: string[] = [];
-  const followed = sessions.filter((s) => live.has(s.id)).map((s) => s.id);
+  const followed = report
+    .filter((f) => live.has(f.id))
+    .map((f) => (f.state === 'handover' ? `${f.id} (starting again)` : `${f.id} (${whoFollows(f)}, heartbeat ${seconds(now - Date.parse(f.beat))} ago)`));
   if (followed.length) lines.push(`followers: ${followed.join(', ')}`);
+  for (const p of followerProblems(paths, now)) lines.push(`follower heartbeat ${p.state === 'stale' ? 'stale' : 'stopped'}: ${p.detail}. ${p.fix}`);
   const w = loadWatch(paths);
   const watcherLive = w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
   const nobody = sessions.filter((s) => !live.has(s.id) && !followerMayBeStarting(s, now)).map((s) => s.id);
   if (nobody.length && !watcherLive) lines.push(`no follower reads ${nobody.join(', ')}: type /kharos:follow to follow them from this Claude Code session.`);
   return lines;
 }
+
+/** A follower's heartbeat counts as stale past this age; the same as its lease. */
+export const FOLLOWER_STALE_MS = LEASE_STALE_MS;
 
 export function list(paths: Paths, opts: { all: boolean; now: number }): string {
   const reg = loadRegistry(paths);

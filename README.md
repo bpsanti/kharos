@@ -163,6 +163,7 @@ A closed turn is never taken for the end: only the session's own `KHAROS-DONE` m
 A session waiting at a permission prompt raises a notice that names the tool and a fixed category of why it asks (an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell), with the link to the session, where a person answers it.
 Only the tool name and a fixed category leave the machine: what the tool would run never does.
 `kharos health` exits with 1 when an open session has no live follower and the watcher stopped, for launchd, cron or any other check.
+`/kharos:list` shows each follower's heartbeat, and `/kharos:list` and `/kharos:doctor` flag a follower whose heartbeat stopped for more than 3 minutes: stuck while its process still runs, or stopped without handing over.
 See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
 
 ## Permission prompts
@@ -193,7 +194,7 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
-| `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id and a heartbeat |
+| `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id, its kind (agent or process) and a heartbeat, or a handover while the next follower starts |
 | `~/.local/state/kharos/repo-rules.json` | The ask rules of each launch branch's `.claude/settings.json`, as the last launch preflight read them, to tell a repository prompt from the rest |
 | `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account, repository and revision |
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |

@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { CommandError } from './commands.ts';
 import { loadConfig, type OutputConfig } from './config.ts';
 import { buildEvent, enqueue } from './events.ts';
-import { LEASE_STALE_MS, liveFollowers, releaseLease, takeLease } from './lease.ts';
+import { claimFollower, LEASE_STALE_MS, releaseLease, takeLease } from './lease.ts';
 import { deliver, filePath } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
@@ -65,7 +65,7 @@ async function reportStopped(paths: Paths, opts: FollowLoopOptions): Promise<voi
 async function holdLease(paths: Paths, id: string, ms: number, sleep: (ms: number) => Promise<void>): Promise<void> {
   const slice = LEASE_STALE_MS / 3;
   for (let left = ms; left > 0; left -= slice) {
-    takeLease(paths, id, Date.now());
+    takeLease(paths, id, Date.now(), process.pid, 'shell');
     await sleep(Math.min(left, slice));
   }
 }
@@ -146,11 +146,11 @@ function need(paths: Paths, ref: string): Session {
 export function detachFollower(paths: Paths, ref: string, now: number, env: NodeJS.ProcessEnv, spawner: Spawner = detachedSpawner): string {
   const s = need(paths, ref);
   if (!isFollowed(s)) return `${s.id} is not open (${s.step === 'open' ? s.state : s.step}): there is nothing to follow. /kharos:result ${s.id} shows how it ended.`;
-  if (liveFollowers(paths, now).has(s.id)) return `a live follower already reads ${s.id}.`;
   const log = followerLog(paths, s.id);
-  const pid = spawner(['follow', s.id], log, env);
-  if (pid === null) return `${s.id}: the follower process could not be started; run kharos follow ${s.id} in a shell instead.`;
-  return `started a follower process for ${s.id} (pid ${pid}); it reads the session until it ends, and writes each change to ${log}.`;
+  const r = claimFollower(paths, s.id, now, () => spawner(['follow', s.id], log, env));
+  if ('busy' in r) return `a live follower already reads ${s.id}.`;
+  if ('failed' in r) return `${s.id}: the follower process could not be started; run kharos follow ${s.id} in a shell instead.`;
+  return `started a follower process for ${s.id} (pid ${r.started}); it reads the session until it ends, and writes each change to ${log}.`;
 }
 
 function outputLabel(o: OutputConfig, paths: Paths): string {
