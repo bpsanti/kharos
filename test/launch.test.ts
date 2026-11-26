@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { test } from 'node:test';
 import { close, list, logRequest, rearm, sendMessage, result, resume, show, writeProfile } from '../src/commands.ts';
 import { main, runHook } from '../src/cli.ts';
@@ -733,4 +734,24 @@ test('events: session.pr_opened comes once per pull request the session creates,
     `[2026-11-25T19:03:02.000000Z] tool_result: {"html_url":"https://github.com/example/other/pull/2"}`,
   ]);
   assert.deepEqual(opened().map((e) => e.pr), ['https://github.com/example/demo/pull/9', 'https://github.com/example/other/pull/2']);
+});
+
+test('launch: each launch deletes the files of sessions closed 14 days ago or more, and keeps more recent ones', () => {
+  const sb = sandbox();
+  const DAY = 24 * 3600_000;
+  const old = prepared(sb, 'First.');
+  const recent = prepared(sb, 'Second.');
+  updateRegistry(sb.paths, (reg) => {
+    for (const [id, closedDaysAgo] of [[old, 15], [recent, 13]] as const) {
+      const s = reg.sessions[id]!;
+      s.step = 'closed';
+      s.closed_at = new Date(T0 - closedDaysAgo * DAY).toISOString();
+    }
+  });
+  const files = (id: string) => [path.join(sb.paths.logs, `${id}.jsonl`), path.join(sb.paths.logs, `${id}.follower.log`), path.join(sb.paths.bodies, `${id}.json`)];
+  fs.mkdirSync(sb.paths.logs, { recursive: true });
+  for (const f of [...files(old), ...files(recent)]) if (!fs.existsSync(f)) fs.writeFileSync(f, 'x');
+  prepare(sb.paths, { instruction: 'Third.', claude_session: CLAUDE, now: T0, env: sb.env, heads: () => HEADS_OK });
+  for (const f of files(old)) assert.equal(fs.existsSync(f), false, `${f} is deleted`);
+  for (const f of files(recent)) assert.equal(fs.existsSync(f), true, `${f} is kept`);
 });

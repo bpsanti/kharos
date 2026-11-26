@@ -35,16 +35,84 @@ import path from 'node:path';
 import { detachFollower, followLoop, health, startFollowers } from './follow.ts';
 import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'no-remote-tool', 'from-schedule', 'verbose', 'launch', 'stdin', 'confirmed', 'copy', 'open', 'detach', 'full', 'ask-stop', 'stopped', 'no-push', 'queue']);
+/** The flags each command reads: the rest are refused, so none is taken for another's value or ignored. */
+interface FlagSpec {
+  booleans: readonly string[];
+  values: readonly string[];
+}
+
+const NO_FLAGS: FlagSpec = { booleans: [], values: [] };
+
+export const COMMAND_FLAGS: Record<string, FlagSpec> = {
+  prepare: {
+    booleans: ['no-push', 'queue'],
+    values: ['profile', 'model', 'revision', 'title', 'deadline', 'file', 'session', 'output', 'status-file', 'firstmate-home', 'firstmate-mode'],
+  },
+  action: { booleans: [], values: ['session'] },
+  resume: NO_FLAGS,
+  rearm: NO_FLAGS,
+  show: NO_FLAGS,
+  list: { booleans: ['all'], values: [] },
+  log: { booleans: ['full'], values: ['session'] },
+  send: NO_FLAGS,
+  result: NO_FLAGS,
+  close: { booleans: ['ask-stop', 'stopped'], values: [] },
+  dispatch: NO_FLAGS,
+  environments: { booleans: [], values: ['session', 'repo'] },
+  'env-guide': { booleans: ['copy', 'open'], values: ['repo', 'revision', 'profile'] },
+  doctor: { booleans: ['no-remote-tool', 'verbose'], values: ['profile'] },
+  setup: {
+    booleans: ['from-schedule', 'confirmed', 'no-remote-tool'],
+    values: ['repo', 'profile', 'revision', 'environment', 'permissions', 'max-open', 'unblock-expect', 'adopt'],
+  },
+  'repo-init': NO_FLAGS,
+  'permissions unblock-all': { booleans: [], values: ['expect'] },
+  'permissions preflight': { booleans: ['stdin'], values: ['profile', 'revision', 'file'] },
+  'permissions approvals': { booleans: ['all'], values: ['session', 'limit'] },
+  wait: { booleans: [], values: ['since', 'max', 'min-interval', 'max-interval'] },
+  followers: NO_FLAGS,
+  follow: { booleans: ['detach'], values: [] },
+  health: NO_FLAGS,
+};
+
+const PERMISSION_FLAGS_GONE = 'was removed with the per-checkout permission commands; /kharos:permissions (unblock all) replaces them';
+
+/** What a caller of a flag kharos no longer takes is told instead. */
+const REMOVED_FLAGS: Record<string, string> = {
+  refresh: 'was removed: the followers keep the registry fresh',
+  cached: 'was removed: a shell read without --session already prints the stored events',
+  json: 'was removed',
+  model: 'was removed from setup: set the model per launch with /kharos:run, or in the configuration file',
+  deadline: 'was removed from setup: set the deadline per launch with /kharos:run, or in the configuration file',
+  tools: 'was removed',
+  connectors: 'was removed',
+  'no-connectors': 'was removed',
+  default: 'was removed',
+  'account-mode': 'was removed: /kharos:permissions (unblock all) sets the account mode',
+  'account-expect': 'was removed: /kharos:permissions (unblock all) sets the account mode',
+  launch: 'was removed: permissions preflight always reads the branch a launch starts on',
+  ...Object.fromEntries(
+    ['mirror', 'unmirror', 'uninstall', 'broad', 'unblock', 'no-unblock', 'org-confirmed', 'allow', 'allow-prefix', 'drop', 'fingerprint'].map((f) => [f, PERMISSION_FLAGS_GONE]),
+  ),
+};
 
 export interface Args {
   positional: string[];
   flags: Record<string, string | true>;
 }
 
-export function parseArgs(argv: string[]): Args {
+/** The command as COMMAND_FLAGS names it: `permissions` with its subcommand. */
+function commandName(command: string | undefined, rest: readonly string[]): string {
+  return command === 'permissions' ? `permissions ${rest[0] ?? ''}` : (command ?? '');
+}
+
+export function parseArgs(argv: string[], spec: FlagSpec, command: string): Args {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
+  const refuse = (name: string): never => {
+    const gone = Object.hasOwn(REMOVED_FLAGS, name) ? REMOVED_FLAGS[name] : undefined;
+    throw new cmd.CommandError(gone ? `--${name} ${gone}` : `${command} does not take --${name}`);
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a === '--') {
@@ -53,18 +121,19 @@ export function parseArgs(argv: string[]): Args {
     }
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
-      if (eq > 0) {
-        flags[a.slice(2, eq)] = a.slice(eq + 1);
-        continue;
-      }
-      const name = a.slice(2);
-      if (BOOLEAN_FLAGS.has(name)) flags[name] = true;
-      else {
-        const v = argv[i + 1];
-        if (v === undefined) throw new cmd.CommandError(`--${name} needs a value`);
-        flags[name] = v;
-        i++;
-      }
+      const name = eq > 0 ? a.slice(2, eq) : a.slice(2);
+      if (spec.booleans.includes(name)) {
+        if (eq > 0) throw new cmd.CommandError(`--${name} takes no value`);
+        flags[name] = true;
+      } else if (spec.values.includes(name)) {
+        if (eq > 0) flags[name] = a.slice(eq + 1);
+        else {
+          const v = argv[i + 1];
+          if (v === undefined) throw new cmd.CommandError(`--${name} needs a value`);
+          flags[name] = v;
+          i++;
+        }
+      } else refuse(name);
       continue;
     }
     positional.push(a);
@@ -122,7 +191,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
   if (command === 'hook') return runHook(rest[0] ?? '', { paths, now, env }, stdin);
 
   try {
-    const args = parseArgs(rest);
+    // A command kharos does not have gets no flag parsing: the switch below says so.
+    const name = commandName(command, rest);
+    const spec = Object.hasOwn(COMMAND_FLAGS, name) ? COMMAND_FLAGS[name] : undefined;
+    const args: Args = spec ? parseArgs(rest, spec, name) : { positional: rest, flags: {} };
     const out = (text: string) => process.stdout.write(text.endsWith('\n') ? text : text + '\n');
     switch (command) {
       case 'prepare': {
@@ -251,7 +323,6 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           else if ((what === 'on' || what === 'off') && target === undefined) out(applyUnblockAll(paths, env, what, flag(args, 'expect'), now));
           else throw new cmd.CommandError('permissions unblock-all takes show [on|off], or on or off with --expect <token>');
         } else if (sub === 'preflight') {
-          // `--launch` named the only form there is now; it stays accepted.
           if (args.positional[1] !== undefined) throw new cmd.CommandError('permissions preflight reads the branch a launch profile starts on, not a checkout folder');
           const file = flag(args, 'file');
           const instruction = file !== undefined ? readInstruction(file, stdin) : args.flags.stdin === true ? stdin() : '';

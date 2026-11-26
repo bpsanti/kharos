@@ -258,53 +258,51 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
 /** One read through a minimal headless `claude -p` that may make only that RemoteTrigger call. */
 export const headlessRead: Reader = async (paths, read, env, now, timeoutMs) => {
   const reader = crypto.randomUUID();
-  {
-    const params = Object.entries(read.params)
-      .map(([k, v]) => `${k} "${v}"`)
-      .join(' and ');
-    // A session of kharos's own: its Stop hook starts no follower, and its PreToolUse hook lets it only read.
-    const childEnv: NodeJS.ProcessEnv = { ...env, [ROLE_ENV]: READER_ROLE };
-    delete childEnv.ANTHROPIC_API_KEY;
-    const r = spawnSync(
-      claudeBin(env),
-      [
-        '-p',
-        '--plugin-dir',
-        PLUGIN_ROOT,
-        '--model',
-        watchConfig(paths).model,
-        '--setting-sources',
-        '',
-        '--strict-mcp-config',
-        '--tools',
-        'RemoteTrigger',
-        '--allowedTools',
-        'RemoteTrigger',
-        '--disable-slash-commands',
-        '--no-session-persistence',
-        '--session-id',
-        reader,
-        '--system-prompt',
-        READER_PROMPT,
-        '--output-format',
-        'json',
-        `Call RemoteTrigger with action "${read.action}" and ${params}.`,
-      ],
-      { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: timeoutMs },
-    );
-    if (r.error) return { ok: false, cost_usd: null, error: `claude -p: ${r.error.message}` };
-    let cost: number | null = null;
-    let failed: string | null = r.status === 0 ? null : `claude -p exited ${r.status ?? 'by a signal'}`;
-    try {
-      const v = JSON.parse(r.stdout.trim().split('\n').pop() ?? '') as Record<string, unknown>;
-      if (typeof v.total_cost_usd === 'number') cost = v.total_cost_usd;
-      if (v.is_error === true) failed = `claude -p: ${clean(String(v.result ?? v.subtype ?? 'error'), 200)}`;
-    } catch {
-      failed ??= 'claude -p gave no JSON answer';
-    }
-    if (failed && r.stderr) failed += ` (${clean(r.stderr, 200)})`;
-    return { ok: failed === null, cost_usd: cost, error: failed };
+  const params = Object.entries(read.params)
+    .map(([k, v]) => `${k} "${v}"`)
+    .join(' and ');
+  // A session of kharos's own: its Stop hook starts no follower, and its PreToolUse hook lets it only read.
+  const childEnv: NodeJS.ProcessEnv = { ...env, [ROLE_ENV]: READER_ROLE };
+  delete childEnv.ANTHROPIC_API_KEY;
+  const r = spawnSync(
+    claudeBin(env),
+    [
+      '-p',
+      '--plugin-dir',
+      PLUGIN_ROOT,
+      '--model',
+      watchConfig(paths).model,
+      '--setting-sources',
+      '',
+      '--strict-mcp-config',
+      '--tools',
+      'RemoteTrigger',
+      '--allowedTools',
+      'RemoteTrigger',
+      '--disable-slash-commands',
+      '--no-session-persistence',
+      '--session-id',
+      reader,
+      '--system-prompt',
+      READER_PROMPT,
+      '--output-format',
+      'json',
+      `Call RemoteTrigger with action "${read.action}" and ${params}.`,
+    ],
+    { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: timeoutMs },
+  );
+  if (r.error) return { ok: false, cost_usd: null, error: `claude -p: ${r.error.message}` };
+  let cost: number | null = null;
+  let failed: string | null = r.status === 0 ? null : `claude -p exited ${r.status ?? 'by a signal'}`;
+  try {
+    const v = JSON.parse(r.stdout.trim().split('\n').pop() ?? '') as Record<string, unknown>;
+    if (typeof v.total_cost_usd === 'number') cost = v.total_cost_usd;
+    if (v.is_error === true) failed = `claude -p: ${clean(String(v.result ?? v.subtype ?? 'error'), 200)}`;
+  } catch {
+    failed ??= 'claude -p gave no JSON answer';
   }
+  if (failed && r.stderr) failed += ` (${clean(r.stderr, 200)})`;
+  return { ok: failed === null, cost_usd: cost, error: failed };
 };
 
 function realSleep(ms: number): Promise<void> {

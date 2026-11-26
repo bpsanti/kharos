@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { test } from 'node:test';
 import { parseAuthStatus } from '../src/account.ts';
 import { buildCreateBody, clean, footer, LENGTH_LINE, parkedRunAt, PUSH_LINE, readDoneMark, readQuestionMark } from '../src/body.ts';
 import { ConfigError, normalizeRepo, parseConfig } from '../src/config.ts';
-import { parseArgs } from '../src/cli.ts';
+import { COMMAND_FLAGS, main, parseArgs } from '../src/cli.ts';
 import { versionAtLeast } from '../src/doctor.ts';
 import { parseLog } from '../src/logparse.ts';
 import { readCreatedTrigger, readEnvironments, readError, readLogHeader, readRunSession, readRuns, readToolResponse } from '../src/remote.ts';
 import { accessFix, parseLsRemote, refusalFix } from '../src/repo.ts';
-import { fixture, response } from './helpers.ts';
+import { captured, fixture, response, sandbox } from './helpers.ts';
 
 test('config: a minimal profile gets the documented defaults', () => {
   const c = parseConfig({ version: 1, profiles: { demo: { repo: 'example/demo', environment: 'env_01X' } } });
@@ -171,12 +172,42 @@ test('account: only a hash of organization and login is kept', () => {
 });
 
 test('cli: arguments and versions', () => {
-  assert.deepEqual(parseArgs(['k-0001', '--all', '--profile', 'demo', '--title=a b']), { positional: ['k-0001'], flags: { all: true, profile: 'demo', title: 'a b' } });
+  assert.deepEqual(parseArgs(['--queue', '--profile', 'demo', '--title=a b'], COMMAND_FLAGS.prepare!, 'prepare'), { positional: [], flags: { queue: true, profile: 'demo', title: 'a b' } });
   // A boolean flag takes no value; `--` ends the flags.
-  assert.deepEqual(parseArgs(['close', 'k-0001', '--ask-stop', '--', '--stopped']), { positional: ['close', 'k-0001', '--stopped'], flags: { 'ask-stop': true } });
+  assert.deepEqual(parseArgs(['k-0001', '--ask-stop', '--', '--stopped'], COMMAND_FLAGS.close!, 'close'), { positional: ['k-0001', '--stopped'], flags: { 'ask-stop': true } });
+  assert.throws(() => parseArgs(['--all=yes'], COMMAND_FLAGS.list!, 'list'), /--all takes no value/);
   assert.equal(versionAtLeast('2.1.332 (Claude Code)', [2, 1, 323]), true);
   assert.equal(versionAtLeast('2.1.300', [2, 1, 323]), false);
   assert.equal(versionAtLeast('3.0.0', [2, 1, 323]), true);
+});
+
+test('cli: a flag the command does not read is refused, and a removed one says what replaces it', async () => {
+  const sb = sandbox();
+  const run = (argv: string[]) => captured(() => main(argv, sb.env, () => ''));
+  const cases: [string[], RegExp][] = [
+    // Read as a boolean, --default would have taken --permissions as its value and left unblock-all as a stray word.
+    [['setup', '--repo', 'example/demo', '--default', '--permissions', 'unblock-all'], /--default was removed/],
+    [['doctor', '--json', '--verbose'], /--json was removed/],
+    [['setup', '--repo', 'example/demo', '--model', 'opus'], /--model was removed from setup: .*\/kharos:run.*configuration file/],
+    [['setup', '--repo', 'example/demo', '--deadline', '90'], /--deadline was removed from setup/],
+    [['setup', '--repo', 'example/demo', '--account-mode', 'auto'], /--account-mode was removed/],
+    [['list', '--refresh'], /--refresh was removed: the followers keep the registry fresh/],
+    [['log', 'k-0001', '--cached'], /--cached was removed: a shell read without --session/],
+    [['permissions', 'preflight', '--launch', '--stdin'], /--launch was removed/],
+    [['permissions', 'unblock-all', 'on', '--expect', 't', '--mirror'], /--mirror was removed with the per-checkout permission commands; \/kharos:permissions/],
+    [['close', 'k-0001', '--bogus'], /close does not take --bogus/],
+    [['wait', 'k-0001', '--detach'], /wait does not take --detach/],
+    [['list', '--constructor'], /list does not take --constructor/],
+  ];
+  for (const [argv, message] of cases) {
+    const r = await run(argv);
+    assert.equal(r.value, 1, argv.join(' '));
+    assert.match(r.stderr, message, argv.join(' '));
+  }
+  assert.equal(fs.existsSync(sb.paths.config), false, 'no refused setup wrote a profile');
+  // prepare still takes --model and --deadline for one launch.
+  const launch = await run(['prepare', '--model', 'opus', '--deadline', '90']);
+  assert.doesNotMatch(launch.stdout + launch.stderr, /does not take|was removed/);
 });
 
 test('schema: the JSON Schema names the same fields the validator accepts', async () => {

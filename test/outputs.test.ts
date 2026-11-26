@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { launchOutputs, parseArgs, runHook } from '../src/cli.ts';
+import { COMMAND_FLAGS, launchOutputs, parseArgs, runHook } from '../src/cli.ts';
 import { enqueue, readOutbox, type KharosEvent } from '../src/events.ts';
 import { checkTarget, statusLine, writeStatus } from '../src/outputs/firstmate.ts';
 import { preToolUse } from '../src/hook.ts';
@@ -212,13 +212,13 @@ test('firstmate: writes one line to the given file only, calls the ledger, and r
 test('firstmate: a launch takes the adapter as an extra output, and dedicated asks for the sheet', () => {
   const sb = sandbox();
   const { home, status } = fmHome(sb, false);
-  const shared = launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', status, '--firstmate-home', home]));
+  const shared = launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', status, '--firstmate-home', home], COMMAND_FLAGS.prepare!, 'prepare'));
   assert.equal(shared.outputs[0]?.type, 'firstmate');
   assert.deepEqual(shared.footer, []);
-  const dedicated = launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', status, '--firstmate-home', home, '--firstmate-mode', 'dedicated']));
+  const dedicated = launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', status, '--firstmate-home', home, '--firstmate-mode', 'dedicated'], COMMAND_FLAGS.prepare!, 'prepare'));
   assert.match(dedicated.footer[0] ?? '', /"sheet"/);
-  assert.throws(() => launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', path.join(home, 'nope.status'), '--firstmate-home', home])), /never creates/);
-  assert.throws(() => launchOutputs(parseArgs(['--output', 'slack'])), /only "firstmate"/);
+  assert.throws(() => launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', path.join(home, 'nope.status'), '--firstmate-home', home], COMMAND_FLAGS.prepare!, 'prepare')), /never creates/);
+  assert.throws(() => launchOutputs(parseArgs(['--output', 'slack'], COMMAND_FLAGS.prepare!, 'prepare')), /only "firstmate"/);
 });
 
 test('firstmate: the extra output of a launch receives that launch\'s events', async () => {
@@ -227,7 +227,7 @@ test('firstmate: the extra output of a launch receives that launch\'s events', a
   writeConfig(sb);
   const { prepare } = await import('../src/launch.ts');
   const { HEADS_OK } = await import('./helpers.ts');
-  const extra = launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', status, '--firstmate-home', home]));
+  const extra = launchOutputs(parseArgs(['--output', 'firstmate', '--status-file', status, '--firstmate-home', home], COMMAND_FLAGS.prepare!, 'prepare'));
   const s = prepare(sb.paths, { instruction: 'x', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK, extra_outputs: extra.outputs });
   enqueue(sb.paths, [event({ session: s.id, event: 'session.opened', class: 'progress' }), event({ session: 'k-0099', id: 'other' })]);
   const r = await deliver(ctx(sb));

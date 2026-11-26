@@ -20,8 +20,6 @@ import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
 import { acknowledge, followersToStart, followTargets, ROLE_ENV, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
 
-export { ROLE_ENV } from './wait.ts';
-
 /** Claude Code runs without a terminal: `claude -p` says `sdk-cli`, the Agent SDK `sdk-ts` or `sdk-py`. */
 export function isHeadless(env: NodeJS.ProcessEnv): boolean {
   return /^sdk/.test(env.CLAUDE_CODE_ENTRYPOINT ?? '');
