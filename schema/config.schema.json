@@ -68,7 +68,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Pre-approved tools. It does not restrict: other tools still run."
+          "description": "Sent as the routine's allowed_tools. It neither allows nor restricts anything: permission prompts come from the repository's .claude/settings.json (see docs/permissions.md)."
         },
         "connectors": {
           "type": "boolean",

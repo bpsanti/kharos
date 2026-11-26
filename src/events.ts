@@ -39,6 +39,8 @@ export interface KharosEvent {
   summary?: string;
   /** Only on session.finished of a launch reported to a dedicated firstmate task. */
   sheet?: string;
+  /** Only on session.waiting_permission: the tool the open prompt is for. */
+  permission?: { tool: string };
 }
 
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
@@ -77,12 +79,14 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
   if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
+  if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool };
   return ev;
 }
 
 /**
  * Applies a verdict to a session and returns the events it causes. A verdict that needs a second read
- * (`confirm`) only counts when the previous read saw the same state.
+ * (`confirm`) only counts when the previous read saw the same state. A permission prompt is reported
+ * once, again after renotify_min while it stays open, and right away when a different prompt replaces it.
  */
 export function transition(s: Session, verdict: Verdict, now: number, renotifyMin: number, confirm: boolean): KharosEvent[] {
   if (confirm) {
@@ -92,6 +96,9 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
     }
   }
   s.pending_state = null;
+  const prompt = verdict.permission ?? null;
+  const newPrompt = prompt !== null && s.permission !== undefined && s.permission?.key !== prompt.key;
+  s.permission = prompt;
   const previous = s.state;
   const iso = new Date(now).toISOString();
   if (verdict.state !== s.state) {
@@ -102,7 +109,7 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
   const open = s.notice;
   if (verdict.notice) {
     const name = `session.${verdict.notice}` as EventName;
-    const repeat = open?.event === name || (isTerminalNotice(verdict.notice) && s.last_notice?.event === name);
+    const repeat = (open?.event === name && !newPrompt) || (isTerminalNotice(verdict.notice) && s.last_notice?.event === name);
     const due = repeat && open !== null && !isTerminalNotice(verdict.notice) && now - Date.parse(open.at) >= renotifyMin * 60_000;
     if (!repeat || due) {
       out.push(buildEvent(s, name, previous, verdict.reason, now));

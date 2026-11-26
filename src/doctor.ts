@@ -5,6 +5,8 @@ import { claudeBin, readAuthStatus, type AuthStatus } from './account.ts';
 import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './config.ts';
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
+import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
+import { readRemoteSettings, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
 import { loadEnvironments, loadWatch, type EnvironmentBook } from './state.ts';
@@ -26,6 +28,8 @@ export interface DoctorDeps {
   auth: () => AuthStatus | null;
   heads: (url: string, revision: string) => RemoteHeads;
   ownerType: (repo: string) => OwnerType;
+  /** The repository's .claude/settings.json on the branch a session starts on. */
+  settings: (repo: string, revision: string) => RemoteSettings;
 }
 
 export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
@@ -37,6 +41,7 @@ export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
     auth: () => readAuthStatus(env),
     heads: (u, rev) => readRemoteHeads(u, rev, env),
     ownerType: (repo) => readOwnerType(repo, env),
+    settings: (repo, rev) => readRemoteSettings(repo, rev, env),
   };
 }
 
@@ -158,6 +163,7 @@ function checkProfile(
       `Set "revision" of profile ${name} to an existing branch.`,
     ]);
   } else add('ok', label, `${slug}@${p.revision}`);
+  if (!heads.readable || (!heads.empty && heads.hasRevision)) checkPermissions(name, p, deps, add);
 
   const access = repos[slug];
   if (access?.access === 'ok') add('ok', `${name}: claude access`, `a routine for ${slug} was created on ${access.checked_at.slice(0, 10)}`);
@@ -176,6 +182,30 @@ function checkProfile(
       'If the project needs tools installed, give the environment a setup script there; it runs in the cloud, not on this machine.',
     ]);
   } else add('info', `${name}: environment`, `${p.environment} (not compared with your routines yet: /kharos:doctor reads them)`);
+}
+
+/** Which permission profile the branch a session starts on is on, and what in it would hold a session at a prompt. */
+function checkPermissions(name: string, p: Profile, deps: DoctorDeps, add: (l: Level, n: string, d: string, f?: string[]) => void): void {
+  const label = `${name}: permissions`;
+  const where = `${repoSlug(p.repo)}@${p.revision}`;
+  const fix = [`/kharos:permissions standard in a checkout of ${repoSlug(p.repo)} shows the change as a diff and writes it after you approve; then commit and push it to ${p.revision}.`];
+  const remote = deps.settings(p.repo, p.revision);
+  if (remote.status === 'unreadable') {
+    add('info', label, `${SETTINGS_PATH} of ${where} could not be read with gh (${remote.error}); a cloud session uses the file on that branch`, [`Run /kharos:permissions in a checkout of ${repoSlug(p.repo)} to see its rules.`]);
+    return;
+  }
+  let rules;
+  try {
+    rules = readRules(parseSettings(remote.status === 'found' ? remote.text : null));
+  } catch (err) {
+    if (!(err instanceof SettingsError)) throw err;
+    add('warn', label, `${SETTINGS_PATH} of ${where}: ${err.message}`, ['Fix the file on that branch.']);
+    return;
+  }
+  const findings = assess(rules);
+  const counts = `${rules.allow.length} allow, ${rules.ask.length} ask, ${rules.deny.length} deny`;
+  const detail = [`${where} is on the ${identify(rules)} permission profile (${remote.status === 'absent' ? 'no settings file' : counts})`, ...findings.map((f) => f.text)].join('; ');
+  add(findings.some((f) => f.level === 'warn') ? 'warn' : 'ok', label, detail, fix);
 }
 
 export function formatChecks(checks: Check[]): string {

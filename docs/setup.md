@@ -28,6 +28,7 @@ Each check that fails comes with its fix, and every fix goes through an official
 | `revision` | the branch or tag of the profile does not exist | set `revision` to an existing branch |
 | `claude access` | the service answered `repo_access_denied` | see below |
 | `environment` | the environment id is not used by any of your routines (warning) | check the id in `/schedule` |
+| `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
 | `limits` | (information) open sessions against `watch.max_open`, and fires in the last hour | wait, or close finished sessions |
 
 ## Claude's access to the repository

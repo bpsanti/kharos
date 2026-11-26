@@ -7,6 +7,7 @@ import path from 'node:path';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { OutputConfig } from './config.ts';
 import type { Paths } from './paths.ts';
+import type { PermissionRequest } from './permission-request.ts';
 
 /** Where the launch is. Each step is written before the call that depends on it. */
 export type Step =
@@ -81,6 +82,8 @@ export interface Session {
   /** The notice that is currently open, if any; cleared when the session goes back to normal. */
   notice: Notice | null;
   last_notice: Notice | null;
+  /** The permission prompt the session waits on, while it is open; absent in records written before it existed. */
+  permission?: PermissionRequest | null;
   result: Result;
   /** A next older page the watcher must read because the newest page did not reach the events it had. */
   pending_cursor: string | null;

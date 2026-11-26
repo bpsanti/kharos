@@ -133,6 +133,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       closed_turns: 0,
       notice: null,
       last_notice: null,
+      permission: null,
       result: { status: null, pr: null, branch: null, summary: null, question: null },
       pending_cursor: null,
       seen_start: false,

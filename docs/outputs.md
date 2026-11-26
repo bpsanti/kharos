@@ -16,7 +16,7 @@ Each output has an `events` filter: event classes (`progress`, `needs_you`, `ter
 |---|---|---|
 | `notification` | `events` | A desktop notification: `osascript` on macOS, `notify-send` on Linux |
 | `file` | `path`, `events` | Appends the event as one JSON line; `{state}` is kharos's state folder, `~` is your home |
-| `slack` | `webhook_env`, `events` | Posts the title, state, reason, pull request and link to a Slack incoming webhook |
+| `slack` | `webhook_env`, `events` | Posts the title, state, reason, pull request and link to a Slack incoming webhook; `<`, `>` and `&` are escaped, so no text can mention a channel |
 | `command` | `argv`, `timeout_s`, `events` | Runs the program with no shell, the event as JSON on stdin, and a deadline (10 s by default) |
 | `firstmate` | `status_file`, `home`, `mode`, `events` | The firstmate adapter, below |
 

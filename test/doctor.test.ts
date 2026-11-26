@@ -17,6 +17,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     auth: () => ({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'pro', account: 'sha256:x' }),
     heads: () => HEADS_OK,
     ownerType: () => 'User',
+    settings: () => ({ status: 'found', text: JSON.stringify({ permissions: { allow: ['Bash(npm test *)'] } }) }),
     ...over,
   };
 }
