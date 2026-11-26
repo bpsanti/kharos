@@ -8,6 +8,8 @@
 
 # kharos
 
+**Your agents, on the other shore.**
+
 `kharos` is a plugin for Claude Code.
 It launches cloud sessions of Claude Code (claude.ai/code) from any terminal session, follows their progress, sends them messages mid-run, and tells you when one needs you, is stuck, or is done.
 
@@ -141,6 +143,12 @@ See [docs/outputs.md](docs/outputs.md).
 | Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 5 by default) |
 | Cloud machine | 4 vCPU, 16 GB, 30 GB of disk |
 | Usage | the same plan usage as everything else: five sessions spend five times |
+
+## Why kharos
+
+The name comes from Kharon (Charon), the ferryman of Greek myth who carries travelers across the river for a single coin, the obol on the logo; *kharos* follows the modern Greek form of his name, Charos.
+kharos does the same for your work: it carries a task to a Claude Code session in the cloud, watches the crossing, and brings the result back to your session.
+One launch, one crossing; nothing is fired twice.
 
 ## Development
 
