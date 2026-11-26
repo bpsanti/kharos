@@ -185,12 +185,19 @@ function tokenize(text: string): Token[] {
 /** A word that stands as itself in an allow pattern. */
 const PLAIN_RE = /^[\w@%+=:,./-]{1,120}$/;
 
-/** user:password@ userinfo, as in a URL, or a key=value word whose key names a credential. */
-const SECRET_WORD_RE = /:\/\/[^/@:]*:[^@]*@|[^/@:]*:[^/@]+@|(?:key|secret|token|passw(?:or)?d|pwd)=/i;
+/** Userinfo in a URL (`://<userinfo>@`), user:password@ userinfo, or a key=value word whose key names a credential. */
+const SECRET_WORD_RE = /:\/\/[^/@]+@|:\/\/[^/@:]*:[^@]*@|[^/@:]*:[^/@]+@|(?:key|secret|token|passw(?:or)?d|pwd)=/i;
+/** A token of a known vendor, by its prefix: always a credential, whatever its shape or position. */
+const TOKEN_PREFIX_RE = /(?:^|[=:])(?:sk_live_|sk_test_|rk_live_|sk-ant-|sk-proj-|github_pat_|gh[pousr]_|glpat-|xox[abprs]-|(?:AKIA|ASIA)[A-Z0-9]{16})/;
 /** A JSON Web Token: base64url JSON, which starts with `eyJ`. */
 const JWT_RE = /^eyJ[\w-]{8,}/;
-/** The options whose value is a credential, by their whole name. */
-const SECRET_FLAGS = new Set(['--token', '--password', '--passwd', '--pass', '--secret', '--api-key', '--apikey', '--auth-token', '--access-key', '--secret-key', '--secret-access-key', '--client-secret']);
+/** An option whose value is a credential: its last `-` separated part names one (--db-password, --github-token, --auth), or it ends in api-key, auth-token, access-key or secret-key. */
+function secretFlag(option: string): boolean {
+  const o = option.toLowerCase();
+  if (!o.startsWith('-') || o.includes('=')) return false;
+  const last = o.split('-').pop() as string;
+  return ['token', 'password', 'passwd', 'pass', 'secret', 'apikey', 'auth'].includes(last) || /(?:api|auth|access|secret)-(?:key|token)$/.test(o);
+}
 /** The `aws configure set` names whose value is a credential. */
 const AWS_SECRET_RE = /(?:^|\.)aws_(?:secret_access_key|session_token|access_key_id)$/;
 /** Options whose value is a database name. */
@@ -210,8 +217,8 @@ function secretAt(values: readonly string[], i: number): boolean {
   const w = values[i] as string;
   const program = path.posix.basename(values[0] as string);
   const prev = i > 1 ? (values[i - 1] as string) : '';
-  if (SECRET_WORD_RE.test(w) || JWT_RE.test(w)) return true;
-  if (SECRET_FLAGS.has(prev.toLowerCase())) return true;
+  if (TOKEN_PREFIX_RE.test(w) || SECRET_WORD_RE.test(w) || JWT_RE.test(w)) return true;
+  if (secretFlag(prev)) return true;
   if ((prev === '-H' || prev === '--header') && /key|token|secret|auth/i.test(w.split(':')[0] as string)) return true;
   if (program === 'curl' && (prev === '-u' || prev === '--user') && w.includes(':')) return true;
   if ((program === 'redis-cli' && prev === '-a') || (program === 'sshpass' && prev === '-p')) return true;

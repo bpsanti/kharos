@@ -77,6 +77,21 @@ test('preflight: a word that holds a credential is never kept as written', () =>
     ['tool --secret-access-key S3cr3t run', ['tool', '--secret-access-key', null, 'run']],
     ['tool --client-secret S3cr3t run', ['tool', '--client-secret', null, 'run']],
     ['tool --auth-token S3cr3t run', ['tool', '--auth-token', null, 'run']],
+    ['tool --auth S3cr3t run', ['tool', '--auth', null, 'run']],
+    ['mytool --db-password hunter2', ['mytool', '--db-password', null]],
+    ['deploy --github-token ghp_abc', ['deploy', '--github-token', null]],
+    // Vendor tokens by their published prefixes, wherever they stand.
+    ['gh secret set K --body sk_live_51Habcd1234efgh5678', ['gh', 'secret', 'set', 'K', '--body', null]],
+    ['gh secret set K --body github_pat_11ABCDEFG_abcdefghijk', ['gh', 'secret', 'set', 'K', '--body', null]],
+    ['tool post xoxb-123456789012-456789012345-AbCdEfGhIjKl', ['tool', 'post', null]],
+    ['tool run sk-ant-api03-abcdefghij', ['tool', 'run', null]],
+    ['tool run sk-proj-abcdefghij', ['tool', 'run', null]],
+    ['tool run glpat-abcdefghij', ['tool', 'run', null]],
+    ['tool run AKIAIOSFODNN7EXAMPLE', ['tool', 'run', null]],
+    ['git push ghp_abcdefghijklmnop main', ['git', 'push', null, 'main']],
+    // Userinfo in a URL, with no colon in it: a token alone.
+    ['git clone https://ghp_abcdefghijklmnop@github.com/org/repo.git', ['git', 'clone', null]],
+    ['git clone https://x-access-token@github.com/org/repo.git', ['git', 'clone', null]],
     ['tool --api-key=S3cr3t run', ['tool', null, 'run']],
     ['env AWS_SECRET_ACCESS_KEY=S3cr3t aws s3 ls', ['env', null, 'aws', 's3', 'ls']],
     ['env API_KEY=S3cr3t tool', ['env', null, 'tool']],
@@ -93,8 +108,8 @@ test('preflight: a word that holds a credential is never kept as written', () =>
     ['aws configure set aws_access_key_id AKIAEXAMPLE', ['aws', 'configure', 'set', 'aws_access_key_id', null]],
   ];
   for (const [command, words] of cases) assert.deepEqual(toCandidate(command)?.words, words, command);
-  // A URL with no password, a port flag, an ssh remote, a long host name and a long path stay as written.
-  assert.deepEqual(toCandidate('psql postgresql://app@db.example/app -p 5432')?.words, ['psql', 'postgresql://app@db.example/app', '-p', '5432']);
+  // A URL with no userinfo, a port flag, an ssh remote, a long host name and a long path stay as written.
+  assert.deepEqual(toCandidate('psql postgresql://db.example/app -p 5432')?.words, ['psql', 'postgresql://db.example/app', '-p', '5432']);
   assert.deepEqual(toCandidate('git clone git@github.com:org/repo.git')?.words, ['git', 'clone', 'git@github.com:org/repo.git']);
   assert.deepEqual(toCandidate('redis-cli -h cache01.prod2.example.internal ping')?.words, ['redis-cli', '-h', 'cache01.prod2.example.internal', 'ping']);
   assert.deepEqual(toCandidate('cat logs/2026/session01/output2.txt')?.words, ['cat', 'logs/2026/session01/output2.txt']);
@@ -109,6 +124,8 @@ test('preflight: a word that holds a credential is never kept as written', () =>
     'git log --author someone',
     'gpg --keyserver keys.example --recv-keys ABCD1234',
     'tool --passes 3',
+    'tool --auth-type basic',
+    'gh secret set K --body plain',
     'aws configure set region us-east-1',
     'curl -H Accept:application/json https://api.example/health',
   ];
