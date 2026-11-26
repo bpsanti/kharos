@@ -117,7 +117,7 @@
             "unblock-all",
             "auto-unblock"
           ],
-          "description": "What the person chose in /kharos:setup for this profile's permission prompts. The repository's files change only through /kharos:permissions."
+          "description": "What the person chose in /kharos:setup for this profile's permission prompts (auto-unblock is an older name of unblock-all, read as it). The repository's files change only through /kharos:permissions."
         },
         "account": {
           "type": "string",

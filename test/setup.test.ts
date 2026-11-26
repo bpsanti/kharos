@@ -419,6 +419,20 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   assert.deepEqual([back.permission_hook, back.preflight_auto, back.permission_unblock], [false, false, false]);
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps({ managedPolicy: () => policy }))), /ok {4}unblock all: off: none of the three parts is on; `\/kharos:permissions unblock-all` frees/);
 
+  // auto-unblock, the older name, is unblock-all: the same confirmation and token, and a stored profile reads as it.
+  const alias = sandbox();
+  const aliasAsk = (over: Partial<SetupInput> = {}) => runSetup(alias.paths, { ...unanswered(alias), env, environment: 'demo', ...over }, deps({ managedPolicy: () => policy }));
+  const asked = aliasAsk({ permissions: 'auto-unblock' });
+  if (asked.next.kind !== 'ask-permissions' || !asked.next.unblockAll) return assert.fail('auto-unblock asks for the confirmation of unblock all');
+  assert.deepEqual(asked.next.offer, []);
+  assert.ok(!asked.next.options.some((o) => o.id === ('auto-unblock' as string)), 'the older name is not offered');
+  assert.equal(aliasAsk({ permissions: 'auto-unblock', unblockExpect: asked.next.unblockAll.token }).next.kind, 'ready');
+  assert.equal(loadConfig(alias.paths).config.profiles.demo?.permissions, 'unblock-all');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'auto');
+  writeConfig(alias, { profiles: { demo: { repo: 'https://github.com/example/demo', environment: 'env_01TESTENVIRONMENT', permissions: 'auto-unblock' } } });
+  assert.equal(loadConfig(alias.paths).config.profiles.demo?.permissions, 'unblock-all', 'a stored auto-unblock reads as unblock-all');
+  fs.writeFileSync(settingsFile, JSON.stringify({ model: 'opus', permissions: { defaultMode: 'acceptEdits', allow: ['Read'] } }, null, 2) + '\n');
+
   // An organization that turns auto mode off leaves that part out, and says why.
   const noAuto: ManagedPolicy = { ...policy, autoModeDisabled: true };
   const fresh = sandbox();

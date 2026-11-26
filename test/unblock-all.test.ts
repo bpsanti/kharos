@@ -118,7 +118,7 @@ test('unblock-all: off takes back the three parts, and the switches it found as 
   assert.deepEqual(switches(sb), [true, true, true]);
   const shown = await kharos(sb, 'permissions', 'unblock-all', 'show', 'off');
   assert.match(shown.out, /1\. forgets your confirmation of the unblock preset: set now; this takes it back/);
-  assert.match(shown.out, /permission_hook back to on and preflight_auto back to off, as they were before `kharos permissions unblock-all on`/);
+  assert.match(shown.out, /permission_hook on, preflight_auto off and permission_unblock off, as they were before `kharos permissions unblock-all on`/);
   assert.match(shown.out, /\+\s+"defaultMode": "acceptEdits"/);
   assert.match(shown.out, /kharos permissions unblock-all off --expect [0-9a-f]{12}/);
   assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'off', '--expect', '000000000000')).code, 1);
@@ -129,6 +129,39 @@ test('unblock-all: off takes back the three parts, and the switches it found as 
   assert.deepEqual(switches(sb), [true, false, false], 'permission_hook stays on, as it was before');
   assert.equal(mode(sb), 'acceptEdits');
   assert.equal(loadConfirmation(sb.paths, 'unblock'), null);
+  assert.match((await kharos(sb, 'permissions', 'unblock-all', 'show', 'off')).out, /nothing to take back/);
+});
+
+test('unblock-all: off leaves an account that was in auto mode before on as it was', async () => {
+  const sb = account(POLICY_JSON, { permissions: { defaultMode: 'auto' } });
+  writeConfig(sb);
+  const on = await kharos(sb, 'permissions', 'unblock-all', 'on', '--expect', tokenOf((await kharos(sb, 'permissions', 'unblock-all', 'show')).out));
+  assert.equal(on.code, 0, on.err);
+  assert.match(on.out, /3\. auto mode for the account: on already/);
+  const shown = await kharos(sb, 'permissions', 'unblock-all', 'show', 'off');
+  assert.match(shown.out, /3\. this account's sessions start as before: not turned on by `kharos permissions unblock-all on`; it stays as it is/);
+  const off = await kharos(sb, 'permissions', 'unblock-all', 'off', '--expect', tokenOf(shown.out));
+  assert.equal(off.code, 0, off.err);
+  assert.equal(mode(sb), 'auto', 'the mode the person set by hand stays');
+  assert.deepEqual(switches(sb), [false, false, false]);
+  assert.equal(loadConfirmation(sb.paths, 'unblock'), null);
+});
+
+test('unblock-all: off leaves permission_unblock and the confirmation that were on before on as they were', async () => {
+  const sb = account();
+  writeConfig(sb, { permission_unblock: true });
+  const fp = /fingerprint ([0-9a-f]{16})/.exec((await kharos(sb, 'permissions', 'unblock', 'show')).out)?.[1] ?? '';
+  assert.equal((await kharos(sb, 'permissions', 'unblock', 'confirm', '--fingerprint', fp)).code, 0);
+  const on = await kharos(sb, 'permissions', 'unblock-all', 'on', '--expect', tokenOf((await kharos(sb, 'permissions', 'unblock-all', 'show')).out));
+  assert.equal(on.code, 0, on.err);
+  assert.match(on.out, /1\. the confirmation of the unblock preset: on already/);
+  assert.deepEqual(switches(sb), [true, true, true]);
+  const off = await kharos(sb, 'permissions', 'unblock-all', 'off', '--expect', tokenOf((await kharos(sb, 'permissions', 'unblock-all', 'show', 'off')).out));
+  assert.equal(off.code, 0, off.err);
+  assert.match(off.out, /1\. the confirmation of the unblock preset: left as it is/);
+  assert.deepEqual(switches(sb), [false, false, true], 'permission_unblock stays on, as it was before');
+  assert.notEqual(loadConfirmation(sb.paths, 'unblock'), null, 'the confirmation made before on stays');
+  assert.equal(mode(sb), 'acceptEdits');
   assert.match((await kharos(sb, 'permissions', 'unblock-all', 'show', 'off')).out, /nothing to take back/);
 });
 

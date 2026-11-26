@@ -257,7 +257,8 @@ Each part keeps its own guards: parts 1 and 2 are left out when the organization
 A part that is on already is skipped, so running it again only finishes what is missing.
 The token holds only while the managed settings, the kharos configuration and the account's settings are what the list was made from; otherwise nothing changes and the list is shown again.
 When a part fails, the parts after it are not touched, and the error says which parts are on.
-`/kharos:permissions unblock-all off` (`kharos permissions unblock-all show off`, then `off --expect <token>`) takes all of it back: it forgets the confirmation, turns `permission_unblock` off and puts `permission_hook` and `preflight_auto` back as they were before, and sets the account's mode back to what it had.
+`/kharos:permissions unblock-all off` (`kharos permissions unblock-all show off`, then `off --expect <token>`) takes back what `on` turned on: it forgets the confirmation, puts `permission_hook`, `preflight_auto` and `permission_unblock` back as they were before, and sets the account's mode back to what it had.
+A part that was on before `on`, such as an account already in auto mode, is left as it is.
 `/kharos:doctor` shows one `unblock all` line: on, partly on with what is missing, or off.
 `/kharos:setup` offers it as the `unblock-all` permission mode, with the same list and token.
 

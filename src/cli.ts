@@ -121,7 +121,7 @@ const USAGE = `usage: kharos <command>
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
   setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is (or default)|standard|hook|standard+hook|auto-preflight|unblock|unblock-all [--unblock-expect token]|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
+        [--permissions <as-is (or default)|standard|hook|standard+hook|auto-preflight|unblock|unblock-all [--unblock-expect token]>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
   permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token>   (everything kharos can free for this account, in one step, or all of it taken back)

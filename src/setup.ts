@@ -13,7 +13,7 @@ import { applyUnblockAll, approveUnblockAll, describeUnblockAll, preview, readUn
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { findSetup, loadSetups, recordSetup } from './state.ts';
 import { clean } from './body.ts';
-import { DEFAULT_WATCH, isPermissionChoice, loadConfig, MAX_OPEN_CHOICES, MAX_OPEN_TRADEOFF, maxOpenChosen, normalizeRepo, otherAccount, PERMISSION_CHOICES, repoSlug, saveConfig, type Config, type PermissionChoice, type Profile } from './config.ts';
+import { DEFAULT_WATCH, isPermissionChoice, loadConfig, MAX_OPEN_CHOICES, MAX_OPEN_TRADEOFF, maxOpenChosen, normalizeRepo, otherAccount, PERMISSION_CHOICES, permissionChoice, repoSlug, saveConfig, type Config, type PermissionChoice, type Profile } from './config.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accountChecks, CHECKED_BY_CLAUDE_CODE, LAUNCH_APPROVAL, runDoctor, type Check, type DoctorDeps } from './doctor.ts';
 import { hooksBlocked, mirrorRefusal, type ManagedPolicy } from './managed-policy.ts';
@@ -337,7 +337,6 @@ const CHOICE_TEXT: Record<PermissionChoice, string> = {
   'auto-preflight': 'automatic preflight on a side branch of each launch',
   unblock: 'the unblock preset',
   'unblock-all': "unblock all: the unblock preset on a side branch of each launch, and this account's sessions in auto mode",
-  'auto-unblock': 'automatic unblock on a side branch of each launch',
 };
 
 /** The one next action a permission mode still needs, or null when nothing is left to do. */
@@ -359,8 +358,6 @@ function permissionAction(choice: PermissionChoice, ctx: { standardInPlace: bool
       return ctx.config.preflight_auto ? null : [enable, 'kharos permissions auto preflight on'].filter(Boolean).join(', then ') + ' (yours to run)';
     case 'unblock':
       return `/kharos:permissions unblock${where}`;
-    case 'auto-unblock':
-      return ctx.config.permission_unblock ? null : UNBLOCK_ALL_SKILL;
     case 'unblock-all':
       return ctx.unblockAllOn ? null : UNBLOCK_ALL_SKILL;
   }
@@ -553,14 +550,14 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   let permQuestion: Next | null = null;
   if (input.permissions !== undefined) {
     // `default` is what /kharos:permissions calls leaving the rules as they are.
-    const wanted = input.permissions === 'default' ? 'as-is' : input.permissions;
+    const wanted = input.permissions === 'default' ? 'as-is' : (permissionChoice(input.permissions) ?? input.permissions);
     const picked = options.find((o) => o.id === wanted);
     if (!picked || !isPermissionChoice(picked.id)) throw new SetupError(`--permissions must be one of ${PERMISSION_CHOICES.join(', ')} (default is as-is)`);
     if (picked.unavailable && !/already in place/.test(picked.unavailable)) throw new SetupError(`${picked.title} is not available here: ${picked.unavailable}`);
     choice = picked.id;
   } else if (existing?.permissions) choice = existing.permissions;
   // Unblock all, picked now: its one confirmation is the token of what it frees, asked with the mode when it is missing.
-  const unblockNow = input.permissions === 'unblock-all' && ua.token !== null;
+  const unblockNow = input.permissions !== undefined && choice === 'unblock-all' && ua.token !== null;
   const confirmUnblock = unblockNow && !input.unblockExpect;
   const accountPart = ua.parts.find((p) => p.id === 'account');
   const willAuto = (unblockNow && !!input.unblockExpect && !accountPart?.unavailable) || (choice !== 'unblock-all' && input.accountMode === 'auto');

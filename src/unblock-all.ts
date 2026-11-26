@@ -8,7 +8,8 @@
 //                settings), unavailable when the organization turns auto mode off.
 // `show` says what they free and where each one stands, with the token of that exact change; `on` and `off`
 // apply it only with that token, part by part in that order, skip what is on (or off) already, and stop at the
-// first part that fails, saying which parts are on then.
+// first part that fails, saying which parts are on then. `on` records which parts it turned on, and the switches
+// as they were, so `off` takes back only those and leaves what the person had set before as it was.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -36,7 +37,7 @@ export interface Part {
   title: string;
   /** In effect as set now: the confirmation matches, the three switches are on, the account starts in auto mode. */
   on: boolean;
-  /** Something of it is set, which `off` takes back. */
+  /** `unblock-all on` turned it on and something of it is still set, which `off` takes back. */
   set: boolean;
   /** Why it cannot be on here, or null. */
   unavailable: string | null;
@@ -60,20 +61,53 @@ export interface UnblockAllState {
   parts: Part[];
 }
 
-/** What `unblock-all on` changed in the configuration besides permission_unblock, so `off` puts it back. */
-interface Before {
+interface Switches {
   permission_hook: boolean;
   preflight_auto: boolean;
+  permission_unblock: boolean;
 }
+
+/** The parts `unblock-all on` turned on, and the switches as they were before it, so `off` takes back only those. */
+interface Before {
+  parts: PartId[];
+  /** Present while `auto` is among the parts. */
+  config?: Switches;
+}
+
+const PART_IDS: readonly PartId[] = ['confirm', 'auto', 'account'];
 
 function beforePath(paths: Paths): string {
   return path.join(paths.state, 'unblock-all.json');
 }
 
+function isSwitches(v: unknown): v is Switches {
+  return isObject(v) && typeof v.permission_hook === 'boolean' && typeof v.preflight_auto === 'boolean' && typeof v.permission_unblock === 'boolean';
+}
+
 function readBefore(paths: Paths): Before | null {
   return (
-    readState<Before>(beforePath(paths), (v) => isObject(v) && typeof v.permission_hook === 'boolean' && typeof v.preflight_auto === 'boolean', 'the configuration before unblock-all on') ?? null
+    readState<Before>(
+      beforePath(paths),
+      (v) =>
+        isObject(v) &&
+        Array.isArray(v.parts) &&
+        v.parts.every((id) => (PART_IDS as readonly unknown[]).includes(id)) &&
+        (v.parts.includes('auto') ? isSwitches(v.config) : v.config === undefined),
+      'the parts unblock-all on turned on',
+    ) ?? null
   );
+}
+
+/** Records that `on` turned a part on (or that `off` took it back); the record goes once no part is left. */
+function record(paths: Paths, id: PartId, turnedOn: boolean, config?: Switches): void {
+  const b = readBefore(paths);
+  const parts = PART_IDS.filter((p) => (p === id ? turnedOn : (b?.parts.includes(p) ?? false)));
+  if (!parts.length) {
+    fs.rmSync(beforePath(paths), { force: true });
+    return;
+  }
+  const kept = parts.includes('auto') ? (b?.config ?? config) : undefined;
+  writeJsonAtomic(beforePath(paths), { parts, ...(kept ? { config: kept } : {}) } satisfies Before);
 }
 
 /** Why the unblock preset is not available under this policy, or null. */
@@ -95,6 +129,7 @@ function loadedConfig(paths: Paths): Config {
 /** Where each of the three parts stands for this account now. */
 export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy = readManagedPolicy(env), config: Config = loadedConfig(paths)): UnblockAllState {
   const preset = presetRefusal(policy);
+  const turned = readBefore(paths)?.parts ?? [];
   const saved = loadConfirmation(paths, 'unblock');
   const confirmed = confirmationState(saved, policy);
   const auto = config.permission_hook && config.preflight_auto && config.permission_unblock;
@@ -105,7 +140,7 @@ export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: Man
       id: 'confirm',
       title: TITLE.confirm,
       on: confirmed.state === 'valid',
-      set: saved !== null,
+      set: turned.includes('confirm') && saved !== null,
       unavailable: preset,
       note: confirmed.state === 'changed' ? describeConfirmation(confirmed, 'unblock') : null,
     },
@@ -113,7 +148,7 @@ export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: Man
       id: 'auto',
       title: TITLE.auto,
       on: auto,
-      set: config.permission_unblock || readBefore(paths) !== null,
+      set: turned.includes('auto'),
       unavailable: preset,
       note: config.permission_unblock && !auto ? 'permission_unblock is on, but it does nothing until permission_hook and preflight_auto are on too' : null,
     },
@@ -121,7 +156,7 @@ export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: Man
       id: 'account',
       title: TITLE.account,
       on: acctAuto,
-      set: acctAuto,
+      set: turned.includes('account') && acctAuto,
       unavailable: autoModeRefusal(policy) ?? ('error' in acct ? `${acct.file} cannot be read (${acct.error})` : null),
       note: null,
     },
@@ -214,7 +249,8 @@ function stateWord(p: Part, todo: readonly PartId[], target: UnblockTarget): str
     if (p.unavailable) return `not available here: ${p.unavailable}; it stays off`;
     return `off now${p.note ? ` (${p.note})` : ''}; this turns it on`;
   }
-  return todo.includes(p.id) ? 'set now; this takes it back' : 'off already';
+  if (todo.includes(p.id)) return 'set now; this takes it back';
+  return p.on ? 'not turned on by `kharos permissions unblock-all on`; it stays as it is' : 'off already';
 }
 
 function onLines(p: Plan, paths: Paths): string[] {
@@ -244,16 +280,19 @@ function onLines(p: Plan, paths: Paths): string[] {
   return lines;
 }
 
+function switchesText(s: Switches): string {
+  const w = (v: boolean) => (v ? 'on' : 'off');
+  return `permission_hook ${w(s.permission_hook)}, preflight_auto ${w(s.preflight_auto)} and permission_unblock ${w(s.permission_unblock)}`;
+}
+
 function offLines(p: Plan, paths: Paths): string[] {
   const [confirm, auto, account] = p.state.parts as [Part, Part, Part];
-  const b = p.before;
-  const restore = b
-    ? `permission_hook back to ${b.permission_hook ? 'on' : 'off'} and preflight_auto back to ${b.preflight_auto ? 'on' : 'off'}, as they were before \`kharos permissions unblock-all on\``
-    : 'permission_hook and preflight_auto stay as they are';
+  const b = p.before?.config;
+  const restore = b ? `; ${switchesText(b)}, as they were before \`kharos permissions unblock-all on\`` : '';
   const lines = [
-    'kharos permissions unblock-all off: takes back all of what `kharos permissions unblock-all on` frees, in this order:',
+    'kharos permissions unblock-all off: takes back what `kharos permissions unblock-all on` turned on, and leaves what was set before it as it is, in this order:',
     `  1. forgets your confirmation of the unblock preset: ${stateWord(confirm, p.todo, 'off')}`,
-    `  2. turns automatic unblock off (permission_unblock off in ${paths.config}; ${restore}): ${stateWord(auto, p.todo, 'off')}`,
+    `  2. turns automatic unblock off (in ${paths.config}${restore}): ${stateWord(auto, p.todo, 'off')}`,
     `  3. this account's sessions start as before: ${p.accountProblem ? `cannot be taken back here: ${p.accountProblem}` : stateWord(account, p.todo, 'off')}`,
     'Afterwards cloud sessions wait at permission prompts until a person answers them, and each launch asks for your approval again.',
     'A branch that has the unblock preset committed in its own kharos permission hook keeps it until it is removed there; /kharos:doctor names such a branch.',
@@ -307,26 +346,38 @@ export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: Un
           confirm: () => {
             if (p.state.policy.status !== 'found') throw new CommandError("the organization's managed settings cannot be read");
             const c = saveConfirmation(paths, 'unblock', p.state.policy, now);
+            record(paths, 'confirm', true);
             return `confirmed the unblock preset for the organization's managed settings with fingerprint ${c.fingerprint}; kharos asks again when they change`;
           },
           auto: () => {
             const c = loadedConfig(paths);
-            if (!readBefore(paths)) writeJsonAtomic(beforePath(paths), { permission_hook: c.permission_hook, preflight_auto: c.preflight_auto } satisfies Before);
+            record(paths, 'auto', true, { permission_hook: c.permission_hook, preflight_auto: c.preflight_auto, permission_unblock: c.permission_unblock });
             saveConfig(paths, { ...c, permission_hook: true, preflight_auto: true, permission_unblock: true });
             return `permission_hook, preflight_auto and permission_unblock are on in ${paths.config}: each launch gets the unblock preset on a side branch kharos/<id>, while your confirmation matches the organization's managed settings`;
           },
-          account: () => applyAccountMode(paths, env, approveAccountMode(paths, env, 'auto', p.account?.token, p.state.policy), `\`${UNBLOCK_ALL_UNDO}\``),
+          account: () => {
+            const done = applyAccountMode(paths, env, approveAccountMode(paths, env, 'auto', p.account?.token, p.state.policy), `\`${UNBLOCK_ALL_UNDO}\``);
+            record(paths, 'account', true);
+            return done;
+          },
         }
       : {
-          confirm: () => (forgetConfirmation(paths, 'unblock') ? 'forgot your confirmation of the unblock preset' : 'no confirmation of the unblock preset was remembered'),
-          auto: () => {
-            const c = loadedConfig(paths);
-            const b = readBefore(paths);
-            saveConfig(paths, { ...c, permission_unblock: false, ...(b ? { permission_hook: b.permission_hook, preflight_auto: b.preflight_auto } : {}) });
-            fs.rmSync(beforePath(paths), { force: true });
-            return `permission_unblock is off in ${paths.config}${b ? `; permission_hook is ${b.permission_hook ? 'on' : 'off'} and preflight_auto is ${b.preflight_auto ? 'on' : 'off'} again, as before` : ''}`;
+          confirm: () => {
+            const done = forgetConfirmation(paths, 'unblock') ? 'forgot your confirmation of the unblock preset' : 'no confirmation of the unblock preset was remembered';
+            record(paths, 'confirm', false);
+            return done;
           },
-          account: () => applyAccountMode(paths, env, approveAccountMode(paths, env, 'off', p.account?.token, p.state.policy), `\`${UNBLOCK_ALL_UNDO}\``),
+          auto: () => {
+            const b = p.before?.config as Switches;
+            saveConfig(paths, { ...loadedConfig(paths), ...b });
+            record(paths, 'auto', false);
+            return `${switchesText(b)} in ${paths.config} again, as before`;
+          },
+          account: () => {
+            const done = applyAccountMode(paths, env, approveAccountMode(paths, env, 'off', p.account?.token, p.state.policy), `\`${UNBLOCK_ALL_UNDO}\``);
+            record(paths, 'account', false);
+            return done;
+          },
         };
   const parts = p.state.parts;
   for (const [i, part] of parts.entries()) {
@@ -334,6 +385,7 @@ export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: Un
     if (!p.todo.includes(part.id)) {
       if (target === 'off' && part.id === 'account' && p.accountProblem) out.push(`${n}: not taken back: ${p.accountProblem}`);
       else if (target === 'on' && part.unavailable && !part.on) out.push(`${n}: skipped, not available here: ${part.unavailable}`);
+      else if (target === 'off' && part.on) out.push(`${n}: left as it is: \`kharos permissions unblock-all on\` did not turn it on`);
       else out.push(`${n}: ${target === 'on' ? 'on already' : 'off already'}`);
       continue;
     }
