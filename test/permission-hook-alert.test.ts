@@ -120,9 +120,10 @@ test('hook alert: an older page read between two reads does not confirm a prompt
 test('hook alert: the watcher reads a session with a prompt waiting to be confirmed on its next pass', () => {
   const sb = sandbox();
   const id = openOne(sb, { hook: true });
-  // Old enough to be read every second pass only.
+  // Open long enough to be read every second pass only.
   updateRegistry(sb.paths, (reg) => {
     reg.sessions[id]!.created_at = '2026-11-26T02:00:00.000Z';
+    reg.sessions[id]!.opened_at = '2026-11-26T02:00:00.000Z';
   });
   read(sb, FIRST_OPEN);
   assert.equal(isDue(session(sb, id), at(FIRST_OPEN) + 6 * MIN, 10), true);

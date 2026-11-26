@@ -9,7 +9,7 @@ import type { WatchConfig } from './config.ts';
 import { oneLine, readOutbox, type KharosEvent } from './events.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, liveFollowers } from './lease.ts';
-import { collectGarbage, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
+import { collectGarbage, isFollowed, loadRegistry, startedAt, updateRegistry, type Session } from './registry.ts';
 import { loadWatch, updateWatch } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 
@@ -28,7 +28,7 @@ export interface Read {
 export function cadence(s: Session, now: number): number {
   // A permission prompt that waits for the next read to count: a person may be needed.
   if (s.notice || s.pending_state?.key) return 1;
-  const age = now - Date.parse(s.created_at);
+  const age = now - startedAt(s);
   if (age < 20 * MIN) return 1;
   if (age < 120 * MIN) return 2;
   return 3;

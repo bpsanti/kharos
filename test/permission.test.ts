@@ -58,7 +58,7 @@ function permissionEvents(sb: Sandbox): KharosEvent[] {
 test('permission: the classifier names the tool of a real prompt', () => {
   const page = parseLog(fixture('log-permission-prompt.txt'));
   const now = page.events[page.events.length - 1]!.t + 4 * MIN;
-  const v = classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
+  const v = classify({ events: page.events, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
   assert.equal(v.state, 'waiting_permission');
   assert.equal(v.reason, 'permission request for Bash (a reason kharos cannot tell) with no answer for 5 min');
   assert.equal(v.permission?.category, 'unknown');

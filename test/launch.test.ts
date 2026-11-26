@@ -479,3 +479,22 @@ test('commands: the title stays in list with a notice open, the log reads from d
   postToolUse(sb.ctx(T0 + 700_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, `${cut}\n${long}`)));
   assert.match(result(sb.paths, id, sb.env), /the session's last message is cut in the log the tool returns; the whole text is on the session page: https:/);
 });
+
+test('launch: the deadline counts from the open of the session, not from the launch or a refused fire', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  // Prepared, and first fired, four hours before the run that opened it (an approval that waited, a refusal).
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.created_at = new Date(T0 - 4 * 3600_000).toISOString();
+  });
+  launch(sb, id);
+  let s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.opened_at, new Date(T0 + 1000).toISOString());
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.fired_at = new Date(T0 - 4 * 3600_000).toISOString();
+  });
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, fixture('log-foreground-command.txt'))));
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.notEqual(s.state, 'overdue');
+  assert.equal(s.overdue_at ?? null, null);
+});

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The deadline counts from the moment the cloud session opened, not from the preparation of the launch: the wait for an approval, a refused fire or a place in the queue no longer count. `session.overdue` is raised once per session, and not again at once when a message reopens a session past its deadline.
+
 ## 0.2.0
 
 ### Upgrading from 0.1.0

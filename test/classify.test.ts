@@ -19,7 +19,7 @@ function log(rows: [number, string, string | null, string][]): LogEvent[] {
 }
 
 function at(events: LogEvent[], nowSec: number, over: Partial<Parameters<typeof classify>[0]> = {}): Verdict {
-  return classify({ events, seenStart: true, createdAt: BASE, deadlineMin: 180, now: BASE + nowSec * 1000, watch: DEFAULT_WATCH, ...over });
+  return classify({ events, seenStart: true, startedAt: BASE, deadlineMin: 180, now: BASE + nowSec * 1000, watch: DEFAULT_WATCH, ...over });
 }
 
 const START: [number, string, string | null, string][] = [
@@ -34,7 +34,7 @@ function replay(events: LogEvent[], stepSec: number, extraSec: number, over: Par
   const t1 = events[events.length - 1]!.t + extraSec * 1000;
   const seen: string[] = [];
   for (let now = t0; now <= t1; now += stepSec * 1000) {
-    const v = classify({ events: events.filter((e) => e.t <= now), seenStart: true, createdAt: t0, deadlineMin: 180, now, watch: DEFAULT_WATCH, ...over });
+    const v = classify({ events: events.filter((e) => e.t <= now), seenStart: true, startedAt: t0, deadlineMin: 180, now, watch: DEFAULT_WATCH, ...over });
     const label = v.notice ? `${v.state}/${v.notice}` : v.state;
     if (seen[seen.length - 1] !== label) seen.push(label);
   }
@@ -49,13 +49,13 @@ test('classify: a question, an answer, a background command and the end, read ev
 test('classify: the end mark inside the prompt is not an end', () => {
   const page = parseLog(fixture('log-question-background-done.txt'));
   const firstTurn = page.events.filter((e) => e.t <= Date.parse('2026-11-25T18:58:00Z'));
-  assert.equal(at(firstTurn, 0, { now: Date.parse('2026-11-25T18:58:00Z'), createdAt: firstTurn[0]!.t }).state, 'running');
+  assert.equal(at(firstTurn, 0, { now: Date.parse('2026-11-25T18:58:00Z'), startedAt: firstTurn[0]!.t }).state, 'running');
 });
 
 test('classify: a short session ends finished', () => {
   const page = parseLog(fixture('log-write-done.txt'));
   const now = page.events[page.events.length - 1]!.t + 5000;
-  assert.equal(classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 60, now, watch: DEFAULT_WATCH }).state, 'finished');
+  assert.equal(classify({ events: page.events, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 60, now, watch: DEFAULT_WATCH }).state, 'finished');
 });
 
 test('classify: a ten-minute foreground command is quiet, not silent', () => {
@@ -197,14 +197,14 @@ test('classify: a real permission prompt, with a parallel call answered, waits f
   const prompt = page.events.find((e) => e.kind === 'permission prompt');
   assert.equal(prompt?.tool, 'Bash');
   const now = page.events[page.events.length - 1]!.t + 60_000;
-  const v = classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
+  const v = classify({ events: page.events, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH });
   assert.equal(v.state, 'waiting_permission');
   // A message from a person queues behind the prompt; it does not answer it.
   const queued = log([[0, 'user', null, 'Skip that step.']]).map((e) => ({ ...e, t: now, ts: new Date(now).toISOString() }));
-  assert.equal(classify({ events: [...page.events, ...queued], seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
+  assert.equal(classify({ events: [...page.events, ...queued], seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
   // The model speaking again means the prompt was answered.
   const moved = [...page.events, { ...queued[0]!, kind: 'assistant', text: 'Skipped.' }];
-  assert.notEqual(classify({ events: moved, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
+  assert.notEqual(classify({ events: moved, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now, watch: DEFAULT_WATCH }).state, 'waiting_permission');
 });
 
 test('log: kinds of several words, and MCP tool names', () => {
@@ -251,7 +251,7 @@ test('classify: a question in a turn that events woke after the end mark is wait
 
 test('classify: a question stands when a Stop hook of the repository answers right after it', () => {
   const page = parseLog(fixture('log-stop-hook-question.txt'));
-  const v = at(page.events, 0, { now: page.events[page.events.length - 1]!.t + 30_000, createdAt: page.events[0]!.t });
+  const v = at(page.events, 0, { now: page.events[page.events.length - 1]!.t + 30_000, startedAt: page.events[0]!.t });
   assert.equal(v.state, 'waiting_answer');
   assert.match(latestMarks(page.events).question ?? '', /pre-push check refused it/);
 });
@@ -259,11 +259,11 @@ test('classify: a question stands when a Stop hook of the repository answers rig
 test('classify: an end mark stands when a Stop hook makes the session push before its turn closes', () => {
   const page = parseLog(fixture('log-stop-hook-done.txt'));
   const events = page.events;
-  assert.equal(at(events, 0, { now: events[events.length - 1]!.t + 30_000, createdAt: events[0]!.t }).state, 'finished');
+  assert.equal(at(events, 0, { now: events[events.length - 1]!.t + 30_000, startedAt: events[0]!.t }).state, 'finished');
   // While the push still runs, the turn is open: not an end yet.
   const pushing = events.slice(0, 7);
   assert.equal(pushing[pushing.length - 1]!.kind, 'tool_use');
-  assert.equal(at(pushing, 0, { now: events[6]!.t + 5000, createdAt: events[0]!.t }).state, 'running');
+  assert.equal(at(pushing, 0, { now: events[6]!.t + 5000, startedAt: events[0]!.t }).state, 'running');
 });
 
 test('sinceLastUser: hook feedback and task notifications are not a message from a person', () => {
@@ -281,4 +281,27 @@ test('sinceLastUser: hook feedback and task notifications are not a message from
     [5, 'user', null, 'The second one. Stop hook feedback: is a phrase too'],
   ]);
   assert.equal(latestMarks(person).question, null);
+});
+
+test('events: the deadline passes once, so a session reopened past it raises no second overdue', () => {
+  const s = session();
+  const overdue: Verdict = { state: 'overdue', notice: 'overdue', reason: 'running for 181 min, past the deadline of 180 min' };
+  const running: Verdict = { state: 'running', notice: null, reason: 'running' };
+  assert.deepEqual(transition(s, overdue, BASE + 181 * 60_000, 60, false).map((e) => e.event), ['session.overdue']);
+  assert.equal(s.overdue_at, new Date(BASE + 181 * 60_000).toISOString());
+  // It finished, then a message woke it: still past the deadline, and nobody is told again.
+  transition(s, { state: 'finished', notice: 'finished', reason: 'KHAROS-DONE ok' }, BASE + 190 * 60_000, 60, false);
+  transition(s, running, BASE + 200 * 60_000, 60, false);
+  assert.deepEqual(transition(s, overdue, BASE + 201 * 60_000, 60, false), []);
+  assert.equal(s.state, 'overdue');
+  assert.equal(s.notice, null);
+  // A notice that was open when the deadline came back is closed as usual.
+  s.notice = { event: 'session.silent', at: new Date(BASE + 202 * 60_000).toISOString() };
+  assert.deepEqual(transition(s, overdue, BASE + 203 * 60_000, 60, false).map((e) => e.event), ['session.back']);
+});
+
+test('classify: the deadline counts from the start it is given', () => {
+  const events = log([...START, [130, 'tool_use', 'Bash', '{}']]);
+  assert.equal(at(events, 181 * 60).state, 'overdue');
+  assert.notEqual(at(events, 181 * 60, { startedAt: BASE + 60 * 60_000 }).state, 'overdue');
 });

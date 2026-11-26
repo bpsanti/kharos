@@ -357,6 +357,7 @@ function openSession(s: Session, sessionId: string, url: string | null, now: num
   s.session_id = sessionId;
   s.url = url ?? sessionUrlFromId(sessionId);
   s.step = 'open';
+  s.opened_at = new Date(now).toISOString();
   if (s.state === 'launching') {
     s.state = 'provisioning';
     s.state_since = new Date(now).toISOString();

@@ -506,7 +506,7 @@ test('permission hook: a real cloud log (names changed) attributes every decisio
     ['allow', 'psql -h 127.0.0.1 -p 5470 -U dev -d * -Atc *'],
   ]);
   const last = page.events[page.events.length - 1]!;
-  assert.equal(classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now: last.t + 60_000, watch: DEFAULT_WATCH }).state, 'running');
+  assert.equal(classify({ events: page.events, seenStart: true, startedAt: page.events[0]!.t, deadlineMin: 30, now: last.t + 60_000, watch: DEFAULT_WATCH }).state, 'running');
 });
 
 test('permission hook: a broad allow pattern is refused without --broad, and accepted and marked with it', async () => {

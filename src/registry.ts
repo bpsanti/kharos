@@ -71,6 +71,10 @@ export interface Session {
   url: string | null;
   created_at: string;
   fired_at: string | null;
+  /** When the run that started the cloud session answered (or list_runs first showed it); absent in records written before it existed. */
+  opened_at?: string | null;
+  /** When session.overdue was raised, once per session: a session a message reopens past its deadline does not raise it again. */
+  overdue_at?: string | null;
   /** When list_runs last came back empty while the launch was firing; a person may re-arm it after that. */
   runs_seen_empty_at: string | null;
   step: Step;
@@ -173,6 +177,15 @@ export function byTrigger(reg: Registry, triggerId: string): Session | undefined
 
 export function bySessionId(reg: Registry, sessionId: string): Session | undefined {
   return Object.values(reg.sessions).find((s) => s.session_id === sessionId);
+}
+
+/**
+ * When a session started, in ms: the deadline counts from it. The open of the cloud session, not the
+ * launch's preparation, so a refused fire, an approval or a queue wait are not counted; records from
+ * before kharos kept it fall back to the last fire, then to the preparation.
+ */
+export function startedAt(s: Pick<Session, 'opened_at' | 'fired_at' | 'created_at'>): number {
+  return Date.parse(s.opened_at ?? s.fired_at ?? s.created_at);
 }
 
 /** Sessions the watcher still follows: launched or launching, not terminal, not closed. */

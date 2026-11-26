@@ -39,7 +39,8 @@ export interface ClassifyInput {
   events: readonly LogEvent[];
   /** The stored events reach the start of the session (some page had no older events). */
   seenStart: boolean;
-  createdAt: number;
+  /** When the session started: the deadline and the slow-provisioning notice count from it. */
+  startedAt: number;
   deadlineMin: number;
   now: number;
   watch: WatchConfig;
@@ -126,7 +127,7 @@ export function classify(input: ClassifyInput): Verdict {
   const { events, now, watch } = input;
   const last = events[events.length - 1];
   if (!last) {
-    if (now - input.createdAt > watch.provision_min * MIN) return { state: 'provisioning', notice: 'provisioning_slow', reason: `no event in the log ${watch.provision_min} min after the launch` };
+    if (now - input.startedAt > watch.provision_min * MIN) return { state: 'provisioning', notice: 'provisioning_slow', reason: `no event in the log ${watch.provision_min} min after the launch` };
     return { state: 'provisioning', notice: null, reason: 'waiting for the first events' };
   }
   const idleMin = (now - last.t) / MIN;
@@ -183,7 +184,7 @@ export function classify(input: ClassifyInput): Verdict {
   if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
   // past the deadline
-  const ageMin = (now - input.createdAt) / MIN;
+  const ageMin = (now - input.startedAt) / MIN;
   if (ageMin > input.deadlineMin) return { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
 
   // the same failure over and over

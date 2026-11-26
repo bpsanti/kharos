@@ -8,7 +8,7 @@ import { enqueue, transition, type KharosEvent } from './events.ts';
 import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
-import type { Session } from './registry.ts';
+import { startedAt, type Session } from './registry.ts';
 import { readManagedPolicy } from './managed-policy.ts';
 import type { AskRules } from './permission-request.ts';
 
@@ -131,7 +131,7 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
   const decided = recordHookDecisions(ctx.paths, s, merged.added);
 
   const watch = watchConfig(ctx.paths);
-  const verdict = classify({ events, seenStart: s.seen_start === true, createdAt: Date.parse(s.created_at), deadlineMin: s.deadline_min, now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
+  const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
   // An older page says nothing new about an open prompt, so it is not the next read that confirms one.
   const emitted = fromCursor && hookMayAnswer(s, verdict) ? [] : settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';
