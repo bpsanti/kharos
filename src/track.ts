@@ -128,7 +128,7 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
     s.result = { ...s.result, status: null, pr: null, branch: null, summary: null, sheet: null };
   }
   s.result.question = marks.question;
-  const decided = recordHookDecisions(ctx.paths, s, merged.added);
+  const decided = recordHookDecisions(ctx.paths, s, merged.added, events);
 
   const watch = watchConfig(ctx.paths);
   const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });

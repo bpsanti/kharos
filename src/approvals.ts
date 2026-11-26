@@ -43,15 +43,32 @@ export function promptCommand(text: string): string | null {
   }
 }
 
+/**
+ * The command a Bash prompt line asks about. A line can carry the reason of the prompt instead (a check
+ * of Claude Code itself, such as quoted text it cannot check); the command is then the one of the call
+ * just before it.
+ */
+function askedCommand(e: LogEvent, all: readonly LogEvent[]): string | null {
+  const own = promptCommand(e.text);
+  if (own !== null) return own;
+  const at = all.findIndex((x) => x.key === e.key);
+  for (let i = (at < 0 ? all.length : at) - 1; i >= 0; i--) {
+    const x = all[i] as LogEvent;
+    if (x.kind === 'tool_use' && x.tool === 'Bash') return promptCommand(x.text);
+    if (x.kind !== 'tool_use' && x.kind !== 'tool_result') return null;
+  }
+  return null;
+}
+
 /** The hook's decisions behind new permission prompt lines of a session, appended to the log. */
-export function recordHookDecisions(paths: Paths, s: Session, added: readonly LogEvent[]): HookDecision[] {
+export function recordHookDecisions(paths: Paths, s: Session, added: readonly LogEvent[], all: readonly LogEvent[] = added): HookDecision[] {
   const rules: HookRules | null | undefined = s.permission_hook;
   if (!rules) return [];
   const out: HookDecision[] = [];
   for (const e of added) {
     if (!isPermissionPrompt(e)) continue;
     const tool = e.tool ?? 'unknown tool';
-    const input = tool === 'Bash' ? { command: promptCommand(e.text) } : {};
+    const input = tool === 'Bash' ? { command: askedCommand(e, all) } : {};
     // A Bash line too cut to show its command cannot be attributed to a rule; only the unblock preset allows it.
     if (tool === 'Bash' && input.command === null && rules.unblock !== true) continue;
     const d = decide({ tool_name: tool, tool_input: input }, rules);

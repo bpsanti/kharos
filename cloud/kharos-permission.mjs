@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kharos permission hook, version 3. `kharos permissions hook` copies this file into a repository as
+// kharos permission hook, version 4. `kharos permissions hook` copies this file into a repository as
 // .claude/hooks/kharos-permission.mjs and rewrites it on every change: edit the rules in
 // .claude/kharos-permissions.json instead.
 //
@@ -30,7 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HOOK_VERSION = 3;
+export const HOOK_VERSION = 4;
 
 /** The rules file, next to the hooks folder this script is in. */
 export const RULES_FILE = 'kharos-permissions.json';
@@ -251,11 +251,11 @@ export function bashRuleMatches(rule, command) {
     tail = '(?: .*)?';
   }
   if (body === '') return false;
-  const re = body
+  const pattern = body
     .split('*')
     .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
     .join('.*');
-  return new RegExp(`^${re}${tail}$`, 's').test(command.trim());
+  return new RegExp(`^${pattern}${tail}$`, 's').test(command.trim());
 }
 
 /**
@@ -322,8 +322,8 @@ export function commandWords(words) {
     const w = /** @type {string | null} */ (words[i]);
     const seeking = out.length === 1 || (compose && out.length === 2 && out[1] === 'compose');
     if (seeking && typeof w === 'string' && w.startsWith('-')) {
-      const eq = w.indexOf('=');
-      if (eq > 0 && w.startsWith('--') && (options.value.includes(w.slice(0, eq)) || options.flag.includes(w.slice(0, eq)))) continue;
+      const equals = w.indexOf('=');
+      if (equals > 0 && w.startsWith('--') && (options.value.includes(w.slice(0, equals)) || options.flag.includes(w.slice(0, equals)))) continue;
       if (options.flag.includes(w)) continue;
       if (options.value.includes(w)) {
         i++;
@@ -343,13 +343,13 @@ export function commandWords(words) {
  * @returns {{ words: string[], complete: boolean }}
  */
 export function commandHead(words) {
-  const cw = commandWords(words);
-  const program = /** @type {string} */ (cw[0]);
+  const programWords = commandWords(words);
+  const program = /** @type {string} */ (programWords[0]);
   const name = baseName(program);
   let need = SUBCOMMAND_WORDS[name] ?? 0;
   const head = [program];
-  for (let i = 1; i < cw.length && head.length <= need; i++) {
-    const w = cw[i];
+  for (let i = 1; i < programWords.length && head.length <= need; i++) {
+    const w = programWords[i];
     if (typeof w !== 'string' || !SUBCOMMAND_RE.test(w)) break;
     head.push(w);
     if ((name === 'docker' || name === 'podman') && head.length === 2 && w === 'compose') need++;
@@ -366,8 +366,8 @@ export function commandHead(words) {
  */
 export function prefixMatches(rule, words) {
   const want = prefixOf(rule).split(' ');
-  /** @param {(string | null)[]} ws */
-  const starts = (ws) => want.length <= ws.length && want.every((w, i) => ws[i] === w);
+  /** @param {(string | null)[]} seen */
+  const starts = (seen) => want.length <= seen.length && want.every((w, i) => seen[i] === w);
   return starts(words) || starts(commandWords(words));
 }
 
@@ -450,8 +450,8 @@ export function decide(input, rules) {
   if ('error' in rules) {
     return { behavior: 'deny', program: null, message: `${REFUSAL_PREFIX}: its rules file cannot be used (${rules.error}), so it allows nothing. Go on without this call, or stop and say what you need.` };
   }
-  const ti = typeof input.tool_input === 'object' && input.tool_input !== null ? /** @type {Record<string, unknown>} */ (input.tool_input) : {};
-  const command = typeof ti.command === 'string' ? ti.command : null;
+  const toolInput = typeof input.tool_input === 'object' && input.tool_input !== null ? /** @type {Record<string, unknown>} */ (input.tool_input) : {};
+  const command = typeof toolInput.command === 'string' ? toolInput.command : null;
   if (rules.unblock === true) {
     // Every prompt is allowed; a rule that matches still names itself, so the log shows which.
     const d = tool === 'Bash' && command !== null ? decide(input, { ...rules, unblock: false }) : null;

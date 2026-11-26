@@ -174,13 +174,14 @@ Members of an organization that has not disabled bypass mode can run past its as
 - Deny rules are never copied, converted or changed.
 - A mirrored rule allows only a single simple command, like an allow pattern, and never one whose program is a shell, an interpreter or a wrapper, unless the rule itself is broad and was mirrored with `--broad`.
 - With `--broad`, a bare `Bash` ask rule of the organization becomes an allow for every command in this repository's cloud sessions, still one single simple command per call.
-- `--mirror` again refreshes the list from the current copy (without `--broad`, broad rules go back to prompts), and `--unmirror` removes it.
+- An ask rule that is not mirrored (one that does not name its program, a shell or interpreter without `--broad`, a rule of another tool) does not stay a prompt where the hook runs: like every prompt no rule allows, the hook denies it, and the diff says so for each.
+- `--mirror` again refreshes the list from the current copy (without `--broad`, broad rules are no longer allowed), and `--unmirror` removes it.
 
 ### The log of the hook's decisions
 
 The hook runs in the cloud session, where kharos keeps no state, so the watcher writes the log on this machine.
 At launch, while `permission_hook` is on, kharos reads the hook's rules from the branch the session starts on.
-Each `permission prompt` line the watcher reads then goes through the same decision code the hook runs, and the decision goes to `~/.local/state/kharos/approvals.jsonl`: the time of the prompt, the kharos and cloud session ids, the tool, allow or deny, and the allow pattern or mirrored rule that matched, marked when it is broad.
+Each `permission prompt` line the watcher reads then goes through the same decision code the hook runs (for a line that carries the reason of the prompt instead of the command, with the command of the call it belongs to), and the decision goes to `~/.local/state/kharos/approvals.jsonl`: the time of the prompt, the kharos and cloud session ids, the tool, allow or deny, and the allow pattern or mirrored rule that matched, marked when it is broad.
 Never the command, nor any other input or output of the call.
 `kharos permissions approvals` lists the approvals; `--all` adds the denials, `--session k-0001` keeps one session.
 Sessions kharos does not follow (started on claude.ai, for example) are not in that log.

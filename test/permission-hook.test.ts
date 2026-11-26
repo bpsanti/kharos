@@ -233,9 +233,9 @@ test('permission hook: mirroring lists every rule it converts, keeps deny rules 
   assert.equal(diff.code, 0, diff.err);
   assert.match(diff.out, /WARNING: check with your organization's administrator before approving this/);
   assert.match(diff.out, /organization ask rules this turns into a cloud-only allow \(1\): Bash\(redis-cli:\*\)$/m);
-  assert.match(diff.out, /stays a prompt: Bash\(\*\.db\.example\.com\*\) \(it does not name its program\)/);
-  assert.match(diff.out, /stays a prompt: Bash\(python3:\*\) \(python3 runs other commands/);
-  assert.match(diff.out, /stays a prompt: WebFetch\(domain:internal\.example\) \(only Bash rules are mirrored\)/);
+  assert.match(diff.out, /not mirrored, so the hook denies it in cloud sessions instead of asking: Bash\(\*\.db\.example\.com\*\) \(it does not name its program\)/);
+  assert.match(diff.out, /not mirrored, so the hook denies it in cloud sessions instead of asking: Bash\(python3:\*\) \(python3 runs other commands/);
+  assert.match(diff.out, /not mirrored, so the hook denies it in cloud sessions instead of asking: WebFetch\(domain:internal\.example\) \(only Bash rules are mirrored\)/);
   assert.match(diff.out, /organization deny rules are never touched \(2 stay as they are\)/);
   assert.doesNotMatch(diff.out, /rm -rf|\.env|SOMETHING/, 'deny rules and other policy keys never reach the repository');
   assert.match(diff.out, /--mirror --org-confirmed/);
@@ -580,8 +580,8 @@ test('permission hook: broad organization ask rules are mirrored only with --bro
   const dir = gitRepo(sb);
 
   const narrow = await run(sb, 'permissions', 'hook', 'diff', '--mirror', dir);
-  assert.match(narrow.out, /stays a prompt: Bash\(python3:\*\) \(python3 runs other commands, so an allow would cover anything\), unless mirrored with --broad/);
-  assert.match(narrow.out, /stays a prompt: WebFetch\(domain:internal\.example\) \(only Bash rules are mirrored\)$/m);
+  assert.match(narrow.out, /not mirrored, so the hook denies it in cloud sessions instead of asking: Bash\(python3:\*\) \(python3 runs other commands, so an allow would cover anything\); --broad mirrors it/);
+  assert.match(narrow.out, /not mirrored, so the hook denies it in cloud sessions instead of asking: WebFetch\(domain:internal\.example\) \(only Bash rules are mirrored\)$/m);
 
   assert.deepEqual(planMirror(POLICY.permissions.ask, true), {
     converted: ['Bash(redis-cli:*)', 'Bash(*.db.example.com*)', 'Bash(python3:*)', 'Bash'],
@@ -619,4 +619,29 @@ test('permission hook: broad organization ask rules are mirrored only with --bro
   const s = { id: 'k-0001', session_id: 'cse_x', permission_hook: rules } as Session;
   assert.deepEqual(recordHookDecisions(sb.paths, s, parseLog(prompt("python3 -c 'x'")).events).map((d) => d.broad), [true]);
   assert.match((await run(sb, 'permissions', 'approvals')).out, /allowed by broad mirrored organization rule Bash\(python3:\*\)/);
+});
+
+test('permission hook: a prompt line that carries its reason instead of the command is decided with the command of its call', () => {
+  const sb = sandbox();
+  const s = { id: 'k-0001', session_id: SID_REAL, permission_hook: { allow: [], mirror: [], prefix: ['Bash(psql:*)'] } } as unknown as Session;
+  const reason = "Quoted text in this command can't be checked before it runs";
+  const page = parseLog(
+    [
+      `[2026-11-25T19:00:00.000000Z] tool_use Bash: ${JSON.stringify({ command: 'psql postgres://127.0.0.1/app -f report.sql' })}`,
+      `[2026-11-25T19:00:00.100000Z] permission prompt Bash: ${reason}`,
+      `[2026-11-25T19:00:01.000000Z] tool_result: ok`,
+      `[2026-11-25T19:01:00.000000Z] tool_use Bash: ${JSON.stringify({ command: 'cd /tmp/scratch && psql postgres://127.0.0.1/app -f report.sql' })}`,
+      `[2026-11-25T19:01:00.100000Z] permission prompt Bash: ${reason}`,
+      `[2026-11-25T19:01:00.300000Z] tool_result: Refused by the kharos permission hook: run one simple command`,
+    ].join('\n'),
+  );
+  const got = recordHookDecisions(sb.paths, s, page.events.filter((e) => e.kind === 'permission prompt'), page.events).map((d) => [d.decision, d.rule ?? d.program]);
+  assert.deepEqual(got, [
+    ['allow', 'Bash(psql:*)'],
+    ['deny', null],
+  ]);
+  // Both reach the log, the denial too, and neither carries the command.
+  const logged = fs.readFileSync(sb.paths.approvals, 'utf8');
+  assert.equal(logged.trim().split('\n').length, 2);
+  assert.doesNotMatch(logged, /report\.sql|scratch/);
 });
