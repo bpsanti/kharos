@@ -84,7 +84,7 @@ It lists, once, everything it frees and where each part stands, with one token f
 2. Automatic unblock: `permission_hook`, `preflight_auto` and `permission_unblock` in this account's kharos configuration, so the side branch of each launch gets the preset, with the narrow rules the [preflight](#permission-preflight) suggests.
 3. This account's sessions start in auto mode: `permissions.defaultMode: "auto"` in its own user settings, so launches need no approval prompt (see [Launch approval](setup.md#launch-approval)); every session of the account starts in auto mode then, not only launches.
 
-Each part keeps its own guards: parts 1 and 2 are left out when the organization disables bypass mode, when no copy of its managed settings can be read, or when it allows managed hooks only, and part 3 when it turns auto mode off; the list says which part is left out and why, and the rest is still turned on.
+Each part keeps its own guards: parts 1 and 2 are left out when the organization disables bypass mode, when no copy of its managed settings can be read (unless you state that the account has none, see [below](#no-copy-of-the-organizations-settings)), or when it allows managed hooks only, and part 3 when it turns auto mode off; the list says which part is left out and why, and the rest is still turned on.
 A part that is on already is skipped, so running it again only finishes what is missing.
 The parts are not offered one at a time: the one confirmation covers all of them.
 The token holds only while the managed settings, the kharos configuration and the account's settings are what the list was made from; otherwise nothing changes and the list is shown again.
