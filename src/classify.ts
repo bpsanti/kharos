@@ -125,18 +125,16 @@ export function sameErrorRun(events: readonly LogEvent[]): number {
   return run;
 }
 
-const BACKGROUND_TOOLS: ReadonlySet<string> = new Set(['Monitor', 'Agent', 'Task', 'Workflow']);
-
 /**
  * Whether the turn started work that goes on after it closes and can wake it: a command run or moved to
- * the background, a Monitor, or an agent or workflow (these can run in the background with no flag in
- * their input).
+ * the background, a Monitor, or an agent or workflow whose result says it was launched in the background.
+ * A foreground agent returns its report inside the turn, so it wakes nothing.
  */
 export function startedBackground(turn: readonly LogEvent[]): boolean {
   return turn.some(
     (e) =>
-      (e.kind === 'tool_use' && (BACKGROUND_TOOLS.has(e.tool ?? '') || /"run_in_background":\s*true/.test(e.text))) ||
-      (e.kind === 'tool_result' && /^Command (?:is )?running in (?:the )?background|\bmoved to the background\b/i.test(e.text)),
+      (e.kind === 'tool_use' && (e.tool === 'Monitor' || /"run_in_background":\s*true/.test(e.text))) ||
+      (e.kind === 'tool_result' && /^Command (?:is )?running in (?:the )?background|\b(?:moved to|launched in|running in) the background\b|^Async agent launched/i.test(e.text)),
   );
 }
 

@@ -60,7 +60,7 @@ The rules are checked in this order, and the first that matches wins.
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
 | `silent` | an open turn with no new event for `silence_min` | at `silence_min`, again at `silence_severe_min` |
-| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `unmarked_end_min` (5), or after `quiet_end_min` (40) when the turn started a background task (a command run or moved to the background, a `Monitor`, an `Agent`, `Task` or `Workflow` call, which can run in the background with no flag) that may wake it |
+| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `unmarked_end_min` (5), or after `quiet_end_min` (40) when the turn started a background task (a command run or moved to the background, a `Monitor`, an agent or workflow launched in the background; a foreground agent returns inside the turn and does not count) that may wake it |
 | `running` | anything else | no |
 
 A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal.
