@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark-card.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark.svg">
     <img src="assets/brand/wordmark.svg" alt="kharos logo: a coin with a canoe over waves" width="280">
   </picture>
