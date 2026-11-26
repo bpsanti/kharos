@@ -1,6 +1,5 @@
 // The follower lease: a `kharos wait` that reads a session holds `followers/<id>.json` with its pid and a
-// heartbeat, so one process reads a session at a time, the watcher leaves that session to it, and
-// `kharos health` counts it as followed. A lease whose process is gone or whose heartbeat is old is free.
+// heartbeat, so one process reads a session at a time, and `kharos health` counts it as followed. A lease whose process is gone or whose heartbeat is old is free.
 // A wait that returns for the next one to go on (a follower agent started again, or the next turn of a
 // shell loop) hands the lease over instead of dropping it: for a short while the session still counts as
 // followed, so nothing starts a second follower in between.

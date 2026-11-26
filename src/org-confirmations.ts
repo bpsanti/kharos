@@ -1,7 +1,6 @@
-// The person's confirmations about the organization's rules, remembered so that each is asked once:
-//   mirror   the organization's ask rules may be mirrored (narrow ones, or broad ones with --broad);
-//   unblock  the unblock preset may allow every permission prompt in cloud sessions.
-// Each is stored with a fingerprint of what the organization's managed settings said then (the ask
+// The person's confirmation of the unblock preset, which allows every permission prompt in cloud sessions,
+// remembered so that it is asked once (an older kharos also kept a confirmation to mirror the
+// organization's ask rules here; it is left in the file, unused). It is stored with a fingerprint of what the organization's managed settings said then (the ask
 // rules, the deny rules and disableBypassPermissionsMode), and holds only while they still say the
 // same. When the fingerprint changes, kharos shows what changed and asks again.
 // A confirmation replaces only the repeated question; every other safeguard stays: kharos refuses when
@@ -12,7 +11,7 @@ import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { ManagedPolicy } from './managed-policy.ts';
 import type { Paths } from './paths.ts';
 
-export type ConfirmationKind = 'mirror' | 'unblock';
+export type ConfirmationKind = 'unblock';
 
 export interface Confirmation {
   fingerprint: string;
@@ -21,8 +20,6 @@ export interface Confirmation {
   ask: string[];
   deny: string[];
   bypass_disabled: boolean;
-  /** For mirror: the person confirmed broad rules too (--broad). The unblock preset always covers them. */
-  broad?: boolean;
 }
 
 type FoundPolicy = Extract<ManagedPolicy, { status: 'found' }>;
@@ -47,14 +44,13 @@ export function loadConfirmation(paths: Paths, kind: ConfirmationKind): Confirma
   return loadBook(paths)[kind] ?? null;
 }
 
-export function saveConfirmation(paths: Paths, kind: ConfirmationKind, policy: FoundPolicy, now: number, broad = false): Confirmation {
+export function saveConfirmation(paths: Paths, kind: ConfirmationKind, policy: FoundPolicy, now: number): Confirmation {
   const c: Confirmation = {
     fingerprint: policyFingerprint(policy),
     confirmed_at: new Date(now).toISOString(),
     ask: [...policy.ask],
     deny: [...policy.deny],
     bypass_disabled: policy.bypassDisabled,
-    ...(broad ? { broad: true } : {}),
   };
   withLock(paths.confirmations, () => writeJsonAtomic(paths.confirmations, { ...loadBook(paths), [kind]: c }));
   return c;
@@ -80,19 +76,18 @@ function listChange(what: string, before: readonly string[], now: readonly strin
 }
 
 /** Whether a remembered confirmation still holds for the organization's managed settings as they are now. */
-export function confirmationState(c: Confirmation | null, policy: ManagedPolicy, broad = false): ConfirmationState {
+export function confirmationState(c: Confirmation | null, policy: ManagedPolicy): ConfirmationState {
   if (!c || policy.status !== 'found') return { state: 'none' };
-  if (broad && c.broad !== true) return { state: 'changed', at: c.confirmed_at, changes: ['that confirmation covered narrow rules only, and this change mirrors broad ones'] };
   if (c.fingerprint === policyFingerprint(policy)) return { state: 'valid', at: c.confirmed_at };
   const changes = [...listChange('ask rules', c.ask, policy.ask), ...listChange('deny rules', c.deny, policy.deny)];
   if (c.bypass_disabled !== policy.bypassDisabled) changes.push(`disableBypassPermissionsMode is now ${policy.bypassDisabled ? 'set' : 'not set'}`);
   return { state: 'changed', at: c.confirmed_at, changes: changes.length ? changes : ['the rules changed'] };
 }
 
-const WHAT: Record<ConfirmationKind, string> = { mirror: "mirroring the organization's ask rules", unblock: 'the unblock preset' };
+const WHAT: Record<ConfirmationKind, string> = { unblock: 'the unblock preset' };
 
-/** One line on a remembered confirmation, for a diff or a preflight; null when there is none. */
-export function describeConfirmation(s: ConfirmationState, kind: ConfirmationKind = 'mirror'): string | null {
+/** One line on a remembered confirmation; null when there is none. */
+export function describeConfirmation(s: ConfirmationState, kind: ConfirmationKind): string | null {
   if (s.state === 'valid') return `you confirmed ${WHAT[kind]} on ${s.at.slice(0, 10)}, and the organization's managed settings have not changed since: no new confirmation is needed`;
   if (s.state === 'changed') return `the organization's managed settings changed since you confirmed ${WHAT[kind]} on ${s.at.slice(0, 10)} (${s.changes.join('; ')}): it needs your confirmation again`;
   return null;

@@ -8,7 +8,6 @@ import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { loadRegistry, updateRegistry, type Session } from '../src/registry.ts';
 import { wait, type Reader } from '../src/wait.ts';
-import { isDue } from '../src/watch.ts';
 import { fixture, HEADS_OK, response, sandbox, writeConfig, type Sandbox } from './helpers.ts';
 
 const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
@@ -47,7 +46,7 @@ function pageAt(time: string): string {
 
 function read(sb: Sandbox, time: string, page = pageAt(time), cursor: string | null = null, next: string | null = null): void {
   const ti = { action: 'get_run_log', session_id: SID, ...(cursor ? { cursor } : {}) };
-  postToolUse(sb.ctx(at(time)), h(ti, response(200, { session_id: SID, next_cursor: next }, page), 'watcher'));
+  postToolUse(sb.ctx(at(time)), h(ti, response(200, { session_id: SID, next_cursor: next }, page), 'reader'));
 }
 
 const events = (sb: Sandbox) => readOutbox(sb.paths).map((x) => x.event.event).filter((e) => e !== 'session.opened');
@@ -115,20 +114,6 @@ test('hook alert: an older page read between two reads does not confirm a prompt
   assert.deepEqual(events(sb), []);
   read(sb, '03:26:20', newest);
   assert.deepEqual(events(sb), ['session.waiting_permission']);
-});
-
-test('hook alert: the watcher reads a session with a prompt waiting to be confirmed on its next pass', () => {
-  const sb = sandbox();
-  const id = openOne(sb, { hook: true });
-  // Open long enough to be read every second pass only.
-  updateRegistry(sb.paths, (reg) => {
-    reg.sessions[id]!.created_at = '2026-11-26T02:00:00.000Z';
-    reg.sessions[id]!.opened_at = '2026-11-26T02:00:00.000Z';
-  });
-  read(sb, FIRST_OPEN);
-  assert.equal(isDue(session(sb, id), at(FIRST_OPEN) + 6 * MIN, 10), true);
-  read(sb, '03:26:03.500');
-  assert.equal(isDue(session(sb, id), at('03:26:03.500') + 6 * MIN, 10), false);
 });
 
 /** A follower on a clock of its own; `pages` gives the page of each read in turn, the last one for good. */

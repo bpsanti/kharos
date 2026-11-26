@@ -1,11 +1,9 @@
 // The assisted path to a cloud environment. A person creates it on claude.ai/code: no CLI or API does, and
-// none lists environments. kharos prepares what to paste from the repository's own files, opens the page,
-// and learns the new id from the documented `remote.defaultEnvironmentId` setting that /remote-env writes.
+// none lists environments. kharos prepares what to paste from the repository's own files and opens the page;
+// /kharos:setup then lists the account's environments again and picks the new one by name.
 // It reads variable names only, never a value, from the repository or from this machine.
 
 import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
 import { clean, sha256 } from './body.ts';
 import { repoSlug } from './config.ts';
 import type { RemoteSettings } from './permissions.ts';
@@ -247,41 +245,10 @@ export function openBrowser(url: string, env: NodeJS.ProcessEnv, platform: NodeJ
   return tools.some((t) => run([...t, url], env));
 }
 
-/** The environment /remote-env saved in the user settings, or null. */
-export function defaultEnvironment(env: NodeJS.ProcessEnv): string | null {
-  const dir = env.CLAUDE_CONFIG_DIR || path.join(env.HOME ?? '', '.claude');
-  try {
-    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')) as { remote?: { defaultEnvironmentId?: unknown } };
-    const id = settings.remote?.defaultEnvironmentId;
-    return typeof id === 'string' && /^env_\w+$/.test(id) ? id : null;
-  } catch {
-    // no file yet, or read while it was being written
-    return null;
-  }
-}
-
-/** Waits, no longer than `timeoutMs`, for /remote-env to save an environment other than `since`. */
-export async function waitForEnvironment(
-  since: string | null,
-  timeoutMs: number,
-  env: NodeJS.ProcessEnv,
-  intervalMs = 3000,
-): Promise<string | null> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const id = defaultEnvironment(env);
-    if (id && id !== since) return id;
-    const left = deadline - Date.now();
-    if (left <= 0) return null;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, left)));
-  }
-}
-
 export interface GuideDelivery {
   /** The clipboard tool used, null when none worked, undefined when no copy was asked for. */
   copied?: string | null;
   opened?: boolean;
-  since: string | null;
 }
 
 export function formatGuide(g: Guide, d: GuideDelivery): string {
@@ -314,14 +281,11 @@ export function formatGuide(g: Guide, d: GuideDelivery): string {
   if (g.unreadable.length) lines.push(`   Could not be read, so their variables are missing here: ${g.unreadable.join(', ')}`);
   lines.push(
     '   Then "Add environment".',
-    '3. Tell kharos which one it is: run /remote-env and pick it (this also makes it your default for `claude --cloud`),',
-    '   or read its env_... id with /schedule and paste it here.',
+    '3. Say it is done, with its name: /kharos:setup lists your environments again and picks it by name.',
     '',
     `----- setup script (${g.shipped ? SETUP_SCRIPT_PATH : 'minimal'}) -----`,
     g.script.replace(/\n$/, ''),
     '----- end of setup script -----',
-    '',
-    `default environment before you start: ${d.since ?? 'none'}`,
   );
   return lines.join('\n');
 }

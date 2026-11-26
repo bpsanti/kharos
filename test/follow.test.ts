@@ -6,7 +6,6 @@ import { readOutbox, transition } from '../src/events.ts';
 import { detachedSpawner, detachFollower, followerLog, followLoop, isHeadless, startFollowers, type Spawner } from '../src/follow.ts';
 import { postToolUse, preToolUse, stop, type HookInput } from '../src/hook.ts';
 import { runHook } from '../src/cli.ts';
-import { updateWatch } from '../src/state.ts';
 import { prepare } from '../src/launch.ts';
 import { followerReport, HANDOVER_MS, LEASE_STALE_MS, liveFollowers, releaseLease, takeLease } from '../src/lease.ts';
 import { loadRegistry, type Session } from '../src/registry.ts';
@@ -263,19 +262,6 @@ test('stop hook: a handover, the watcher, a closed or ended session, or no sessi
   assert.ok(stop(ctx(T0 + MIN + HANDOVER_MS + 1000), input));
   assert.equal(calls.length, 1);
   fs.rmSync(sb.paths.followers, { recursive: true, force: true });
-
-  // The watcher runs: it reads the sessions nobody follows.
-  updateWatch(sb.paths, (w) => {
-    w.last_beat = new Date(T0 + 4 * MIN).toISOString();
-    w.interval_min = 10;
-  });
-  assert.equal(stop(ctx(T0 + 5 * MIN), input), null);
-  // The watcher session itself: nothing either, even once the watcher's heartbeat is old.
-  updateWatch(sb.paths, (w) => {
-    w.watchers['watcher-1'] = new Date(T0 + 39 * MIN).toISOString();
-  });
-  assert.equal(stop(ctx(T0 + 40 * MIN), { hook_event_name: 'Stop', session_id: 'watcher-1' }), null);
-  assert.equal(calls.length, 1);
 
   close(sb.paths, id, T0 + 50 * MIN, null, { stopped: true });
   assert.equal(stop(ctx(T0 + 50 * MIN), input), null);

@@ -2,28 +2,66 @@
 // JSON line. The kharos:follow agent runs it in a loop, so a follower spends no model call while nothing
 // happens. A cloud session's log is readable only through the RemoteTrigger tool, which only a model calls,
 // so each read is a separate minimal `claude -p` that makes that one call; the plugin's own hook stores,
-// classifies and queues it exactly as for a watcher read, and the reader model sees one short line.
+// classifies and queues it, and the reader model sees one short line.
 
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claudeBin } from './account.ts';
+import { claudeBin, readAuthStatus } from './account.ts';
 import { clean } from './body.ts';
 import { CommandError } from './commands.ts';
 import { expectFollower, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
-import { updateWatch } from './state.ts';
+import { loadLogin, saveLogin } from './state.ts';
 import { settle, watchConfig } from './track.ts';
-import { currentAccount, readsFor, type Read } from './watch.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
 import { appendMark, type AlertRef } from './events.ts';
 
 /** The plugin's root folder, which holds `scripts/kharos` and is loaded into each reader. */
 export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * Set in the environment of the processes kharos starts itself (a follower process, a reader, a fire of a
+ * queued launch), whose Claude Code sessions are kharos's own: the Stop hook does nothing there.
+ */
+export const ROLE_ENV = 'KHAROS_ROLE';
+
+/** The role of a reader: its PreToolUse hook lets it only read, never create, fire or change a kharos routine. */
+export const READER_ROLE = 'reader';
+
 export const WAIT_DEFAULTS = { maxS: 540, minIntervalS: 15, maxIntervalS: 60 } as const;
+
+/** One RemoteTrigger read of a session. */
+export interface Read {
+  session: string;
+  action: 'get_run_log' | 'list_runs';
+  params: Record<string, string>;
+}
+
+/** The reads of one pass on a session: its log, or list_runs while its session id is unknown. */
+export function readsFor(s: Session): Read[] {
+  if (!s.trigger_id) return [];
+  if (!s.session_id) return [{ session: s.id, action: 'list_runs', params: { trigger_id: s.trigger_id } }];
+  const out: Read[] = [];
+  if (s.pending_cursor) out.push({ session: s.id, action: 'get_run_log', params: { session_id: s.session_id, cursor: s.pending_cursor } });
+  else out.push({ session: s.id, action: 'get_run_log', params: { session_id: s.session_id } });
+  // Every sixth read also checks whether the session was archived.
+  if (s.reads % 6 === 5) out.push({ session: s.id, action: 'list_runs', params: { trigger_id: s.trigger_id } });
+  return out;
+}
+
+const ACCOUNT_TTL_MS = 10 * 60_000;
+
+/** The current account, read at most every ten minutes and kept as a hash; `read` is a test seam. */
+export function currentAccount(paths: Paths, now: number, env: NodeJS.ProcessEnv, read?: () => string | null): string | null {
+  const l = loadLogin(paths);
+  if (!read && l.account && l.read_at && now - Date.parse(l.read_at) < ACCOUNT_TTL_MS) return l.account;
+  const account = read ? read() : (readAuthStatus(env)?.account ?? null);
+  saveLogin(paths, { account, read_at: new Date(now).toISOString() });
+  return account;
+}
 
 /**
  * A reader that takes longer than this, or than the time left before the wait's deadline, is stopped,
@@ -148,7 +186,7 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
 }
 
 function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
-  if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; /kharos:follow ${s.id} starts a follower again once it is fixed.`].join('\n');
+  if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; once it is fixed, the next turn end of a Claude Code session with kharos starts a follower again, or kharos follow ${s.id} --detach does now.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
@@ -220,61 +258,51 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
 /** One read through a minimal headless `claude -p` that may make only that RemoteTrigger call. */
 export const headlessRead: Reader = async (paths, read, env, now, timeoutMs) => {
   const reader = crypto.randomUUID();
-  // Registered as a watcher, the reader session may only read: the hook denies it a launch or a fire.
-  updateWatch(paths, (w) => {
-    w.watchers[reader] = new Date(now).toISOString();
-  });
+  const params = Object.entries(read.params)
+    .map(([k, v]) => `${k} "${v}"`)
+    .join(' and ');
+  // A session of kharos's own: its Stop hook starts no follower, and its PreToolUse hook lets it only read.
+  const childEnv: NodeJS.ProcessEnv = { ...env, [ROLE_ENV]: READER_ROLE };
+  delete childEnv.ANTHROPIC_API_KEY;
+  const r = spawnSync(
+    claudeBin(env),
+    [
+      '-p',
+      '--plugin-dir',
+      PLUGIN_ROOT,
+      '--model',
+      watchConfig(paths).model,
+      '--setting-sources',
+      '',
+      '--strict-mcp-config',
+      '--tools',
+      'RemoteTrigger',
+      '--allowedTools',
+      'RemoteTrigger',
+      '--disable-slash-commands',
+      '--no-session-persistence',
+      '--session-id',
+      reader,
+      '--system-prompt',
+      READER_PROMPT,
+      '--output-format',
+      'json',
+      `Call RemoteTrigger with action "${read.action}" and ${params}.`,
+    ],
+    { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: timeoutMs },
+  );
+  if (r.error) return { ok: false, cost_usd: null, error: `claude -p: ${r.error.message}` };
+  let cost: number | null = null;
+  let failed: string | null = r.status === 0 ? null : `claude -p exited ${r.status ?? 'by a signal'}`;
   try {
-    const params = Object.entries(read.params)
-      .map(([k, v]) => `${k} "${v}"`)
-      .join(' and ');
-    // A session of kharos's own: its Stop hook starts no follower.
-    const childEnv: NodeJS.ProcessEnv = { ...env, KHAROS_ROLE: 'reader' };
-    delete childEnv.ANTHROPIC_API_KEY;
-    const r = spawnSync(
-      claudeBin(env),
-      [
-        '-p',
-        '--plugin-dir',
-        PLUGIN_ROOT,
-        '--model',
-        watchConfig(paths).model,
-        '--setting-sources',
-        '',
-        '--strict-mcp-config',
-        '--tools',
-        'RemoteTrigger',
-        '--allowedTools',
-        'RemoteTrigger',
-        '--disable-slash-commands',
-        '--no-session-persistence',
-        '--session-id',
-        reader,
-        '--system-prompt',
-        READER_PROMPT,
-        '--output-format',
-        'json',
-        `Call RemoteTrigger with action "${read.action}" and ${params}.`,
-      ],
-      { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: timeoutMs },
-    );
-    if (r.error) return { ok: false, cost_usd: null, error: `claude -p: ${r.error.message}` };
-    let cost: number | null = null;
-    let failed: string | null = r.status === 0 ? null : `claude -p exited ${r.status ?? 'by a signal'}`;
-    try {
-      const v = JSON.parse(r.stdout.trim().split('\n').pop() ?? '') as Record<string, unknown>;
-      if (typeof v.total_cost_usd === 'number') cost = v.total_cost_usd;
-      if (v.is_error === true) failed = `claude -p: ${clean(String(v.result ?? v.subtype ?? 'error'), 200)}`;
-    } catch {
-      failed ??= 'claude -p gave no JSON answer';
-    }
-    if (failed && r.stderr) failed += ` (${clean(r.stderr, 200)})`;
-    return { ok: failed === null, cost_usd: cost, error: failed };
-  } finally {
-    updateWatch(paths, (w) => {
-      delete w.watchers[reader];
-    });
+    const v = JSON.parse(r.stdout.trim().split('\n').pop() ?? '') as Record<string, unknown>;
+    if (typeof v.total_cost_usd === 'number') cost = v.total_cost_usd;
+    if (v.is_error === true) failed = `claude -p: ${clean(String(v.result ?? v.subtype ?? 'error'), 200)}`;
+  } catch {
+    failed ??= 'claude -p gave no JSON answer';
   }
+  if (failed && r.stderr) failed += ` (${clean(r.stderr, 200)})`;
+  return { ok: failed === null, cost_usd: cost, error: failed };
 };
 
 function realSleep(ms: number): Promise<void> {
@@ -368,7 +396,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   }
 }
 
-/** Like a watcher pass: a session that another login launched is invisible, never read as finished. */
+/** A session that another login launched is invisible, never read as finished. */
 function switchedAccount(paths: Paths, s: Session, now: number, opts: WaitOptions): boolean {
   const account = currentAccount(paths, now, opts.env, opts.account);
   if (!account || s.account === account) return false;

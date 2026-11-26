@@ -13,7 +13,6 @@ import {
   namedFiles,
   openBrowser,
   scriptDigest,
-  waitForEnvironment,
 } from '../src/environment.ts';
 import { postToolUse } from '../src/hook.ts';
 import type { RemoteSettings } from '../src/permissions.ts';
@@ -73,11 +72,11 @@ test('guide: the shipped script verbatim, the documented variables and network, 
   assert.equal(g.variables[3]!.source, 'tools/cloud/setup.sh');
   assert.deepEqual(g.overrides, ['DEMO_BUDGET_S', 'DEMO_CLOUD_LOG']);
   assert.equal(g.network.level, 'Full');
-  const text = formatGuide(g, { copied: 'pbcopy', opened: true, since: 'env_01OLD' });
+  const text = formatGuide(g, { copied: 'pbcopy', opened: true });
   assert.match(text, /Network access: Full \(docs\/environment\/cloud\.md says/);
   assert.match(text, /copied to the clipboard with pbcopy; it is printed below\./);
   assert.match(text, /# snapshot: 2026-01-02/);
-  assert.match(text, /default environment before you start: env_01OLD$/);
+  assert.match(text, /3\. Say it is done, with its name: \/kharos:setup lists your environments again/);
   assert.doesNotMatch(text, /do-not-show|also-hidden|ghp_0123/);
 });
 
@@ -87,7 +86,7 @@ test('guide: without a script in the repository, a minimal one and the default n
   assert.equal(g.script, minimalScript('example/demo'));
   assert.deepEqual(g.variables.map((v) => v.name), ['API_URL']);
   assert.equal(g.network.level, 'Limited');
-  assert.match(formatGuide(g, { copied: null, since: null }), /ships no tools\/cloud\/bootstrap\.sh.*no clipboard tool worked/);
+  assert.match(formatGuide(g, { copied: null }), /ships no tools\/cloud\/bootstrap\.sh.*no clipboard tool worked/);
 });
 
 test('guide: a repository gh cannot read gives no script at all', () => {
@@ -120,23 +119,6 @@ test('clipboard and browser: the first tool that works, and null or false withou
   const win = tools(sb, { cmd: `printf '%s|' "$@" > "${sb.dir}/cmd.txt"` });
   assert.equal(openBrowser('https://claude.ai/code', win, 'win32'), true);
   assert.equal(fs.readFileSync(path.join(sb.dir, 'cmd.txt'), 'utf8'), '/c|start||https://claude.ai/code|');
-});
-
-function settingsFile(sb: Sandbox, id: string): void {
-  fs.mkdirSync(path.join(sb.dir, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(sb.dir, '.claude', 'settings.json'), JSON.stringify({ remote: { defaultEnvironmentId: id } }));
-}
-
-test('env-wait: sees the environment /remote-env saves, and gives up after its timeout', async () => {
-  const sb = sandbox();
-  settingsFile(sb, 'env_01OLD');
-  assert.equal(await waitForEnvironment('env_01OLD', 20, sb.env, 5), null);
-  setTimeout(() => settingsFile(sb, 'env_01NEW'), 20);
-  assert.equal(await waitForEnvironment('env_01OLD', 5000, sb.env, 5), 'env_01NEW');
-  const r = await captured(() => main(['env-wait', '--since', 'none'], sb.env, () => ''));
-  assert.equal(r.value, 0);
-  assert.match(r.stdout, /saved env_01NEW\. Confirm with the person/);
-  assert.equal((await captured(() => main(['env-wait'], sb.env, () => ''))).value, 1);
 });
 
 test('environments: the answer says which environment is known for the repository', async () => {
@@ -245,7 +227,7 @@ test('doctor: a confirmation made while the repository shipped no setup script w
 test('setup --confirmed writes the id into the profile and records it for this account', async () => {
   const sb = sandbox();
   const env = tools(sb, { gh: 'printf "%s" "echo setup"' });
-  const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--account-mode', 'as-is', '--max-open', '10'], env, () => ''));
+  const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--max-open', '10'], env, () => ''));
   assert.equal(r.value, 0);
   assert.match(r.stdout, /^Ready: profile demo \(default\) launches on example\/demo@main in env_01NEW\./);
   const stored = Object.values(JSON.parse(fs.readFileSync(sb.paths.setups, 'utf8')) as Record<string, { account: string }>)[0]!;
@@ -254,7 +236,7 @@ test('setup --confirmed writes the id into the profile and records it for this a
   assert.doesNotMatch(r.stdout, /bootstrap\.sh could not be read/);
 
   const failing = tools(sb, { gh: 'echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1' });
-  const u = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--account-mode', 'as-is'], failing, () => ''));
+  const u = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is'], failing, () => ''));
   assert.equal(u.value, 0, u.stderr);
   assert.match(u.stdout, /tools\/cloud\/bootstrap\.sh could not be read \(gh: Bad Gateway \(HTTP 502\)\), so \/kharos:doctor will ask you to paste it again/);
   assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'main')?.script_sha256, null);
@@ -274,7 +256,6 @@ test('env-guide: copies the script, opens the page, and prints no value', async 
   const r = await captured(() => main(['env-guide', '--copy', '--open'], env, () => ''));
   assert.equal(r.value, 0, r.stderr);
   assert.match(r.stdout, /cloud environment for example\/demo@main/);
-  assert.match(r.stdout, /default environment before you start: none/);
   assert.equal(fs.readFileSync(path.join(sb.dir, 'clip.txt'), 'utf8'), 'echo setup\n');
   assert.match(r.stdout, /----- setup script \(tools\/cloud\/bootstrap\.sh\) -----\necho setup\n----- end of setup script -----/);
   const missing = await captured(() => main(['env-guide', '--repo', 'example/demo', '--revision', 'nope'], env, () => ''));

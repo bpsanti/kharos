@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ConfigError, loadConfig, type OutputConfig } from '../config.ts';
-import { appendMark, oneLine, readOutbox, type KharosEvent, type OutboxItem } from '../events.ts';
+import { appendMark, readOutbox, type KharosEvent, type OutboxItem } from '../events.ts';
 import { appendLine, expandHome, isObject, readState, withLock, writeJsonAtomic } from '../fsutil.ts';
 import type { Paths } from '../paths.ts';
 import { loadRegistry } from '../registry.ts';
@@ -279,11 +279,3 @@ export async function deliver(ctx: SendCtx): Promise<DeliveryReport> {
   }
 }
 
-export function deliveryLine(r: DeliveryReport): string {
-  if (r.skipped) return '';
-  const parts: string[] = [];
-  if (r.configError) parts.push(`events stay queued until the configuration can be read (${r.configError})`);
-  if (r.failed) parts.push(`${r.failed} output attempt(s) failed, to retry`);
-  for (const g of r.gaveUp) parts.push(`gave up on ${g.target} for ${oneLine(g.event)}: ${g.error}`);
-  return parts.join('; ');
-}

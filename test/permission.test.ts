@@ -216,7 +216,7 @@ test('permission: an alert names the category of the organization or the reposit
   const start = Date.parse('2026-11-25T21:00:00Z');
   // The launch preflight read the repository's ask rules on the branch, so the launch keeps them.
   writeConfig(sb);
-  const out = preflight(sb.paths, { dir: null, instruction: 'Check the database.', forge: { snapshot: () => ({ ok: true, snapshot: { label: 'example/demo@main', paths: ['.claude/settings.json'], files: new Map([['.claude/settings.json', '{"permissions":{"ask":["Bash(git push:*)"]}}']]), unreadable: new Set(), base: null } }) } as unknown as Forge, now: start }, sb.env);
+  const out = preflight(sb.paths, { instruction: 'Check the database.', forge: { snapshot: () => ({ ok: true, snapshot: { label: 'example/demo@main', paths: ['.claude/settings.json'], files: new Map([['.claude/settings.json', '{"permissions":{"ask":["Bash(git push:*)"]}}']]), unreadable: new Set(), base: null } }) } as unknown as Forge, now: start }, sb.env);
   assert.match(out, /git push|prompt/);
   const id = openOne(sb, start);
   assert.deepEqual(loadRegistry(sb.paths).sessions[id]?.repo_ask, ['Bash(git push:*)']);

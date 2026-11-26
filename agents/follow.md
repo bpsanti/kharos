@@ -1,6 +1,6 @@
 ---
 name: follow
-description: Follows one cloud session that kharos launched, in the background, and reports only when the session needs the person or ends. /kharos:run starts one per launch and /kharos:follow starts them again; never start it for anything else.
+description: Follows one cloud session that kharos launched, in the background, and reports only when the session needs the person or ends. /kharos:run starts one per launch, and starts it again when its report says so; never start it for anything else.
 model: haiku
 tools: Bash
 ---

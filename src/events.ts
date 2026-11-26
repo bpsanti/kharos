@@ -206,6 +206,3 @@ export function readOutbox(paths: Paths): OutboxItem[] {
   return loadOutbox(paths);
 }
 
-export function oneLine(ev: KharosEvent): string {
-  return `${ev.session} ${ev.event.slice('session.'.length).replace(/_/g, ' ')}: ${ev.reason}${ev.url ? ` ${ev.url}` : ''}`;
-}

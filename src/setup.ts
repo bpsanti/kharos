@@ -2,12 +2,12 @@
 // before, with its state and the one action that fixes it. Two facts only Claude Code itself can see, the
 // account's cloud environments and whether Claude reaches the repository of the current folder, come from
 // the bundled /schedule skill, which lists them when it loads; the setup skill passes that text here.
-// Nothing is written until every step is settled, and then only the profile: the repository's files change
-// through /kharos:permissions, after the person approves its diff.
+// Nothing is written until every step is settled, and then only the profile, with unblock all when the
+// person confirmed it: kharos never changes the repository's own files.
 
 import path from 'node:path';
 import { migrate } from './accounts.ts';
-import { ACCOUNT_AUTO_CAVEAT, ACCOUNT_AUTO_EFFECT, applyAccountMode, approveAccountMode, readAccountMode } from './account-mode.ts';
+import { ACCOUNT_AUTO_CAVEAT, ACCOUNT_AUTO_EFFECT, readAccountMode } from './account-mode.ts';
 import { CommandError } from './commands.ts';
 import { applyUnblockAll, approveUnblockAll, describeUnblockAll, preview, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, type Part } from './unblock-all.ts';
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
@@ -16,11 +16,9 @@ import { clean } from './body.ts';
 import { DEFAULT_WATCH, isPermissionChoice, loadConfig, MAX_OPEN_CHOICES, MAX_OPEN_TRADEOFF, maxOpenChosen, normalizeRepo, otherAccount, PERMISSION_CHOICES, permissionChoice, repoSlug, saveConfig, type Config, type PermissionChoice, type Profile } from './config.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accountChecks, CHECKED_BY_CLAUDE_CODE, LAUNCH_APPROVAL, runDoctor, type Check, type DoctorDeps } from './doctor.ts';
-import { hooksBlocked, mirrorRefusal, type ManagedPolicy } from './managed-policy.ts';
-import { hasHookEntry, hookState, UNBLOCK_RISK } from './permission-hook.ts';
-import { identify, parseSettings, readRules, SettingsError } from './permission-profiles.ts';
+import { UNBLOCK_RISK } from './permission-hook.ts';
 import type { Paths } from './paths.ts';
-import { accessFix, loadRepos, recordAccess, type RepoRole } from './repo.ts';
+import { accessFix, loadRepos, recordAccess } from './repo.ts';
 import { writeProfile } from './commands.ts';
 
 /** One cloud environment as Claude Code lists it. */
@@ -108,15 +106,15 @@ export interface Step {
   action?: string;
 }
 
-/** A permission mode, or a part of one, with what it does, its trade-off, and whether this account can have it. */
+/** A permission mode, with what it does, its trade-off, and whether this account can have it. */
 export interface PermissionOption {
-  id: PermissionChoice | 'mirror' | 'broad';
+  id: PermissionChoice;
   title: string;
   does: string;
   tradeoff: string;
   /** null when available; otherwise why not, for this account and organization. */
   unavailable: string | null;
-  /** Something the person should know before choosing it, such as needing a checkout. */
+  /** Something the person should know before choosing it, such as a part left out here. */
   note?: string;
 }
 
@@ -166,11 +164,6 @@ export interface SetupInput {
   repo: string;
   profile?: string;
   revision?: string;
-  model?: string;
-  deadline_min?: number;
-  allowed_tools?: string[];
-  connectors?: boolean;
-  makeDefault: boolean;
   /** What the /schedule skill showed, or null when it was not read. */
   view: ScheduleView | null;
   /** owner/name of the current folder's GitHub origin, where the /schedule skill checked access. */
@@ -179,9 +172,6 @@ export interface SetupInput {
   environment?: string;
   /** The permission mode the person picked. */
   permissions?: string;
-  /** For scripts: whether this account's sessions start in auto mode, `auto` with the token of the approved diff, or `as-is`. Setup asks it only as part of unblock-all. */
-  accountMode?: 'auto' | 'as-is';
-  accountExpect?: string;
   /** With permissions unblock-all: the token of what it frees, which the person confirmed. */
   unblockExpect?: string;
   /** The person said the picked environment is set up for the repository (it runs its setup script). */
@@ -222,21 +212,8 @@ export function rankEnvironments(envs: Environment[], slug: string, config: Conf
   return envs.map((e, i) => ({ e, i })).sort((a, b) => score(a.e) - score(b.e) || a.i - b.i).map((x) => x.e);
 }
 
-/** Every permission mode kharos has, marked unavailable with the reason when this account or organization rules it out. */
-export function permissionOptions(
-  policy: ManagedPolicy,
-  ctx: { standardInPlace: boolean; hookInPlace: boolean; checkout: string | null; role: RepoRole; slug: string; unblockAll?: readonly Part[] },
-): PermissionOption[] {
-  const blocked = hooksBlocked(policy);
-  const refusal = mirrorRefusal(policy)?.replace(/^(mirroring is unavailable|refused): /, '') ?? null;
-  const noAsk = policy.status === 'found' && policy.ask.length === 0 ? "the organization's managed settings have no ask rule to mirror" : null;
-  const inRepo = [
-    ctx.checkout ? null : `needs a checkout of ${ctx.slug}: run /kharos:permissions there`,
-    ctx.role === 'read' ? `your GitHub login cannot push to ${ctx.slug}: its maintainers commit the change` : null,
-  ]
-    .filter(Boolean)
-    .join('; ');
-  const withNote = (o: PermissionOption, note: string): PermissionOption => (note ? { ...o, note } : o);
+/** The permission modes, unblock all marked unavailable with the reason when this account or organization rules it out. */
+export function permissionOptions(unblockAll: readonly Part[] | null): PermissionOption[] {
   return [
     {
       id: 'as-is',
@@ -245,68 +222,7 @@ export function permissionOptions(
       tradeoff: 'a session stops at every ask rule and after repeated classifier blocks, until you answer on its page',
       unavailable: null,
     },
-    withNote(
-      {
-        id: 'standard',
-        title: 'Standard profile',
-        does: "adds narrow allow rules to the repository's .claude/settings.json: file tools, read-only shell commands, git commands that read, commit and branch, and the repository's build and test commands",
-        tradeoff: 'a change to a tracked file that you commit and push; it does nothing against ask rules, the organization\'s included',
-        unavailable: ctx.standardInPlace ? 'already in place on the launch branch' : null,
-      },
-      inRepo,
-    ),
-    withNote(
-      {
-        id: 'hook',
-        title: 'Permission hook (opt-in)',
-        does: 'answers prompts inside cloud sessions with your own narrow allow patterns and prefix rules, and denies the rest with the allowed form, so a session never waits at a prompt',
-        tradeoff: 'it answers with no person asked; three files to commit; turns permission_hook on for this machine',
-        unavailable: blocked ?? (ctx.hookInPlace ? 'already in place on the launch branch' : null),
-      },
-      inRepo,
-    ),
-    withNote(
-      {
-        id: 'standard+hook',
-        title: 'Standard profile and permission hook',
-        does: 'both of the above: narrow allow rules against the classifier, the hook against ask rules',
-        tradeoff: 'both trade-offs; two changes to review',
-        unavailable: blocked,
-      },
-      inRepo,
-    ),
-    {
-      id: 'mirror',
-      title: "Mirror the organization's ask rules (part of the hook)",
-      does: "turns the organization's Bash ask rules into a cloud-only allow, after you confirm the list",
-      tradeoff: 'allows what the organization chose to have a person approve: check with its administrator first',
-      unavailable: blocked ?? refusal ?? noAsk,
-    },
-    {
-      id: 'broad',
-      title: 'Broad patterns, --broad (part of the hook)',
-      does: 'lets the hook allow a shell, an interpreter, a wrapper or a wildcard program, or mirror broad organization rules',
-      tradeoff: 'any command such a rule covers runs with no person asked',
-      unavailable: blocked,
-    },
-    {
-      id: 'auto-preflight',
-      title: 'Automatic preflight (opt-in)',
-      does: 'at each launch, writes the narrow rules the preflight suggests to a side branch kharos/<id>, and the session starts there; the launch branch never changes',
-      tradeoff: 'a merged or prefix rule can allow more than the command it was learned from; needs the permission hook on',
-      unavailable: blocked,
-    },
-    withNote(
-      {
-        id: 'unblock',
-        title: 'Unblock preset (opt-in)',
-        does: "the hook allows every prompt in this repository's cloud sessions, of any tool, and mirrors every organization ask rule; deny rules stay",
-        tradeoff: `${UNBLOCK_RISK}; confirmed once against the organization's settings, and asked again when they change`,
-        unavailable: blocked ?? refusal,
-      },
-      inRepo,
-    ),
-    unblockAllOption(ctx.unblockAll ?? null),
+    unblockAllOption(unblockAll),
   ];
 }
 
@@ -331,44 +247,17 @@ function unblockAllOption(parts: readonly Part[] | null): PermissionOption {
 
 const CHOICE_TEXT: Record<PermissionChoice, string> = {
   'as-is': 'left as they are; kharos lists likely prompts before each launch and tells you when one waits',
-  standard: 'the standard profile',
-  hook: 'the permission hook',
-  'standard+hook': 'the standard profile and the permission hook',
-  'auto-preflight': 'automatic preflight on a side branch of each launch',
-  unblock: 'the unblock preset',
   'unblock-all': "unblock all: the unblock preset on a side branch of each launch, and this account's sessions in auto mode",
 };
 
 /** The one next action a permission mode still needs, or null when nothing is left to do. */
-function permissionAction(choice: PermissionChoice, ctx: { standardInPlace: boolean; hookInPlace: boolean; config: Config; checkout: string | null; slug: string; unblockAllOn: boolean }): string | null {
-  const where = ctx.checkout ? '' : ` in a checkout of ${ctx.slug}`;
-  const standard = !ctx.standardInPlace ? `/kharos:permissions standard${where}` : null;
-  const hook = !ctx.hookInPlace ? `/kharos:permissions hook${where}` : null;
-  const enable = ctx.config.permission_hook ? null : 'kharos permissions hook enable';
-  switch (choice) {
-    case 'as-is':
-      return null;
-    case 'standard':
-      return standard;
-    case 'hook':
-      return hook;
-    case 'standard+hook':
-      return [standard, hook].filter(Boolean).join(', then ') || null;
-    case 'auto-preflight':
-      return ctx.config.preflight_auto ? null : [enable, 'kharos permissions auto preflight on'].filter(Boolean).join(', then ') + ' (yours to run)';
-    case 'unblock':
-      return `/kharos:permissions unblock${where}`;
-    case 'unblock-all':
-      return ctx.unblockAllOn ? null : UNBLOCK_ALL_SKILL;
-  }
+function permissionAction(choice: PermissionChoice, unblockAllOn: boolean): string | null {
+  return choice === 'unblock-all' && !unblockAllOn ? UNBLOCK_ALL_SKILL : null;
 }
 
-/** The modes to offer in the one question, recommended first; any other listed mode can be named instead. */
-function offer(options: PermissionOption[], recommended: PermissionChoice): PermissionChoice[] {
-  const ids = options.filter((o) => o.unavailable === null && isPermissionChoice(o.id)).map((o) => o.id as PermissionChoice);
-  // Unblock all, the one step that frees everything, is always among the offered modes when it is available.
-  const first = [recommended, 'unblock-all' as const].filter((id) => ids.includes(id));
-  return [...first, ...ids.filter((id) => !first.includes(id))].slice(0, 4);
+/** The modes to offer in the one question, as-is (recommended) first. */
+function offer(options: PermissionOption[]): PermissionChoice[] {
+  return options.filter((o) => o.unavailable === null).map((o) => o.id);
 }
 
 /** Runs the steps in order, writes the profile once they are settled, and says the one next action. */
@@ -520,36 +409,16 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
 
   // 6. Permission prompts: every mode, asked once.
   const policy = deps.managedPolicy();
-  const remote = heads.readable && !heads.empty && heads.hasRevision ? deps.settings(url, revision) : ({ status: 'unreadable', error: 'the branch could not be read' } as const);
-  let standardInPlace = false;
-  let hookInPlace = false;
-  let current = 'not read';
-  if (remote.status !== 'unreadable') {
-    try {
-      const settings = parseSettings(remote.status === 'found' ? remote.text : null);
-      standardInPlace = identify(readRules(settings)) === 'standard';
-      if (hasHookEntry(settings)) {
-        const files = deps.hookFiles(url, revision);
-        hookInPlace = files.status === 'found' && hookState(files.files).script === 'current';
-      }
-      current = `${identify(readRules(settings))} profile, ${hookInPlace ? 'with' : 'no'} kharos permission hook`;
-    } catch (err) {
-      if (!(err instanceof SettingsError)) throw err;
-      current = err.message;
-    }
-  }
-  const here = input.here?.toLowerCase() === slug.toLowerCase() ? '.' : null;
-  const role = deps.repoRole(url);
   // The account's own mode, which decides whether a launch stops for approval: part of unblock all, with the rest of what it frees.
   const acct = readAccountMode(input.env);
   const acctAuto = !('error' in acct) && acct.mode === 'auto';
   const ua = preview(paths, input.env, 'on', policy);
-  const options = permissionOptions(policy, { standardInPlace, hookInPlace, checkout: here, role, slug, unblockAll: ua.parts });
-  const actx = { standardInPlace, hookInPlace, config, checkout: here, slug, unblockAllOn: ua.token === null };
+  const options = permissionOptions(ua.parts);
+  const unblockAllOn = ua.token === null;
   let choice: PermissionChoice | null = null;
   let permQuestion: Next | null = null;
   if (input.permissions !== undefined) {
-    // `default` is what /kharos:permissions calls leaving the rules as they are.
+    // `default` is an older name of leaving the rules as they are.
     const wanted = input.permissions === 'default' ? 'as-is' : (permissionChoice(input.permissions) ?? input.permissions);
     const picked = options.find((o) => o.id === wanted);
     if (!picked || !isPermissionChoice(picked.id)) throw new SetupError(`--permissions must be one of ${PERMISSION_CHOICES.join(', ')} (default is as-is)`);
@@ -560,20 +429,20 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   const unblockNow = input.permissions !== undefined && choice === 'unblock-all' && ua.token !== null;
   const confirmUnblock = unblockNow && !input.unblockExpect;
   const accountPart = ua.parts.find((p) => p.id === 'account');
-  const willAuto = (unblockNow && !!input.unblockExpect && !accountPart?.unavailable) || (choice !== 'unblock-all' && input.accountMode === 'auto');
+  const willAuto = unblockNow && !!input.unblockExpect && !accountPart?.unavailable;
   const launches = acctAuto
     ? `this account starts its sessions in auto mode, so launches need no approval prompt, ${ACCOUNT_AUTO_CAVEAT}`
     : willAuto
       ? 'this account starts its sessions in auto mode once the confirmed change is written'
       : 'each launch asks for your approval (headless: claude -p --permission-mode auto)';
   if (choice && !confirmUnblock) {
-    const todo = unblockNow ? null : permissionAction(choice, actx);
-    add('ok', `${CHOICE_TEXT[choice]} (now on ${slug}@${revision}: ${current}); ${launches}`, todo ? `Then: ${todo}.` : undefined);
+    const todo = unblockNow ? null : permissionAction(choice, unblockAllOn);
+    add('ok', `${CHOICE_TEXT[choice]}; ${launches}`, todo ? `Then: ${todo}.` : undefined);
   } else {
     const ask = choice ? 'whether to free all of what unblock all lists below, with one confirmation' : 'the mode for this repository';
-    add('choose', `now on ${slug}@${revision}: ${current}; ${options.filter((o) => o.unavailable === null).length} of ${options.length} modes available here`, `Pick ${ask}; it is asked once.`);
+    add('choose', `${options.filter((o) => o.unavailable === null).length} of ${options.length} modes available here`, `Pick ${ask}; it is asked once.`);
     const unblockAll = ua.token && (choice === 'unblock-all' || options.some((o) => o.id === 'unblock-all' && o.unavailable === null)) ? { text: ua.text, token: ua.token } : null;
-    permQuestion = { kind: 'ask-permissions', options, offer: choice ? [] : offer(options, standardInPlace ? 'as-is' : 'standard'), unblockAll };
+    permQuestion = { kind: 'ask-permissions', options, offer: choice ? [] : offer(options), unblockAll };
   }
 
   // The cap on open sessions, kharos's own: asked once per account, with the next question that is asked anyway.
@@ -597,8 +466,6 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     return result({ kind: 'person', step: blockedAt + 1, action: s.action ?? s.detail });
   }
   const env = environment as Environment;
-  // Unblock all sets the account's mode itself, so an --account-mode answer does not apply with it.
-  const acctChange = input.accountMode === 'auto' && !acctAuto && choice !== 'unblock-all' ? approveAccountMode(paths, input.env, 'auto', input.accountExpect, policy) : null;
   if (unblockNow) {
     try {
       approveUnblockAll(paths, input.env, 'on', input.unblockExpect, policy);
@@ -615,11 +482,6 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     ...(env.name ? { environment_name: env.name } : {}),
     ...(choice ? { permissions: choice } : {}),
     ...(account ? { account } : {}),
-    ...(input.model !== undefined ? { model: input.model } : {}),
-    ...(input.deadline_min !== undefined ? { deadline_min: input.deadline_min } : {}),
-    ...(input.allowed_tools !== undefined ? { allowed_tools: input.allowed_tools } : {}),
-    ...(input.connectors !== undefined ? { connectors: input.connectors } : {}),
-    makeDefault: input.makeDefault,
   });
   if (input.confirmed && account) {
     recordSetup(paths, {
@@ -631,7 +493,6 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
       script_sha256: script?.status === 'found' ? scriptDigest(script.text) : null,
     });
   }
-  if (acctChange) applyAccountMode(paths, input.env, acctChange);
   let unblockFailed: string | null = null;
   if (unblockNow) {
     try {
@@ -641,13 +502,9 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
       unblockFailed = err.message;
     }
   }
-  if (input.accountMode !== undefined || input.maxOpen !== undefined) {
+  if (input.maxOpen !== undefined) {
     const cfg = loadConfig(paths).config;
-    saveConfig(paths, {
-      ...cfg,
-      ...(input.accountMode !== undefined ? { account_mode: input.accountMode } : {}),
-      ...(input.maxOpen !== undefined ? { watch: { ...cfg.watch, max_open: input.maxOpen } } : {}),
-    });
+    saveConfig(paths, { ...cfg, watch: { ...cfg.watch, max_open: input.maxOpen } });
   }
   const isDefault = /\(default\)/.test(written.split('\n')[0] ?? '');
   add('ok', written.split('\n')[0] as string);
@@ -664,7 +521,7 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   }
   const confirmed = github?.state === 'connected' || loadRepos(paths)[slug]?.access === 'ok';
   // Unblock all applied just now has nothing left to turn on, so it is not the next step.
-  const todo = choice ? permissionAction(choice, { ...actx, unblockAllOn: actx.unblockAllOn || unblockNow }) : null;
+  const todo = choice ? permissionAction(choice, unblockAllOn || unblockNow) : null;
   // A permissions warning that the next action fixes is that action, not a second thing to look at.
   const open = warns.filter((c) => !(todo && c.name === `${name}: permissions`));
   const summary = [
@@ -726,7 +583,7 @@ export function formatSetup(r: SetupResult): string {
       if (o.note && !o.unavailable) lines.push(`      note: ${o.note}`);
     }
     lines.push(`Launch approval: ${LAUNCH_APPROVAL}.`);
-    if (n.offer.length) lines.push(`To offer in the question, recommended first: ${n.offer.join(', ')}; any other available mode above can be named.`);
+    if (n.offer.length) lines.push(`To offer in the question, recommended first: ${n.offer.join(', ')}.`);
     if (n.unblockAll) {
       lines.push(
         '',

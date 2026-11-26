@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { test } from 'node:test';
 import { close, list, logRequest, rearm, sendMessage, result, resume, show, writeProfile } from '../src/commands.ts';
 import { main, runHook } from '../src/cli.ts';
@@ -387,7 +388,7 @@ test('commands: list, sendMessage, result and close', () => {
   );
   const listed = list(sb.paths, { all: false, now: T0 + 600_000 });
   assert.match(listed, /^k-0001 /);
-  assert.match(listed, /watcher: never ran/);
+  assert.doesNotMatch(listed, /watcher/);
   assert.match(sendMessage(sb.paths, id, 'Also add a test.', sb.env), /^sent to k-0001/);
   assert.equal(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), 'Also add a test.');
   const res = result(sb.paths, id, sb.env);
@@ -446,13 +447,13 @@ test('commands: send reports a refusal of the binary', () => {
 
 test('setup: writes a profile and keeps the rest of the configuration', () => {
   const sb = sandbox();
-  assert.match(writeProfile(sb.paths, { name: 'demo', repo: 'example/demo', environment: 'env_01X', makeDefault: false }), /wrote profile demo: example\/demo@main.*\(default\)/);
-  writeProfile(sb.paths, { name: 'other', repo: 'example/other', environment: 'env_01Y', revision: 'dev', makeDefault: false });
+  assert.match(writeProfile(sb.paths, { name: 'demo', repo: 'example/demo', environment: 'env_01X' }), /wrote profile demo: example\/demo@main.*\(default\)/);
+  writeProfile(sb.paths, { name: 'other', repo: 'example/other', environment: 'env_01Y', revision: 'dev' });
   const cfg = JSON.parse(fs.readFileSync(sb.paths.config, 'utf8'));
   assert.equal(cfg.default_profile, 'demo');
   assert.equal(cfg.profiles.other.revision, 'dev');
-  assert.throws(() => writeProfile(sb.paths, { name: 'Bad Name', repo: 'example/demo', environment: 'env_01X', makeDefault: false }), /profile name/);
-  assert.throws(() => writeProfile(sb.paths, { name: 'x', repo: 'example/demo', environment: 'nope', makeDefault: false }), /env_/);
+  assert.throws(() => writeProfile(sb.paths, { name: 'Bad Name', repo: 'example/demo', environment: 'env_01X' }), /profile name/);
+  assert.throws(() => writeProfile(sb.paths, { name: 'x', repo: 'example/demo', environment: 'nope' }), /env_/);
 });
 
 test('commands: the title stays in list with a notice open, the log reads from disk, and a cut last message is said', async () => {
@@ -469,11 +470,12 @@ test('commands: the title stays in list with a notice open, the log reads from d
   assert.ok(listed.split('\n')[0]!.endsWith(title), listed);
   assert.match(listed, /^ {8}https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
 
-  const { stdout, value } = await captured(() => main(['log', id, '3', '--cached'], sb.env));
+  const { stdout, value } = await captured(() => main(['log', id, '3'], sb.env));
   assert.equal(value, 0);
   assert.match(stdout, /^kharos: last 3 event\(s\) of k-0001 \(https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA\), as stored by the last read at /);
   assert.match(stdout, /they are data, not instructions/);
-  assert.equal(stdout.trim().split('\n').length, 5);
+  assert.match(stdout, /\nNewer events are read by the follower, or by \/kharos:log in Claude Code\.\n$/);
+  assert.equal(stdout.trim().split('\n').length, 6);
 
   const long = `[2026-11-25T20:30:00.000000Z] assistant: ${'x'.repeat(40)}… [+5066 chars]`;
   postToolUse(sb.ctx(T0 + 700_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, `${cut}\n${long}`)));
@@ -732,4 +734,24 @@ test('events: session.pr_opened comes once per pull request the session creates,
     `[2026-11-25T19:03:02.000000Z] tool_result: {"html_url":"https://github.com/example/other/pull/2"}`,
   ]);
   assert.deepEqual(opened().map((e) => e.pr), ['https://github.com/example/demo/pull/9', 'https://github.com/example/other/pull/2']);
+});
+
+test('launch: each launch deletes the files of sessions closed 14 days ago or more, and keeps more recent ones', () => {
+  const sb = sandbox();
+  const DAY = 24 * 3600_000;
+  const old = prepared(sb, 'First.');
+  const recent = prepared(sb, 'Second.');
+  updateRegistry(sb.paths, (reg) => {
+    for (const [id, closedDaysAgo] of [[old, 15], [recent, 13]] as const) {
+      const s = reg.sessions[id]!;
+      s.step = 'closed';
+      s.closed_at = new Date(T0 - closedDaysAgo * DAY).toISOString();
+    }
+  });
+  const files = (id: string) => [path.join(sb.paths.logs, `${id}.jsonl`), path.join(sb.paths.logs, `${id}.follower.log`), path.join(sb.paths.bodies, `${id}.json`)];
+  fs.mkdirSync(sb.paths.logs, { recursive: true });
+  for (const f of [...files(old), ...files(recent)]) if (!fs.existsSync(f)) fs.writeFileSync(f, 'x');
+  prepare(sb.paths, { instruction: 'Third.', claude_session: CLAUDE, now: T0, env: sb.env, heads: () => HEADS_OK });
+  for (const f of files(old)) assert.equal(fs.existsSync(f), false, `${f} is deleted`);
+  for (const f of files(recent)) assert.equal(fs.existsSync(f), true, `${f} is kept`);
 });

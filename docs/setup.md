@@ -13,8 +13,9 @@ It shows one list of everything a launch needs, in the order each step depends o
 3. Repository access: a first commit (setup offers one, and writes it only on a yes), the branch, and whether Claude reaches the repository.
 4. Cloud environment: picked by name from the environments of your account.
 5. Commit identity: how commits are authored (see below).
-6. Permission prompts: every mode kharos has, each with what it does and its trade-off, the ones this account or organization rules out marked with why; you pick one, once.
-   One of them, unblock all, frees every prompt kharos can free for the account with one confirmation: the unblock preset on a side branch of each launch, and the account's sessions in auto mode (see [permissions.md](permissions.md#unblock-all)).
+6. Permission prompts: two modes, each with what it does and its trade-off; you pick one, once.
+   `as-is` leaves the rules as they are: before each launch kharos lists the prompts the session is likely to hit, and tells you when one waits.
+   `unblock-all` frees every prompt kharos can free for the account with one confirmation: the unblock preset on a side branch of each launch, and the account's sessions in auto mode (see [permissions.md](permissions.md#unblock-all)); it is marked unavailable, with why, when this account or organization rules it out.
    Picking it is that confirmation: setup shows the full list of what unblock all frees before it asks, and when you pick that mode it turns all of it on itself, with no separate command for you to run.
 7. Profile: written only when the steps above are settled, as the default profile when it is the first one.
 
@@ -31,8 +32,13 @@ Its bundled `/schedule` skill lists the account's cloud environments (with their
 `/kharos:setup` loads that skill only to read those lines, and passes them to `kharos setup --from-schedule`; it never shows you an `env_...` id.
 Claude Code checks only the repository of the current folder, so for another repository the first launch is the access check (below), and the summary says so.
 
-The permission mode is only recorded in the profile.
-The repository's files change through `/kharos:permissions`, after you approve its diff, and the automatic modes only when you turn them on yourself; setup ends with that command as the next action.
+The permission mode is recorded in the profile, so setup does not ask it again.
+kharos never changes the repository's own files: unblock all works on a side branch of each launch.
+A profile that an earlier kharos wrote with a mode that is gone (`standard`, `hook`, `standard+hook`, `auto-preflight` or `unblock`) still loads, and reads as `as-is`; the configuration switches that answer led to stay as they are.
+`--permissions default` is accepted as `as-is`, and `auto-unblock` as `unblock-all`.
+
+`kharos setup` takes `--repo`, `--profile`, `--revision`, `--from-schedule`, `--environment`, `--confirmed`, `--permissions` (with `--unblock-expect <token>` for `unblock-all`), `--max-open`, `--adopt` and `--no-remote-tool`; `/kharos:setup` passes them for you.
+The other fields of a profile (`model`, `deadline_min`, `allowed_tools`, `connectors`) are edited in the configuration file, and `/kharos:run` takes `--model` and `--deadline` for one launch.
 
 ## Commit identity
 
@@ -50,11 +56,11 @@ In a kharos test, a headless `/kharos:run` in auto mode had both the create and 
 
 So there are two ways past the prompt, and kharos never bypasses it:
 
-- For the whole account: unblock all (`/kharos:permissions unblock-all`, or the `unblock-all` mode in `/kharos:setup`) starts this Claude account's sessions in auto mode, with the diff of its user settings (`permissions.defaultMode: "auto"` in `CLAUDE_CONFIG_DIR/settings.json`, `~/.claude/settings.json` by default), together with the rest of what it frees, and writes it only after your one confirmation.
+- For the whole account: unblock all (`/kharos:permissions`, or the `unblock-all` mode in `/kharos:setup`) starts this Claude account's sessions in auto mode, with the diff of its user settings (`permissions.defaultMode: "auto"` in `CLAUDE_CONFIG_DIR/settings.json`, `~/.claude/settings.json` by default), together with the rest of what it frees, and writes it only after your one confirmation.
   Then launches need no approval prompt and headless ones need nothing extra; the side effect is that every session of that account starts in auto mode, not only launches.
   A folder whose `.claude/settings.json` or `.claude/settings.local.json` sets another `permissions.defaultMode` overrides the account's, so launches from that folder ask again.
-  `/kharos:permissions unblock-all off` takes back what `unblock-all on` turned on, back to the mode the file had; that part is left out when the organization turns auto mode off (`permissions.disableAutoMode`).
-  Auto mode set any other way (by hand, or by an earlier setup) is taken out with `kharos permissions account-mode diff off`, then `account-mode write off --expect <token>`.
+  `/kharos:permissions off` takes back what unblock all turned on, back to the mode the file had; that part is left out when the organization turns auto mode off (`permissions.disableAutoMode`).
+  Auto mode set any other way (by hand, or by an earlier setup) stays until you take `permissions.defaultMode` out of that file.
 - For one launch: `claude -p --permission-mode auto`.
 
 `/kharos:doctor` says which applies to the account in use.
@@ -87,9 +93,8 @@ What follows `=` is never kept.
 Before creating one, look in the list `/kharos:setup` shows for an environment that already serves the repository: on Team and Enterprise, an owner can share one with the organization.
 
 When you pick "a new environment", `/kharos:setup` runs `kharos env-guide --repo owner/name --copy --open`, which opens the page and puts the script on the clipboard.
-Once you created it, setup lists your environments again, and you pick the new one by name.
+Once you created it, say so: setup lists your environments again, and you pick the new one by name.
 When the repository ships `tools/cloud/bootstrap.sh`, setup asks once whether the picked environment runs it, and records your answer (`--confirmed`).
-From a shell, `kharos env-wait --since <printed default>` waits for `/remote-env` to save a new default environment instead.
 
 ## What kharos knows about an environment
 
@@ -108,7 +113,7 @@ The last line says whether a launch is ready, and when Claude's access to a repo
 | `plan` | the subscription is not Pro, Max, Team or Enterprise | change the plan |
 | `remote tool` | the session has no `RemoteTrigger` tool | update Claude Code; on Team or Enterprise, an owner allows cloud sessions and scheduled tasks |
 | `config` | no file, or the file cannot be read, is not valid JSON, or has a wrong field | no file: `/kharos:setup`; otherwise fix or move the file the message names, then run `/kharos:setup` |
-| `repos`, `environments`, `setups`, `registry`, `watcher` | a kharos state file exists but cannot be read, is not valid JSON, or has the wrong shape | repair or move the file the message names |
+| `repos`, `environments`, `setups`, `registry` | a kharos state file exists but cannot be read, is not valid JSON, or has the wrong shape | repair or move the file the message names |
 | `repo` | the repository has no commit (fail), or this machine's git cannot read it (warning only: the cloud does not use local credentials) | an initial commit, which setup offers |
 | `revision` | the branch or tag of the profile does not exist | set `revision` to an existing branch |
 | `claude access` | the service answered `repo_access_denied` | see below |
@@ -116,13 +121,13 @@ The last line says whether a launch is ready, and when Claude's access to a repo
 | `account files` | profiles or sessions of this account still sit in the files every account shared (warning) | `/kharos:setup` once on this account |
 | `profile <name>` | the profile was set up on another Claude account (information, or a failure when named with `--profile`) | `/kharos:setup` on this account |
 | `commits` | (information) how cloud commits are authored | see [Commit identity](#commit-identity) |
-| `launch approval` | whether this account starts its sessions in auto mode, so launches need no approval prompt; a warning when the settings ask for auto mode and the organization turns it off | `/kharos:permissions unblock-all`; `kharos permissions account-mode diff off` takes auto mode out, whoever set it; see [Launch approval](#launch-approval) |
-| `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees; information only when you chose to leave the rules as they are, or your GitHub login cannot change the repository's settings) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
+| `launch approval` | whether this account starts its sessions in auto mode, so launches need no approval prompt; a warning when the settings ask for auto mode and the organization turns it off | `/kharos:permissions`; `/kharos:permissions off` takes back the auto mode unblock all set; see [Launch approval](#launch-approval) |
+| `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees; information only when you chose to leave the rules as they are, or your GitHub login cannot change the repository's settings) | change `.claude/settings.json` on the launch branch, or let unblock all answer the prompts at each launch (`/kharos:permissions`); see [permissions.md](permissions.md) |
 | `managed policy` | (information) the local copy of the organization's managed settings: how many ask and deny rules, and whether bypass mode is disabled | none |
-| `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or use the opt-in permission hook; see [permissions.md](permissions.md) |
+| `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or let unblock all answer them (`/kharos:permissions`) when the organization has not disabled bypass mode; see [permissions.md](permissions.md) |
 | `managed hooks only` | the managed settings set `allowManagedHooksOnly`, so no repository hook runs and the permission hook never answers a prompt (warning) | ask the organization's administrator to narrow the rules instead |
-| `unblock all` | one line for everything unblock all frees: on (warning), partly on with what is missing and why (warning), or off | `/kharos:permissions unblock-all` turns on the rest, unless every part available here is on already; `/kharos:permissions unblock-all off` takes back what `unblock-all on` turned on |
-| `permission hook` | the opt-in permission hook is on (warning); per profile, what the branch's hook answers (broad rules marked), a missing or changed script or rules file, a hook on the branch while the setting is off, or mirrored organization ask rules while the organization disables bypass mode (warning) | `kharos permissions hook disable`; `/kharos:permissions hook` in a checkout |
+| `unblock all` | one line for everything unblock all frees: on (warning), partly on with what is missing and why (warning), or off | `/kharos:permissions` turns on the rest, unless every part available here is on already; `/kharos:permissions off` takes back what unblock all turned on |
+| `permission hook` | `permission_hook` is on (warning); per profile, what the branch's hook answers (broad rules marked), a missing or changed script or rules file, a hook on the branch while the setting is off, or mirrored organization ask rules while the organization disables bypass mode (warning) | `/kharos:permissions off` when unblock all turned it on, otherwise `permission_hook: false` in the configuration; a hook on the branch itself is changed or removed in its files there |
 | `limits` | (information) open sessions against `watch.max_open`, and fires in the last hour | wait, or close finished sessions |
 
 ## Claude's access to the repository

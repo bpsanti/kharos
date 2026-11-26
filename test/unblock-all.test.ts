@@ -150,8 +150,7 @@ test('unblock-all: off leaves an account that was in auto mode before on as it w
 test('unblock-all: off leaves permission_unblock and the confirmation that were on before on as they were', async () => {
   const sb = account();
   writeConfig(sb, { permission_unblock: true });
-  const fp = /fingerprint ([0-9a-f]{16})/.exec((await kharos(sb, 'permissions', 'unblock', 'show')).out)?.[1] ?? '';
-  assert.equal((await kharos(sb, 'permissions', 'unblock', 'confirm', '--fingerprint', fp)).code, 0);
+  confirmPreset(sb);
   const on = await kharos(sb, 'permissions', 'unblock-all', 'on', '--expect', tokenOf((await kharos(sb, 'permissions', 'unblock-all', 'show')).out));
   assert.equal(on.code, 0, on.err);
   assert.match(on.out, /1\. the confirmation of the unblock preset: on already/);
@@ -208,7 +207,7 @@ test('unblock-all: each part keeps its own guards; what the organization rules o
   assert.equal(mode(noAuto), 'acceptEdits');
   const byHand = account({ permissions: { ...POLICY_JSON.permissions, disableAutoMode: 'disable' } }, { permissions: { defaultMode: 'auto' } });
   writeConfig(byHand);
-  assert.match(formatChecks(runDoctor(byHand.paths, { now: T0, env: byHand.env }, doctorDeps(byHand))), /take it out of your settings with `kharos permissions account-mode diff off`/);
+  assert.match(formatChecks(runDoctor(byHand.paths, { now: T0, env: byHand.env }, doctorDeps(byHand))), /Ask the organization's administrator about auto mode; if unblock all turned it on, `\/kharos:permissions off` takes back what unblock all turned on/);
 
   // No copy of the managed settings: never guessed.
   const none = account(null);
@@ -257,17 +256,26 @@ test('unblock-all: a part that fails stops the rest, and the error says which pa
   assert.equal(describeUnblockAll(readUnblockAll(sb.paths, sb.env).parts).overall, 'on');
 });
 
-test('unblock-all: the advanced commands still work alone, and their errors point to the one command', async () => {
+test('unblock-all: only the one command remains, and the doctor says what is on and what is missing', async () => {
   const sb = account();
   writeConfig(sb);
-  const err = (await kharos(sb, 'permissions', 'auto', 'unblock', 'on')).err;
-  assert.match(err, /`kharos permissions unblock-all show` turns the hook on with the rest, after one confirmation \(for this part alone, see Advanced in docs\/permissions\.md\)/);
+  for (const gone of [['unblock', 'show'], ['auto', 'unblock', 'on'], ['account-mode', 'diff', 'auto'], ['hook', 'enable'], ['show']]) {
+    const r = await kharos(sb, 'permissions', ...gone);
+    assert.equal(r.code, 1, gone.join(' '));
+    assert.match(r.err, /permissions takes unblock-all, preflight or approvals/);
+  }
   assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'bogus')).code, 1);
   // The doctor: off says how to free it; part of it says what is missing.
-  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, doctorDeps(sb))), /ok {4}unblock all: off: none of the three parts is on; `\/kharos:permissions unblock-all` frees every prompt/);
-  const fp = /fingerprint ([0-9a-f]{16})/.exec((await kharos(sb, 'permissions', 'unblock', 'show')).out)?.[1] ?? '';
-  assert.equal((await kharos(sb, 'permissions', 'unblock', 'confirm', '--fingerprint', fp)).code, 0);
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, doctorDeps(sb))), /ok {4}unblock all: off: none of the three parts is on; `\/kharos:permissions` frees every prompt/);
+  confirmPreset(sb);
   const report = formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, doctorDeps(sb)));
   assert.match(report, /warn  unblock all: partly on: on: the confirmation of the unblock preset; missing: automatic unblock; auto mode for the account/);
-  assert.match(report, /`\/kharos:permissions unblock-all` turns on the rest after you confirm once/);
+  assert.match(report, /`\/kharos:permissions` turns on the rest after you confirm once/);
 });
+
+/** The person's confirmation of the unblock preset, for the account's managed settings as they are. */
+function confirmPreset(sb: Sandbox): void {
+  const policy = parseManagedPolicy(fs.readFileSync(path.join(sb.env.CLAUDE_CONFIG_DIR as string, 'remote-settings.json'), 'utf8'), 'f');
+  if (policy.status !== 'found') throw new Error('test policy');
+  saveConfirmation(sb.paths, 'unblock', policy, T0);
+}

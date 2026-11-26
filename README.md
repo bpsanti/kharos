@@ -55,12 +55,12 @@ It shows one list of everything a launch needs, in order (account and plan, GitH
 It checks again after each fix, asks only what it cannot settle itself (the environment by name when there are several, and the permission mode, once), then writes the profile and ends with a short summary and the next action: see [docs/setup.md](docs/setup.md).
 
 Every launch asks for your approval before its routine is created and run: Claude Code ignores allow rules for that and offers no "always allow".
-In auto mode its classifier reviews the launch instead: unblock all (`/kharos:permissions unblock-all`, or setup's `unblock-all` permission mode) starts the account's sessions in auto mode (every session of the account, not only launches), and then headless launches need nothing extra; otherwise a headless launch needs `claude -p --permission-mode auto` ([docs/setup.md](docs/setup.md#launch-approval)).
+In auto mode its classifier reviews the launch instead: unblock all (`/kharos:permissions`, or setup's `unblock-all` permission mode) starts the account's sessions in auto mode (every session of the account, not only launches), and then headless launches need nothing extra; otherwise a headless launch needs `claude -p --permission-mode auto` ([docs/setup.md](docs/setup.md#launch-approval)).
 
 Cloud sessions push with the GitHub credential your Claude account has, and author commits as `Claude <noreply@anthropic.com>` unless the environment sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` (on claude.ai/code: the environment's settings, Environment variables).
 
 The plugin runs the `kharos` CLI by itself.
-To run it from your own shell too, for `kharos health` from cron or launchd or `kharos permissions approvals`, install it from npm:
+To run it from your own shell too (see [For scripts](#for-scripts)), install it from npm:
 
 ```
 npm install -g kharos
@@ -71,20 +71,23 @@ npm install -g kharos
 | Command | What it does |
 |---|---|
 | `/kharos:setup [owner/repo] [--profile p] [--revision branch]` | Takes this Claude account from zero to ready for a repository, once, then writes its launch profile |
-| `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits, the watcher and policy counts |
-| `/kharos:permissions [default\|standard\|hook\|preflight\|unblock\|unblock-all [off]] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; `unblock-all` frees every prompt kharos can free for the account in one step, after one confirmation, and `unblock-all off` takes back what it turned on; never commits or pushes |
+| `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits and policy counts |
 | `/kharos:run "<instruction>" [--profile p] [--revision branch] [--model m] [--title t] [--deadline min] [--file path] [--no-push] [--queue]` | Launches one cloud session, records it, and starts its follower in the background; `--revision` starts it on another branch or tag than the profile's; `--no-push` leaves out the footer line that asks the session to push work in progress; `--queue` queues a launch that finds every slot taken |
-| `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again (a follower process of its own in a headless Claude Code) |
-| `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
-| `/kharos:log <id> [lines]` | Shows the last lines of a session's log; in a shell, `kharos log <id> [lines]` prints the events already stored, with no model, and `--full` prints each one's whole stored text |
+| `/kharos:list [--all]` | Lists followed sessions from the local registry, with their followers and the open slots |
+| `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
 | `/kharos:close <id> [--ask-stop] [--stopped]` | Stops following a session, and shows where to delete its routine; `--ask-stop` first sends the session a request to stop; cancels a queued launch. A session that still runs is `closing` (below) |
-| `/kharos:watch` | One watcher pass, the advanced mode; run it as `/loop 10m /kharos:watch` in a session of its own |
+| `/kharos:permissions [on\|off\|state]` | Unblock all: frees every permission prompt kharos can free for this account, in one step, after one confirmation; `off` takes back what it turned on; `state` shows where it stands. It never changes a repository's own files |
 
 Commands that spend plan usage or change state can only be started by you, not by the model.
 
-Both forms work: `/kharos:log k-0001` and `/kharos log k-0001`; `/kharos` alone lists the actions (for `/loop`, use `/kharos:watch`).
+Both forms work: `/kharos:log k-0001` and `/kharos log k-0001`; `/kharos` alone lists the commands above.
+
+### For scripts
+
+The `kharos` CLI also serves scripts and orchestrators, with no model: `kharos prepare` (with `--output firstmate --status-file <file> --firstmate-home <home>` for the firstmate adapter), `show`, `list`, `log <id> [lines] [--full]` (the events already stored), `send`, `result`, `close [--ask-stop] [--stopped]`, `follow <id> [--detach]`, `wait`, `followers`, `health` (exits with 1 when an open session has no live follower, for cron or launchd) and `permissions approvals` (what the permission hook allowed).
+`kharos help` lists every command.
 
 ## How a launch works
 
@@ -142,14 +145,14 @@ Its report reaches your session like the result of any background subagent:
 - a failure, a usage limit, or another notice, with the link.
 
 After a report that is not the end, your session starts the follower again at once, and an answer you send does not wake it before the next real change.
-Closing Claude Code stops its followers; the cloud session goes on, and `/kharos:follow` picks the open sessions up again.
+Closing Claude Code stops its follower agents; the cloud session goes on.
 At the end of every turn of a Claude Code session with kharos, its Stop hook starts a follower process (the one `kharos follow <id> --detach` starts) for each open session that no follower reads, so a follower that died is replaced without anyone asking.
-It reads only local files and calls nothing unless a follower is missing, starts nothing while the watcher runs, and never starts a second follower for a session.
+It reads only local files and calls nothing unless a follower is missing, and never starts a second follower for a session.
 
 ### Headless launches
 
 A headless Claude Code (`claude -p "/kharos:run ..."`, or the Agent SDK) stops its background agents 10 minutes after its last turn, so a follower agent there would stop long before the session ends.
-There, `/kharos:run` and `/kharos:follow` start no agent: each session is followed by a process of its own, `kharos follow <id>`, the follower's loop without a model, which goes on after `claude -p` exits.
+There, `/kharos:run` starts no agent: each session is followed by a process of its own, `kharos follow <id>`, the follower's loop without a model, which goes on after `claude -p` exits.
 `claude -p` then ends right after the launch, and says where the follower writes and how to answer.
 What it sees reaches your outputs (desktop notification, `events.jsonl`, Slack, a command, firstmate), and `kharos list` shows the state.
 Answer a question with `claude -p '/kharos:send <id> <answer>'`, and a permission prompt on the session page.
@@ -172,23 +175,15 @@ What to expect:
 
 See [docs/follow.md](docs/follow.md) for how it works and its limits.
 
-### The watcher, the advanced mode
+### What a follower reports
 
-For many sessions at once, headless launches, or outputs that must keep going with no terminal open (Slack, firstmate), run the watcher in a separate terminal with a small model:
-
-```
-claude --model haiku
-/loop 10m /kharos:watch
-```
-
-Both modes share the registry, the rules and the outputs, and can run together: each event is emitted once, whichever process read, and the watcher leaves a session to its live follower.
 Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
 A closed turn is never taken for the end: only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
 A session waiting at a permission prompt raises a notice that names the tool and a fixed category of why it asks (an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell), with the link to the session, where a person answers it.
 Only the tool name and a fixed category leave the machine: what the tool would run never does.
-`kharos health` exits with 1 when an open session has no live follower and the watcher stopped, for launchd, cron or any other check.
+`kharos health` exits with 1 when an open session has no live follower, for launchd, cron or any other check.
 `/kharos:list` shows each follower's heartbeat, and `/kharos:list` and `/kharos:doctor` flag a follower whose heartbeat stopped for more than 3 minutes: stuck while its process still runs, or stopped without handing over.
-See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
+See [docs/states.md](docs/states.md) for the rules, the numbers behind them, and the event format.
 
 ## Permission prompts
 
@@ -196,17 +191,22 @@ A cloud session that a routine starts runs in auto mode ([scheduled tasks](https
 It still stops at a prompt for `ask` rules, both the organization's managed ones and the repository's, and after the classifier blocks 3 actions in a row or 20 in the session ([permission modes](https://code.claude.com/docs/en/permission-modes)).
 Cloud sessions have no bypass mode, auto mode drops broad allow rules such as `Bash(*)`, and no allow rule outranks an ask rule.
 The routine's `allowed_tools` neither allows nor restricts anything there.
-`/kharos:permissions` shows a repository's rules, and adds narrow allow rules for its own commands (the `standard` profile).
-The opt-in permission hook (off by default) answers prompts in cloud sessions with your own allow patterns (narrow ones, unless you ask for broad ones with `--broad`), and denies the rest with a message that names the allowed form, so the session sends the right command instead of waiting.
-When the organization has not disabled bypass mode, it can also mirror the organization's ask rules as a cloud-only allow, after you confirm the list once (kharos asks again only when the organization's rules change); deny rules are never touched.
-Before each launch, `/kharos:run` runs a permission preflight: the prompts the session is likely to hit (the organization's ask rules, commands of the repository that such a rule covers, and prompts of earlier sessions on the same repository), each with the narrow rule that answers it, why, and the exact command that adds them.
-With automatic preflight (opt-in, off by default), kharos writes those narrow rules itself to a side branch `kharos/<id>` of each launch and starts the session there, so the branch your team shares is never changed; `/kharos:close` deletes the side branch.
-The unblock preset (opt-in, off by default, refused when the organization disabled bypass mode) goes further: confirmed once, it makes the hook allow every prompt in cloud sessions, so none waits on a person.
-To free everything kharos can free for a Claude account, run `/kharos:permissions unblock-all` (or `kharos permissions unblock-all show` in a shell): it lists, once, what it frees, and after your one confirmation it confirms the unblock preset for the organization's current managed settings, applies the preset on a side branch of each launch, and starts the account's sessions in auto mode, so launches need no approval prompt.
-`/kharos:setup` offers the same as its `unblock-all` permission mode: it shows the full list of what unblock all frees before it asks, and when you pick that mode it turns all of it on itself, with no separate command for you to run.
-`/kharos:permissions unblock-all off` takes back what it turned on, leaving what was on before it as it was, and `/kharos:doctor` shows in one line whether it is on, partly on (and what is missing), or off.
-The watcher logs each of the hook's decisions, and `kharos permissions approvals` lists them.
-`/kharos:doctor` warns when a launch branch would likely stall, about managed ask rules that would stop a session, about broad rules or modes that cloud sessions ignore, and while the hook is on: see [docs/permissions.md](docs/permissions.md).
+
+Before each launch, `/kharos:run` runs a permission preflight: the prompts the session is likely to hit (the organization's ask rules, commands of the repository that such a rule covers, and prompts of earlier sessions on the same repository), each with the narrow rule that answers it, and why.
+By default kharos answers no prompt: it tells you when one waits, and you answer it on the session page.
+
+To free everything kharos can free for a Claude account, run `/kharos:permissions` (opt-in, off by default, refused in part when the organization disabled bypass mode or auto mode).
+It lists, once, what it frees, and after your one confirmation it turns on all of it:
+
+- the unblock preset of the kharos permission hook, confirmed for the organization's current managed settings, which allows every prompt in cloud sessions, so none waits on a person; the organization's deny rules are never touched, and kharos asks again when those settings change;
+- automatic preflight: at each launch, kharos writes the hook with the preset and the preflight's narrow rules to a side branch `kharos/<id>` of the launch and starts the session there, so the branch your team shares is never changed; `/kharos:close` deletes the side branch;
+- the account's sessions in auto mode, so launches need no approval prompt (every session of the account, not only launches).
+
+kharos never changes a repository's own `.claude/settings.json`: what unblock all needs goes only to the side branch of each launch.
+`/kharos:setup` offers the same as its `unblock-all` permission mode: it shows the full list of what unblock all frees before it asks, and when you pick that mode it turns all of it on itself.
+`/kharos:permissions off` takes back what it turned on, leaving what was on before it as it was, and `/kharos:permissions state` and `/kharos:doctor` show in one line whether it is on, partly on (and what is missing), or off.
+kharos logs each of the hook's decisions as it reads the session, and `kharos permissions approvals` lists them.
+`/kharos:doctor` warns when a launch branch would likely stall, about managed ask rules that would stop a session, about broad rules or modes that cloud sessions ignore, and while unblock all is on: see [docs/permissions.md](docs/permissions.md).
 
 ## Outputs
 
@@ -219,16 +219,16 @@ See [docs/outputs.md](docs/outputs.md).
 
 | Path | Content |
 |---|---|
-| `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
+| `~/.config/kharos/config.json` | Profiles, thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
 | `~/.local/state/kharos/events.jsonl` | The journal: every event, with its `delivered` and `acknowledged` marks |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 | `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id, its kind (agent or process) and a heartbeat, or a handover while the next follower starts |
 | `~/.local/state/kharos/repo-rules.json` | The ask rules of each launch branch's `.claude/settings.json`, as the last launch preflight read them, to tell a repository prompt from the rest |
 | `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account, repository and revision |
-| `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |
+| `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions, as kharos read them: time, session, tool, decision and matched rule, never the command |
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
-| `~/.local/state/kharos/org-confirmations.json` | Your confirmations to mirror the organization's ask rules and of the unblock preset, each with the fingerprint of the managed settings it holds for |
+| `~/.local/state/kharos/org-confirmations.json` | Your confirmation of the unblock preset, with the fingerprint of the managed settings it holds for |
 
 Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/.claude`, they are under `accounts/<folder>-<hash>/` of both folders, and the first `/kharos:setup` there moves that account's profiles and sessions out of the files every account shared before.
 `KHAROS_HOME` puts everything under one folder of your choice instead.

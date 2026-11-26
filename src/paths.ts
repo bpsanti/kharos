@@ -15,7 +15,8 @@ export interface Paths {
   config: string;
   state: string;
   registry: string;
-  watch: string;
+  /** The account logged in, as kharos last read it. */
+  login: string;
   intents: string;
   outbox: string;
   /** kharos's journal: every event, one JSON line each, and the marks of its delivery and acknowledgement. */
@@ -28,7 +29,7 @@ export interface Paths {
   setups: string;
   bodies: string;
   logs: string;
-  /** The kharos permission hook's decisions, as the watcher read them from session logs. */
+  /** The kharos permission hook's decisions, as kharos read them from session logs. */
   approvals: string;
   /** What automatic permission preflight applied at each launch. */
   preflight: string;
@@ -62,7 +63,7 @@ function layout(home: string, account: string | null, configDir: string, state: 
     config: path.join(configDir, 'config.json'),
     state,
     registry: path.join(state, 'sessions.json'),
-    watch: path.join(state, 'watch.json'),
+    login: path.join(state, 'login.json'),
     intents: path.join(state, 'intents.json'),
     outbox: path.join(state, 'outbox.json'),
     events: path.join(state, 'events.jsonl'),

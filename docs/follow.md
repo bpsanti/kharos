@@ -1,12 +1,11 @@
 # Following a session like a subagent
 
-This is the default way to follow a launch.
+This is how kharos follows a launch.
 `/kharos:run` launches the cloud session and then starts the plugin's `kharos:follow` agent in the background, one per session.
 You go on working in the same Claude Code session.
 The follower reports back the way a local background subagent does, only when something needs you: the session asks a question, waits on a permission prompt, ends, fails, or raises another notice.
 
-The watcher (`/loop 10m /kharos:watch` in a session of its own, [watcher.md](watcher.md)) is the advanced mode, for many sessions, headless use, and outputs such as Slack or firstmate that must keep going with no terminal open.
-Both modes use the same registry, the same rules and the same outputs, and can run at the same time.
+The states and events a follower reports are in [states.md](states.md).
 
 ## What happens
 
@@ -41,8 +40,8 @@ So each read is one separate, minimal `claude -p`:
 
 - the Haiku model (`watch.model`), no settings, no MCP servers, no slash commands, no saved transcript;
 - only the `RemoteTrigger` tool, allowed for that one call, with a three-line system prompt;
-- the kharos plugin loaded, so its hook stores the page, classifies it, and queues the events exactly as for a watcher read, and the reader model sees one short line instead of the log;
-- registered as a watcher while it runs, so the hook denies it any launch or fire.
+- the kharos plugin loaded, so its hook stores the page, classifies it, and queues the events, and the reader model sees one short line instead of the log;
+- started with `KHAROS_ROLE=reader`, so the hook denies it any launch, fire or change of a kharos routine.
 
 Each read is a fraction of a cent.
 The interval starts at 15 seconds, doubles while nothing new comes, stops at 60 seconds, and goes back to 15 seconds when new events come.
@@ -51,25 +50,25 @@ The interval starts at 15 seconds, doubles while nothing new comes, stops at 60 
 Its JSON line has the session's `key`, `changed`, `state`, `notice`, `url`, the `question` or the permission's `tool` when there is one, the `result` at the end, how long it waited, how many reads it made and what they cost, and the `report`.
 The key is the open notice and when it opened, or `end:<state>` at the end, so the same open notice does not wake the next follower; a notice reported again after `renotify_min` does.
 
-## Followers, the watcher, and the registry
+## Followers and the registry
 
-- Each read goes through the same hook and the same locked registry as a watcher read, and an event is emitted once whichever process read: a notification, a Slack message or a firstmate line comes once in either mode.
+- Each read goes through the same hook and the same locked registry, and an event is emitted once whichever process read: a notification, a Slack message or a firstmate line comes once.
 - A follower that reads a session holds a lease on it (`followers/<id>.json` in the state folder, with its process id, whether an agent or a follower process holds it, and a heartbeat it renews every few seconds).
   A second `kharos wait` on the same session does not read: it watches the registry and returns on the same change.
 - A wait that returns for the next follower to go on (a report your session starts the follower again for, or the next turn of a follower process) hands the lease over: for two minutes the session still counts as followed, so nothing starts a second follower while the next one starts.
   `kharos followers` does the same for each agent it asks your session to start.
   A follower process is started under the lease's lock, and gets the lease before it runs, so two callers never start two.
 - `/kharos:list` shows each follower with its heartbeat, and `/kharos:list` and `/kharos:doctor` flag a follower of an open session whose heartbeat is older than 3 minutes: stuck, when its process still runs (stop it, and another starts), or stopped, when it ended without handing over.
-- A watcher pass leaves a session with a live lease to its follower, and `/kharos:list --refresh` still reads every session.
 - `kharos health`, `/kharos:list` and the message at the start of a Claude Code session count a live follower as following its session.
+  `kharos health` exits with 1 when an open session has no live follower, for launchd, cron or any other check.
 
 ## When the local session closes
 
 Closing the Claude Code session stops its follower agents with it.
 The cloud session goes on, and the registry keeps the last state it read.
-After you open Claude Code again, the session start says which open sessions nobody follows, and `/kharos:follow` (or `/kharos:follow <id>`) starts a new follower for each.
+After you open Claude Code again, the session start says which open sessions nobody follows, and the end of your next turn starts a follower process for each (see [The Stop hook](#the-stop-hook)); `kharos follow <id> --detach` in a shell starts one at once.
 A new follower first reads the current state: a question asked or an end reached while nobody followed is reported at once.
-It also sends every alert no follower handed on yet, even one that cleared since (a prompt answered, a silence that ended), with its time and reason; each alert a follower hands on is marked acknowledged in `events.jsonl` ([watcher.md](watcher.md#the-journal-delivered-and-acknowledged)).
+It also sends every alert no follower handed on yet, even one that cleared since (a prompt answered, a silence that ended), with its time and reason; each alert a follower hands on is marked acknowledged in `events.jsonl` ([states.md](states.md#the-journal-delivered-and-acknowledged)).
 
 ## The Stop hook
 
@@ -78,17 +77,17 @@ It starts a follower process for each (the one `kharos follow <id> --detach` sta
 
 - It is cheap: it reads the registry and the leases, local files only, and makes no model call and no network call unless a follower is missing; then the follower process it starts does the reading.
 - It never starts a second follower: a follower agent about to start again holds a handover, and a follower process is started under the lease's lock and gets the lease before it runs.
-- It starts nothing while the watcher runs (its heartbeat is within three intervals), since the watcher reads the sessions nobody follows, and nothing in kharos's own sessions: the readers, the follower processes and the watcher.
+- It starts nothing in kharos's own sessions: the readers, the follower processes, and the fire of a queued launch.
 - It never holds the turn, and a failure never reaches the session.
 
 So a follower that stops (its Claude Code was closed, or it gave up after failed reads) is replaced at the next turn end of any Claude Code session with kharos, interactive or headless.
-Between the last turn and the next one, nobody reads: for sessions that must be followed with no Claude Code open at all, run the watcher, or `kharos follow <id> --detach` from a shell, and check `kharos health` from cron or launchd.
+A follower process it started goes on with no Claude Code open; for a session that a follower agent read when its Claude Code closed, nobody reads until the next turn end, or until `kharos follow <id> --detach` from a shell, and `kharos health` from cron or launchd says so.
 
 ## Headless launches
 
 In a headless Claude Code, `CLAUDE_CODE_ENTRYPOINT` starts with `sdk` (`claude -p` says `sdk-cli`), and its background agents are stopped 10 minutes after its last turn.
 A follower agent started there would stop with them, and the cloud session would go on with nobody reading it; its report would also have nowhere to go, since `claude -p` takes no input.
-So in a headless Claude Code, `kharos followers` (the command behind the last step of `/kharos:run` and behind `/kharos:follow`) prints no agent prompt:
+So in a headless Claude Code, `kharos followers` (the command behind the last step of `/kharos:run`) prints no agent prompt:
 
 1. It starts `kharos follow <id>` for each session, detached in a session of its own, so it outlives `claude -p` and its process group.
 2. That process runs the follower's loop without a model: `kharos wait` again and again, with the key it reached, until the session ends or it is closed.
@@ -109,11 +108,10 @@ kharos never sets that variable itself.
 - A change reaches you up to about a minute after it happens (the longest interval plus one read), and then only when your session takes its next turn.
 - kharos cannot stop a cloud session: the `RemoteTrigger` tool has no stop action.
   `/kharos:close` takes it out of your follow-up (a session that still runs keeps its slot, read with no alerts, until it ends, its deadline passes, or `--stopped`), `/kharos:close --ask-stop` first asks the session to stop, and the session page stops it.
-- Permission prompts are as before: kharos alerts with the tool and the link, and a person answers on the session page (unless the opt-in permission hook answers it, see [permissions.md](permissions.md)).
-  Where the branch had the hook at launch, the alert waits for a second read to find the same prompt open, so a prompt the hook resolves between reads wakes nobody ([watcher.md](watcher.md#states)).
+- Permission prompts are as before: kharos alerts with the tool and the link, and a person answers on the session page (unless unblock all answers it, see [permissions.md](permissions.md)).
+  Where the branch had the hook at launch, the alert waits for a second read to find the same prompt open, so a prompt the hook resolves between reads wakes nobody ([states.md](states.md#states)).
 - The work comes back as a branch or a pull request, as with any cloud session, not as files changed in your checkout.
 - A follower agent lives as long as the Claude Code session that started it.
   A headless Claude Code (`claude -p`, the Agent SDK) stops its background agents 10 minutes after its last turn (`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`), so there kharos starts no agent and follows each session with a process of its own (see [Headless launches](#headless-launches)).
-  For many launches with no terminal open, the watcher fits better.
 - In the `default` permission mode, the first `kharos wait` asks for approval in your session, because a plugin agent cannot carry its own permission mode; approve it for the session, or add an allow rule for `Bash(/bin/sh <plugin folder>/scripts/kharos wait:*)` (the folder changes when the plugin is updated).
 - Each open session has its own follower; `watch.max_open` still caps the open sessions.

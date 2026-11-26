@@ -15,7 +15,7 @@ import { followerReport, HANDOVER_MS, liveFollowers, releaseLease, takeLease } f
 import { prepare } from '../src/launch.ts';
 import { loadRegistry, updateRegistry } from '../src/registry.ts';
 import { acknowledge, followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
-import { due, health } from '../src/watch.ts';
+import { health } from '../src/follow.ts';
 import { captured, fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
@@ -233,11 +233,6 @@ test('wait: while another live process holds the lease, a second wait only watch
   assert.equal(o.reads, 0);
   assert.equal(o.question, 'Which word should I use in the summary?');
   assert.ok(t - start <= 25_000, 'it noticed within one slice');
-  // The holder's lease is still there: a watcher pass leaves that session to it.
-  const r = due(sb.paths, { watcher: 'w', all: false, now: t, env: sb.env, account });
-  assert.equal(r.reads.length, 0);
-  assert.equal(r.followers, 1);
-  assert.equal(due(sb.paths, { watcher: 'w', all: true, now: t, env: sb.env, account }).reads.length, 1);
 });
 
 test('wait: reads that never reach the session end the wait with the reason', async () => {
@@ -252,7 +247,7 @@ test('wait: reads that never reach the session end the wait with the reason', as
   assert.equal(o.changed, false);
   assert.match(o.error ?? '', /^3 reads in a row did not reach the session \(claude -p exited 1 \(not logged in\)\)$/);
   assert.match(o.report, /^kharos wait could not follow k-0001: 3 reads in a row/);
-  assert.match(o.report, /\/kharos:follow k-0001/);
+  assert.match(o.report, /kharos follow k-0001 --detach does now\./);
   assert.equal(calls.length, 3);
   assert.equal(liveFollowers(sb.paths, T0 + 2 * MIN).size, 0);
 });
@@ -291,7 +286,6 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
       `printf '%s\\n' "$@" > "${sb.dir}/argv.txt"`,
       `env > "${sb.dir}/env.txt"`,
       `pwd > "${sb.dir}/cwd.txt"`,
-      `cat "${sb.paths.watch}" > "${sb.dir}/watch-during.json"`,
       `echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.00019}'`,
     ].join('\n'),
     { mode: 0o755 },
@@ -308,11 +302,11 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
   assert.equal(after('--allowedTools'), 'RemoteTrigger');
   for (const f of ['--strict-mcp-config', '--disable-slash-commands', '--no-session-persistence']) assert.ok(argv.includes(f), f);
   assert.ok(argv.includes('Call RemoteTrigger with action "get_run_log" and session_id "cse_01TESTSESSIONAAAAAAAAAAA".'));
-  // The reader session is a watcher while it runs, so the hook denies it a launch, and it is gone after.
-  const reader = after('--session-id') as string;
-  assert.ok(JSON.parse(fs.readFileSync(path.join(sb.dir, 'watch-during.json'), 'utf8')).watchers[reader]);
-  assert.equal(JSON.parse(fs.readFileSync(sb.paths.watch, 'utf8')).watchers[reader], undefined);
-  assert.doesNotMatch(fs.readFileSync(path.join(sb.dir, 'env.txt'), 'utf8'), /ANTHROPIC_API_KEY/);
+  // The reader runs as a kharos reader, so its hook denies it a launch, a fire or a change of a kharos routine.
+  assert.match(after('--session-id') ?? '', /^[0-9a-f-]{36}$/);
+  const childEnv = fs.readFileSync(path.join(sb.dir, 'env.txt'), 'utf8');
+  assert.match(childEnv, /^KHAROS_ROLE=reader$/m);
+  assert.doesNotMatch(childEnv, /ANTHROPIC_API_KEY/);
   assert.equal(fs.realpathSync(fs.readFileSync(path.join(sb.dir, 'cwd.txt'), 'utf8').trim()), fs.realpathSync(sb.paths.state));
 
   fs.writeFileSync(bin, '#!/bin/sh\necho \'{"type":"result","is_error":true,"result":"Not logged in"}\'\nexit 1\n', { mode: 0o755 });
@@ -327,8 +321,8 @@ test('followers: the open sessions no live follower reads, health and list count
   // Within a minute of the fire, the follower may still be starting: no one is told to start another.
   assert.doesNotMatch(list(sb.paths, { all: false, now: T0 + 30_000 }), /no follower reads/);
   assert.equal(health(sb.paths, T0 + 30_000).ok, true);
-  assert.match(health(sb.paths, T0 + MIN).line, /^kharos: 1 open session\(s\) with no follower: k-0001 "Fix the typo\.", and the watcher never ran\. Type \/kharos:follow/);
-  assert.match(list(sb.paths, { all: false, now: T0 + MIN }), /no follower reads k-0001: type \/kharos:follow/);
+  assert.match(health(sb.paths, T0 + MIN).line, /^kharos: 1 open session\(s\) with no follower: k-0001 "Fix the typo\."\. The next turn end/);
+  assert.match(list(sb.paths, { all: false, now: T0 + MIN }), /no follower reads k-0001: the next turn end of a Claude Code session with kharos starts a follower process for each, or kharos follow <id> --detach does now\./);
   const start = followersToStart(sb.paths, null, T0);
   assert.ok(start.split('\n').includes(`The kharos command is: ${KHAROS}. The session id is ${id}.`));
   assert.match(start, /subagent_type "kharos:follow", run_in_background true/);
@@ -522,7 +516,7 @@ test('wait: a restarted follower sends the alerts no follower handed on, once, a
   // The prompt is answered at 20:22:10, and the session goes on.
   const log = fixture('log-permission-prompt.txt').trimEnd() + '\n[2026-11-25T20:22:10.000000Z] tool_result: probe text\n[2026-11-25T20:22:12.000000Z] assistant: step 2 ran\n';
   // Nobody follows: the watcher reads a permission prompt, and later the session moves on.
-  const watcherRead = (now: number) => postToolUse(sb.ctx(now), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(log, now)), 'watcher'));
+  const watcherRead = (now: number) => postToolUse(sb.ctx(now), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(log, now)), 'reader'));
   watcherRead(at('2026-11-25T20:21:00Z'));
   watcherRead(at('2026-11-25T20:22:30Z'));
   const s = loadRegistry(sb.paths).sessions[id]!;
@@ -554,7 +548,7 @@ test('wait: a restarted follower sends the alerts no follower handed on, once, a
 test('follow: the shell loop acknowledges what it printed, as the shell follower', async () => {
   const sb = sandbox();
   const id = openOne(sb);
-  postToolUse(sb.ctx(at('2026-11-25T20:21:00Z')), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(fixture('log-permission-prompt.txt'), at('2026-11-25T20:21:00Z'))), 'watcher'));
+  postToolUse(sb.ctx(at('2026-11-25T20:21:00Z')), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(fixture('log-permission-prompt.txt'), at('2026-11-25T20:21:00Z'))), 'reader'));
   const alert = loadRegistry(sb.paths).sessions[id]!.unacked![0]!;
   const lines: string[] = [];
   const end = { kharos: 'wait', id, changed: true, key: 'end:finished', state: 'finished', notice: null, url: null, waited_s: 0, reads: 0, reader_cost_usd: 0, report: '' } as const;

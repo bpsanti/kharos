@@ -6,18 +6,21 @@ import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { ConfigError, loadConfig, otherAccount, repoSlug, type Config, type Profile } from './config.ts';
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
-import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
+import { assess, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './settings.ts';
 import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
-import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
+import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH, HOOK_SCRIPT_PATH } from './permission-hook.ts';
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { followerProblems, queueLines } from './commands.ts';
 import { LEASE_STALE_MS } from './lease.ts';
 import { describePlan, loadMarker, planMigration } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
-import { describeUnblockAll, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO } from './unblock-all.ts';
+import { describeUnblockAll, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, type Part } from './unblock-all.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
-import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
+import { environmentsOf, findSetup, loadEnvironments, loadSetups, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
+
+/** How a person takes back what unblock all turned on. */
+const UNBLOCK_ALL_TAKE_BACK = '`/kharos:permissions off` takes back what unblock all turned on';
 
 /** `info` lines show only with --verbose, so a warning is always something the person can act on. */
 export type Level = 'ok' | 'warn' | 'fail' | 'info';
@@ -179,21 +182,23 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   } else add('info', 'managed policy', `${policy.file} cannot be read (${policy.error}); its ask rules, if any, are not checked`);
   const blocked = hooksBlocked(policy);
   if (blocked) add('warn', 'managed hooks only', blocked, ['Cloud sessions wait at every prompt the organization or the repository asks about; ask the organization\'s administrator to narrow the rules instead.']);
-  if (config.permission_hook) {
+  const unblockAll = readUnblockAll(paths, opts.env, policy, config).parts;
+  // While automatic unblock is on, the unblock all line below says more than this one would.
+  if (config.permission_hook && !unblockAll.some((p) => p.id === 'auto' && p.on)) {
     add('warn', 'permission hook', `permission_hook is on: a repository that has the kharos permission hook answers permission prompts in its cloud sessions with no person asked; see what it allowed with \`kharos permissions approvals\``, [
-      'Turn it off with `kharos permissions hook disable`, and remove the hook from a repository with `kharos permissions hook diff --uninstall`.',
+      `If unblock all turned it on, ${UNBLOCK_ALL_TAKE_BACK}; otherwise set permission_hook to false in ${paths.config}.`,
     ]);
   }
   if (!config.preflight_auto) {
-    add('info', 'permission preflight', 'automatic preflight is off (the default): `kharos permissions preflight` and /kharos:run list the prompts a launch is likely to hit, with a narrow rule for each, and apply nothing');
+    add('info', 'permission preflight', `automatic preflight is off (the default): /kharos:run lists the prompts a launch is likely to hit, with a narrow rule for each, and applies nothing; \`${UNBLOCK_ALL_SKILL}\` turns it on with the rest of what it frees`);
   } else if (!config.permission_hook) {
-    add('warn', 'permission preflight', 'preflight_auto is on, but permission_hook is off, so automatic preflight applies nothing', ['Turn the hook on with `kharos permissions hook enable`, or automatic preflight off with `kharos permissions auto preflight off`.']);
+    add('warn', 'permission preflight', 'preflight_auto is on, but permission_hook is off, so automatic preflight applies nothing', [`\`${UNBLOCK_ALL_SKILL}\` turns on what is missing, after you confirm once; or set preflight_auto to false in ${paths.config}.`]);
   } else {
-    add('info', 'permission preflight', "automatic preflight is on: each launch writes the allow patterns and prefix rules the preflight suggests to a side branch kharos/<id> and starts there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and /kharos:close deletes the side branch", [
-      'Turn it off with `kharos permissions auto preflight off`.',
+    add('info', 'permission preflight', 'automatic preflight is on: each launch writes the allow patterns and prefix rules the preflight suggests to a side branch kharos/<id> and starts there; the branch a profile launches from is never changed, and /kharos:close deletes the side branch', [
+      `If unblock all turned it on, ${UNBLOCK_ALL_TAKE_BACK}; otherwise set preflight_auto to false in ${paths.config}.`,
     ]);
   }
-  checkUnblockAll(paths, opts.env, policy, config, add);
+  checkUnblockAll(unblockAll, add);
   const account = auth?.account ?? null;
   for (const name of names) {
     const p = config.profiles[name];
@@ -225,8 +230,6 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     for (const line of queueLines(paths, opts.now)) add(/not fired/.test(line) ? 'warn' : 'info', 'queue', line.replace(/^queue: /, ''));
     for (const p of problems) add('warn', `follower ${p.id}`, `${p.detail} (a follower beats every few seconds; past ${Math.round(LEASE_STALE_MS / 60_000)} min it counts as stale)`, [p.fix]);
   }
-  const w = state('watcher', paths.watch, () => loadWatch(paths));
-  if (w) add('info', 'watcher', w.last_beat ? `last heartbeat ${w.last_beat}` : 'never ran (the advanced mode; /kharos:run starts a follower for each launch)');
   return checks;
 }
 
@@ -328,7 +331,7 @@ function checkEnvironment(
   } else add('info', label, `${p.environment} (not compared: no routine of yours uses an environment yet, which is expected on a new account)`);
 }
 
-/** Which permission profile the branch a session starts on is on, and what in it would hold a session at a prompt. */
+/** The permission rules of the branch a session starts on, and what in them would hold a session at a prompt. */
 function checkPermissions(
   name: string,
   p: Profile,
@@ -339,10 +342,10 @@ function checkPermissions(
 ): void {
   const label = `${name}: permissions`;
   const where = `${repoSlug(p.repo)}@${p.revision}`;
-  const fix = [`/kharos:permissions standard in a checkout of ${repoSlug(p.repo)} shows the change as a diff and writes it after you approve; then commit and push it to ${p.revision}.`];
+  const fix = [`Change ${SETTINGS_PATH} on ${p.revision} of ${repoSlug(p.repo)}, or let \`${UNBLOCK_ALL_SKILL}\` answer every prompt at each launch, on a side branch, after you confirm once.`];
   const remote = deps.settings(p.repo, p.revision);
   if (remote.status === 'unreadable') {
-    add('info', label, `${SETTINGS_PATH} of ${where} could not be read with gh (${remote.error}); a cloud session uses the file on that branch`, [`Run /kharos:permissions in a checkout of ${repoSlug(p.repo)} to see its rules.`]);
+    add('info', label, `${SETTINGS_PATH} of ${where} could not be read with gh (${remote.error}); a cloud session uses the file on that branch`);
     checkManagedAsk(name, policy, [], hookOn, add);
     return;
   }
@@ -359,7 +362,7 @@ function checkPermissions(
   }
   const findings = assess(rules);
   const counts = `${rules.allow.length} allow, ${rules.ask.length} ask, ${rules.deny.length} deny`;
-  const detail = [`${where} is on the ${identify(rules)} permission profile (${remote.status === 'absent' ? 'no settings file' : counts})`, ...findings.map((f) => f.text)].join('; ');
+  const detail = [`${where}: ${remote.status === 'absent' ? 'no settings file' : counts}`, ...findings.map((f) => f.text)].join('; ');
   const quiet = permissionsQuiet(p, deps.repoRole(p.repo));
   if (!findings.some((f) => f.level === 'warn')) add('ok', label, detail, fix);
   else if (quiet) add('info', label, `${detail} (${quiet})`, fix);
@@ -372,8 +375,7 @@ function checkPermissions(
  * One line for everything `kharos permissions unblock-all` frees: all on, partly on with what is missing, or off.
  * On, even in part, it warns, since prompts are then answered with no person asked.
  */
-function checkUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy, config: Config, add: Add): void {
-  const { parts } = readUnblockAll(paths, env, policy, config);
+function checkUnblockAll(parts: readonly Part[], add: Add): void {
   const { overall, text } = describeUnblockAll(parts);
   if (overall === 'on') {
     add('warn', 'unblock all', `${text}: every permission prompt in the cloud sessions kharos launches is allowed, of any tool, with no person asked, and every session of this account starts in auto mode`, [
@@ -399,7 +401,7 @@ function checkAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy, add: Ad
   const refusal = autoModeRefusal(policy);
   if (cur.mode === 'auto' && refusal) {
     add('warn', 'launch approval', `${cur.file} starts this account's sessions in auto mode, but ${refusal}, so each launch asks for approval and a headless one is denied`, [
-      `Ask the organization's administrator about auto mode, or take it out of your settings with \`kharos permissions account-mode diff off\`.`,
+      `Ask the organization's administrator about auto mode; if unblock all turned it on, ${UNBLOCK_ALL_TAKE_BACK}.`,
     ]);
   } else if (cur.mode === 'auto') {
     add('ok', 'launch approval', `this account starts its sessions in auto mode (${cur.file}): Claude Code's classifier reviews each launch, interactive or headless, with no approval prompt, ${ACCOUNT_AUTO_CAVEAT}`);
@@ -448,7 +450,7 @@ function checkHook(
     return [];
   }
   if (!named) {
-    if (hookOn) add('info', label, `${where} has no kharos permission hook, so its cloud sessions still wait at every prompt`, [`/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the change; then commit and push it to ${p.revision}.`]);
+    if (hookOn) add('info', label, `${where} has no kharos permission hook, so its cloud sessions still wait at every prompt unless automatic preflight puts it on a side branch`);
     return [];
   }
   const found = deps.hookFiles(p.repo, p.revision);
@@ -472,7 +474,7 @@ function checkHook(
     ? `${rules.allow.length} allow pattern(s), ${rules.prefix?.length ? `${rules.prefix.length} prefix rule(s), ` : ''}${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms${broad.length ? `; ${broad.length} broad rule(s), which ${BROAD_RISK}: ${broad.join(', ')}` : ''}`
     : 'no usable rules';
   add(problems.length ? 'warn' : 'info', label, [`${where} has the kharos permission hook: ${what}`, ...problems].join('; '), [
-    `/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the hook and changes it (or removes it with --uninstall); then commit and push to ${p.revision}.`,
+    `The hook's files are ${SETTINGS_PATH}, ${HOOK_SCRIPT_PATH} and ${HOOK_RULES_PATH} on ${p.revision}: change or remove them there; automatic preflight puts its own copy on each launch's side branch.`,
   ]);
   return rules?.mirror ?? [];
 }
@@ -483,11 +485,7 @@ function checkManagedAsk(name: string, policy: ManagedPolicy, mirrored: readonly
   const open = hooksBlocked(policy) ? policy.ask : policy.ask.filter((r) => !mirrored.includes(r));
   if (open.length === 0) return;
   const fix = ["Ask the organization's administrator to narrow them; a repository allow rule cannot outrank them."];
-  fix.push(
-    hookOn
-      ? '/kharos:permissions hook can answer them with your own narrow allow patterns, or mirror them when the organization has not disabled bypass mode.'
-      : 'Or opt in to the kharos permission hook (`kharos permissions hook enable`), which answers them in cloud sessions with your own narrow allow patterns.',
-  );
+  fix.push(`Or \`${UNBLOCK_ALL_SKILL}\` answers them at each launch, on a side branch, when the organization has not disabled bypass mode.`);
   add('warn', `${name}: managed ask rules`, `${open.length} organization ask rule(s) prompt in every cloud session, which has no bypass mode, and the session waits until a person answers: ${open.join(', ')}`, fix);
 }
 

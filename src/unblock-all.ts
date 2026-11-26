@@ -21,7 +21,7 @@ import { isObject, readState, writeJsonAtomic } from './fsutil.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, forgetConfirmation, loadConfirmation, policyFingerprint, saveConfirmation } from './org-confirmations.ts';
 import { unblockOpens } from './permission-hook.ts';
-import { unifiedDiff } from './permission-profiles.ts';
+import { unifiedDiff } from './settings.ts';
 import type { Paths } from './paths.ts';
 
 export type PartId = 'confirm' | 'auto' | 'account';
@@ -30,7 +30,7 @@ export type UnblockTarget = 'on' | 'off';
 export const UNBLOCK_ALL_SHOW = 'kharos permissions unblock-all show';
 export const UNBLOCK_ALL_UNDO = 'kharos permissions unblock-all show off';
 /** The short command a person types in Claude Code. */
-export const UNBLOCK_ALL_SKILL = '/kharos:permissions unblock-all';
+export const UNBLOCK_ALL_SKILL = '/kharos:permissions';
 
 export interface Part {
   id: PartId;

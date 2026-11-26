@@ -1,26 +1,12 @@
-// Permission profiles for the repository a cloud session starts in. A session on one repository reads
-// that repository's .claude/settings.json; the user's own settings and .claude/settings.local.json stay
-// on the person's machine. A session that a routine starts begins in auto mode when it is available:
-// broad allow rules are dropped, narrow ones resolve before the classifier, ask rules always prompt, and
-// the classifier decides the rest, with a prompt after it blocks 3 actions in a row or 20 in the session.
-// A prompt waits for a person. The standard profile adds narrow allow rules, which auto mode keeps, so
-// fewer actions reach the classifier or a prompt. It never touches ask or deny rules.
+// The repository's .claude/settings.json, as a cloud session reads it. A session on one repository reads
+// that repository's file; the user's own settings and .claude/settings.local.json stay on the person's
+// machine. A session that a routine starts begins in auto mode when it is available: broad allow rules are
+// dropped, narrow ones resolve before the classifier, ask rules always prompt, and the classifier decides
+// the rest, with a prompt after it blocks 3 actions in a row or 20 in the session. A prompt waits for a person.
 
 import crypto from 'node:crypto';
 
-export const PERMISSION_PROFILES = ['default', 'standard'] as const;
-export type PermissionProfile = (typeof PERMISSION_PROFILES)[number];
-
 export const SETTINGS_PATH = '.claude/settings.json';
-
-export function isPermissionProfile(v: string): v is PermissionProfile {
-  return (PERMISSION_PROFILES as readonly string[]).includes(v);
-}
-
-export const PROFILE_SUMMARY: Record<PermissionProfile, string> = {
-  default: 'changes nothing',
-  standard: 'allows file tools, read-only shell and git commands, and the build, test and dev commands of the repository, as narrow rules that auto mode keeps; keeps ask and deny rules',
-};
 
 export class SettingsError extends Error {}
 
@@ -31,92 +17,6 @@ export interface Rules {
   defaultMode: string | null;
   /** The file has autoMode settings, which a project's settings cannot set. */
   autoMode: boolean;
-}
-
-/** What the repository holds, so the standard profile allows its own build and test commands. */
-export interface RepoFacts {
-  files: string[];
-  /** Script names of package.json. */
-  scripts: string[];
-  /** Target names of the Makefile. */
-  makeTargets: string[];
-}
-
-export const STANDARD_BASE: readonly string[] = [
-  'Read',
-  'Glob',
-  'Grep',
-  'Edit',
-  'Write',
-  'Bash(ls *)',
-  'Bash(pwd)',
-  'Bash(cat *)',
-  'Bash(head *)',
-  'Bash(tail *)',
-  'Bash(wc *)',
-  'Bash(grep *)',
-  'Bash(rg *)',
-  'Bash(diff *)',
-  'Bash(which *)',
-  'Bash(git status *)',
-  'Bash(git diff *)',
-  'Bash(git log *)',
-  'Bash(git show *)',
-  'Bash(git branch *)',
-  'Bash(git rev-parse *)',
-  'Bash(git fetch *)',
-  'Bash(git add *)',
-  'Bash(git commit *)',
-  'Bash(git switch -c *)',
-  'Bash(git checkout -b *)',
-];
-
-/** Script and target names that build, test, check or run the project for development, and name no deploy, release, publish, upload or push step. */
-const BUILD_TEST_RE = /^(?!.*(?:deploy|release|publish|upload|push))(?:build|test|tests|check|lint|typecheck|type-check|types|format|fmt|compile|verify|dev|start|serve)(?:[:._-][\w:.-]*)?$/i;
-const SAFE_NAME_RE = /^[\w:.-]+$/;
-
-function packageManager(files: readonly string[]): string {
-  if (files.includes('pnpm-lock.yaml')) return 'pnpm';
-  if (files.includes('yarn.lock')) return 'yarn';
-  if (files.includes('bun.lock') || files.includes('bun.lockb')) return 'bun';
-  return 'npm';
-}
-
-/**
- * The build, test and dev rules for what the repository holds at its root. Auto mode drops
- * package-manager run rules with a wildcard, so package scripts get exact rules.
- */
-export function buildRules(facts: RepoFacts): string[] {
-  const has = (f: string) => facts.files.includes(f);
-  const out: string[] = [];
-  if (has('package.json')) {
-    const pm = packageManager(facts.files);
-    out.push(pm === 'npm' ? 'Bash(npm ci)' : `Bash(${pm} install --frozen-lockfile)`, `Bash(${pm} install)`, `Bash(${pm} test)`);
-    for (const s of facts.scripts) if (BUILD_TEST_RE.test(s) && SAFE_NAME_RE.test(s)) out.push(`Bash(${pm} run ${s})`);
-  }
-  if (has('Cargo.toml')) out.push('Bash(cargo build *)', 'Bash(cargo test *)', 'Bash(cargo check *)', 'Bash(cargo clippy *)', 'Bash(cargo fmt *)');
-  if (has('go.mod')) out.push('Bash(go build *)', 'Bash(go test *)', 'Bash(go vet *)');
-  if (['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'pytest.ini', 'tox.ini'].some(has)) out.push('Bash(pytest *)');
-  if (has('Makefile') || has('makefile') || has('GNUmakefile')) {
-    for (const t of facts.makeTargets) if (BUILD_TEST_RE.test(t) && SAFE_NAME_RE.test(t)) out.push(`Bash(make ${t})`);
-  }
-  if (has('gradlew')) out.push('Bash(./gradlew build)', 'Bash(./gradlew test)', 'Bash(./gradlew check)');
-  if (has('pom.xml')) out.push('Bash(mvn compile)', 'Bash(mvn test)', 'Bash(mvn verify)', 'Bash(mvn package)');
-  return [...new Set(out)];
-}
-
-export function readFacts(files: string[], packageJson: string | null, makefile: string | null): RepoFacts {
-  let scripts: string[] = [];
-  if (packageJson !== null) {
-    try {
-      const pkg = JSON.parse(packageJson) as { scripts?: unknown };
-      if (typeof pkg.scripts === 'object' && pkg.scripts !== null && !Array.isArray(pkg.scripts)) scripts = Object.keys(pkg.scripts);
-    } catch {
-      // an unreadable package.json gives no scripts
-    }
-  }
-  const makeTargets = makefile === null ? [] : [...makefile.matchAll(/^([A-Za-z][\w.-]*)\s*:(?!=)/gm)].map((m) => m[1] as string);
-  return { files, scripts, makeTargets: [...new Set(makeTargets)] };
 }
 
 function strings(v: unknown, where: string): string[] {
@@ -153,17 +53,6 @@ export function readRules(settings: Record<string, unknown>): Rules {
   };
 }
 
-/** The settings after a profile: existing allow rules stay, new ones go after them, deny rules never change. */
-export function applyProfile(settings: Record<string, unknown>, profile: PermissionProfile, facts: RepoFacts): Record<string, unknown> {
-  if (profile === 'default') return settings;
-  const rules = readRules(settings);
-  const add = [...STANDARD_BASE, ...buildRules(facts)];
-  const allow = [...rules.allow, ...add.filter((r) => !rules.allow.includes(r))];
-  const permissions = { ...(settings.permissions as Record<string, unknown> | undefined) };
-  permissions.allow = allow;
-  return { ...settings, permissions };
-}
-
 const INTERPRETER_RE = /^(?:python[\d.]*|node|deno|bun|ruby|perl|php|sh|bash|zsh|fish|pwsh|powershell)(?:\*|[\s:].*\*)/;
 const WRAPPER_RE = /^(?:timeout|env|xargs|nohup|nice|time|sudo|exec|eval|command|watch|npx|pnpx|bunx|uvx)(?:\s+\*|:\*)$/;
 const PM_RUN_RE = /^(?:(?:npm|pnpm|yarn|bun)\s+(?:run|run-script|exec|dlx|x)|(?:cargo|poetry|uv|pipenv|deno)\s+run)\b.*\*/;
@@ -179,13 +68,6 @@ export function isBroadRule(rule: string): boolean {
   if (!m) return false;
   const c = (m[1] as string).trim();
   return c.startsWith('*') || INTERPRETER_RE.test(c) || WRAPPER_RE.test(c) || PM_RUN_RE.test(c);
-}
-
-/** Which profile the rules match: standard, default (no rules at all) or custom. */
-export function identify(rules: Rules): 'standard' | 'default' | 'custom' {
-  if (STANDARD_BASE.every((r) => rules.allow.includes(r))) return 'standard';
-  if (rules.allow.length === 0 && rules.ask.length === 0 && rules.deny.length === 0 && rules.defaultMode === null) return 'default';
-  return 'custom';
 }
 
 export interface Finding {
@@ -220,11 +102,6 @@ export function assess(rules: Rules): Finding[] {
   }
   if (rules.autoMode) out.push({ level: 'info', text: 'autoMode settings are not read from a repository\'s .claude/settings.json, only from user or managed settings' });
   return out;
-}
-
-export function describeRules(rules: Rules): string[] {
-  const list = (name: string, xs: string[]) => (xs.length ? `${name} (${xs.length}): ${xs.join(', ')}` : `${name}: none`);
-  return [list('allow', rules.allow), list('ask', rules.ask), list('deny', rules.deny), `defaultMode: ${rules.defaultMode ?? 'not set'}`];
 }
 
 /** The indentation the file uses, so a rewrite keeps its look. */
