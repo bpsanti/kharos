@@ -186,6 +186,7 @@ It lists the prompts the session is likely to hit, each as `likely prompt -> sug
 | Earlier sessions | The Bash permission prompts in the stored logs of earlier sessions on the same repository (kharos keeps a log for 14 days after the session is closed) |
 
 A command becomes an allow pattern word by word: the program stays as written, a variable assignment in front goes, and each argument that expands a variable, needed quoting (free text such as a query) or is not a plain word becomes `*`.
+A word that holds a credential becomes `*` too, so no password reaches a pattern, a side branch or a log: a URL with a password (`postgresql://app:<password>@host`), a `password=`, `token=` or `secret=` word, the value after `--password`, `--pass`, `--token` or `--secret`, after `redis-cli -a`, and the `-p<password>` of `mysql`.
 Commands with the same program, first argument and length merge into one pattern, where the words that differ become `*`.
 A merged rule can widen what is allowed: earlier prompts `git push origin feature-x` and `git push origin main` merge into `git push origin *`, which allows a push with any one argument there, such as another branch or `--force`.
 Read a merged rule before you add it; automatic preflight applies it as it is.

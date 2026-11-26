@@ -54,6 +54,42 @@ test('preflight: a command becomes a pattern whose free-text and variable words 
   assert.equal(toCandidate('-x'), null);
 });
 
+test('preflight: an escaped quote inside double quotes stays in its word', () => {
+  // As the shell splits it: three arguments, the last one quoted free text.
+  assert.deepEqual(toCandidate('psql -c "select \\"id\\" from t"')?.words, ['psql', '-c', null]);
+  assert.deepEqual(toCandidate('echo "a \\$HOME b"')?.words, ['echo', null]);
+});
+
+test('preflight: a word that holds a credential is never kept as written', () => {
+  const cases: [string, (string | null)[]][] = [
+    ['psql postgresql://app:S3cr3t@db.example:5432/app -c x', ['psql', null, '-c', 'x']],
+    ['redis-cli -u redis://:S3cr3t@cache.example:6379 ping', ['redis-cli', '-u', null, 'ping']],
+    ['mysql -pS3cr3t -h db.example app', ['mysql', null, '-h', 'db.example', 'app']],
+    ['redis-cli -a S3cr3t -h cache.example ping', ['redis-cli', '-a', null, '-h', 'cache.example', 'ping']],
+    ['tool --password=S3cr3t run', ['tool', null, 'run']],
+    ['tool --password S3cr3t run', ['tool', '--password', null, 'run']],
+    ['tool api_token=S3cr3t run', ['tool', null, 'run']],
+  ];
+  for (const [command, words] of cases) assert.deepEqual(toCandidate(command)?.words, words, command);
+  // A URL with no password and a port flag stay as written.
+  assert.deepEqual(toCandidate('psql postgresql://app@db.example/app -p 5432')?.words, ['psql', 'postgresql://app@db.example/app', '-p', '5432']);
+});
+
+test('automatic preflight: a credential typed in an earlier session never reaches the side branch', () => {
+  const sb = sandbox();
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions['k-0090'] = { id: 'k-0090', repo: 'https://github.com/example/demo' } as never;
+  });
+  const cmd = `psql postgresql://app:S3cr3t@db.example:5432/app -c 'select 1'`;
+  fs.mkdirSync(sb.paths.logs, { recursive: true });
+  fs.writeFileSync(logPath(sb.paths, 'k-0090'), JSON.stringify({ t: T0, ts: '2026-11-25T18:57:41.000Z', kind: 'permission prompt', tool: 'Bash', text: JSON.stringify({ command: cmd }), truncated: false, key: cmd, seq: 0 }) + '\n');
+  const forge = fakeForge({ 'README.md': 'nothing to run' });
+  const s = autoPrepare(sb, forge);
+  assert.equal(s.preflight?.status === 'applied' && s.preflight.applied.includes('psql * -c *'), true);
+  for (const f of forge.created[0]?.files ?? []) assert.equal(f.content.includes('S3cr3t'), false, f.path);
+  assert.equal(fs.readFileSync(sb.paths.preflight, 'utf8').includes('S3cr3t'), false);
+});
+
 test('preflight: the command lines of package.json, a Makefile, shell docs and a compose file', () => {
   assert.deepEqual(commandLines('package.json', PACKAGE), ['psql -h 127.0.0.1 -U dev -d app -c "select count(*) from orders"', 'node --test']);
   assert.deepEqual(commandLines('Makefile', 'db:\n\t@psql -d app \\\n\t  -c "select 1"\n\techo $(VAR)\nall: db\n'), ['psql -d app  -c "select 1"']);

@@ -153,7 +153,11 @@ function tokenize(text: string): Token[] {
     const c = text[i] as string;
     if (quote) {
       raw += c;
-      if (c === quote) quote = null;
+      if (quote === '"' && c === '\\' && i + 1 < text.length && '"\\$`'.includes(text[i + 1] as string)) {
+        value += text[i + 1];
+        raw += text[i + 1];
+        i++;
+      } else if (c === quote) quote = null;
       else if (quote === '"' && (c === '$' || c === '`')) dynamic = true;
       else value += c;
       continue;
@@ -181,6 +185,20 @@ function tokenize(text: string): Token[] {
 /** A word that stands as itself in an allow pattern. */
 const PLAIN_RE = /^[\w@%+=:,./-]{1,120}$/;
 
+const SECRET_WORD_RE = /^[a-z][\w+.-]*:\/\/[^/@]*:[^/@]*@|(?:password|passwd|pwd|token|secret)=/i;
+const SECRET_FLAGS = new Set(['--password', '--passwd', '--pass', '--token', '--secret']);
+
+/** A word that holds a credential (a password in a URL, a password, token or secret option, or the value after one): never kept as written. */
+function secretAt(values: readonly string[], i: number): boolean {
+  const w = values[i] as string;
+  const program = path.posix.basename(values[0] as string);
+  const prev = i > 1 ? (values[i - 1] as string) : '';
+  if (SECRET_WORD_RE.test(w)) return true;
+  if (SECRET_FLAGS.has(prev.toLowerCase())) return true;
+  if (program === 'redis-cli' && prev === '-a') return true;
+  return /^(?:mysql|mysqldump|mysqladmin|mariadb)/.test(program) && /^-p.+/.test(w);
+}
+
 export interface Candidate {
   /** The pattern's words; null is a `*`, one argument of any content. */
   words: (string | null)[];
@@ -190,14 +208,15 @@ export interface Candidate {
 
 /**
  * A simple command as an allow pattern: the program stays as written, and every argument that expands
- * a variable, needed quoting (free text such as a query) or is not a plain word becomes `*`.
+ * a variable, needed quoting (free text such as a query), is not a plain word or holds a credential becomes `*`.
  */
 export function toCandidate(command: string): Candidate | null {
   const toks = tokenize(command);
   while (toks.length && !toks[0]?.raw.startsWith('=') && /^[A-Za-z_]\w*=/.test(toks[0]?.raw ?? '')) toks.shift();
   const first = toks[0];
   if (!first || first.dynamic || !PLAIN_RE.test(first.value) || first.value.startsWith('-')) return null;
-  const words = toks.map((t) => (!t.dynamic && PLAIN_RE.test(t.value) ? t.value : null));
+  const values = toks.map((t) => t.value);
+  const words = toks.map((t, i) => (!t.dynamic && PLAIN_RE.test(t.value) && (i === 0 || !secretAt(values, i)) ? t.value : null));
   return { words, text: toks.map((t) => t.raw).join(' ') };
 }
 

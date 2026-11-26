@@ -460,7 +460,7 @@ export function preflight(paths: Paths, req: PreflightRequest, env: NodeJS.Proce
       ? {
           addCommand: null,
           after: [
-            `automatic preflight is on: at launch kharos writes them to a side branch kharos/<id> of ${slug}, made from ${profile.revision}, and the session starts there; ${profile.revision} is not changed, and /kharos:close deletes the side branch.`,
+            `automatic preflight is on: at launch kharos writes them to a side branch kharos/<id> of ${slug}, made from ${profile.revision} (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings), and the session starts there; ${profile.revision} is not changed, and /kharos:close deletes the side branch.`,
             ...(config.permission_unblock ? [`permission_unblock is on: that side branch also gets the unblock preset while your confirmation matches the organization's managed settings (${UNBLOCK_RISK}).`] : []),
           ],
           hookOn: true,
@@ -553,7 +553,7 @@ export function switchUnblockAuto(paths: Paths, on: boolean, env: NodeJS.Process
   if (!current.exists) throw new CommandError('kharos has no configuration yet: run /kharos:setup first');
   if (!on) {
     saveConfig(paths, { ...current.config, permission_unblock: false });
-    return `permission_unblock is off in ${paths.config}: automatic preflight, while on, writes only narrow rules again.`;
+    return `permission_unblock is off in ${paths.config}: automatic preflight, while on, writes the suggested narrow rules again, and mirrors the organization's ask rules while a remembered mirror confirmation matches its managed settings.`;
   }
   if (!current.config.permission_hook) {
     throw new CommandError('the unblock preset is part of the kharos permission hook, which is opt-in and off: turn it on with `kharos permissions hook enable` first');

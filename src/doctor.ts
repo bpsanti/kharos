@@ -145,7 +145,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   } else if (!config.permission_hook) {
     add('warn', 'permission preflight', 'preflight_auto is on, but permission_hook is off, so automatic preflight applies nothing', ['Turn the hook on with `kharos permissions hook enable`, or automatic preflight off with `kharos permissions auto preflight off`.']);
   } else {
-    add('info', 'permission preflight', 'automatic preflight is on: each launch writes the narrow allow patterns the preflight suggests to a side branch kharos/<id> and starts there; the branch a profile launches from is never changed, and /kharos:close deletes the side branch', [
+    add('info', 'permission preflight', "automatic preflight is on: each launch writes the narrow allow patterns the preflight suggests to a side branch kharos/<id> and starts there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and /kharos:close deletes the side branch", [
       'Turn it off with `kharos permissions auto preflight off`.',
     ]);
   }
