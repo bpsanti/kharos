@@ -37,7 +37,7 @@ kharos never changes the repository's own files: unblock all works on a side bra
 A profile that an earlier kharos wrote with a mode that is gone (`standard`, `hook`, `standard+hook`, `auto-preflight` or `unblock`) still loads, and reads as `as-is`; the configuration switches that answer led to stay as they are.
 `--permissions default` is accepted as `as-is`, and `auto-unblock` as `unblock-all`.
 
-`kharos setup` takes `--repo`, `--profile`, `--revision`, `--from-schedule`, `--environment`, `--confirmed`, `--permissions` (with `--unblock-expect <token>` for `unblock-all`), `--max-open`, `--adopt` and `--no-remote-tool`; `/kharos:setup` passes them for you.
+`kharos setup` takes `--repo`, `--profile`, `--revision`, `--from-schedule`, `--environment`, `--confirmed`, `--permissions` (with `--unblock-expect <token>` for `unblock-all`, and `--no-org-settings` when that token is the one for the statement that the account has no organization settings), `--max-open`, `--adopt` and `--no-remote-tool`; `/kharos:setup` passes them for you.
 The other fields of a profile (`model`, `deadline_min`, `allowed_tools`, `connectors`) are edited in the configuration file, and `/kharos:run` takes `--model` and `--deadline` for one launch.
 
 ## Commit identity
