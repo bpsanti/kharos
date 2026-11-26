@@ -206,7 +206,8 @@ type AutoPlan = { patterns: string[]; mirrored: string[]; unblock: boolean; note
 
 /**
  * What automatic permission preflight writes for this launch: the suggested narrow patterns, through
- * the same plan and filters as `kharos permissions hook diff`, with no broad rule and no mirroring.
+ * the same plan and filters as `kharos permissions hook diff`, with no broad pattern of its own; the
+ * organization's ask rules are mirrored while a remembered mirror confirmation matches the managed settings.
  */
 function planAuto(paths: Paths, config: Config, profile: Profile, instruction: string, policy: ManagedPolicy, forge: Forge): AutoPlan {
   if (!config.permission_hook) return { skipped: 'preflight_auto is on, but permission_hook is off, so nothing was applied' };

@@ -291,7 +291,9 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
     lines.push(unblocked ? 'any other prompt in a cloud session: allowed, by the unblock preset' : 'any other prompt in a cloud session: denied, with a message that names the allowed forms');
     if (unblock === 'on' && !base.unblock) {
       lines.push(`WARNING: this change turns on the unblock preset: ${UNBLOCK_RISK}. It opens:`, ...unblockOpens(policy).map((l) => `  ${l}`));
-    } else if (unblock === 'off' && base.unblock) lines.push('turns off the unblock preset: prompts no rule allows are denied again, with a message that names the allowed forms');
+    } else if (unblock === 'off' && base.unblock) lines.push(
+        `turns off the unblock preset: prompts no rule allows are denied again, with a message that names the allowed forms${rules.mirror.length ? `; the ${rules.mirror.length} mirrored organization rule(s)${rules.broad ? ' and broad: true' : ''} stay until --unmirror` : ''}`,
+      );
     else if (unblocked) lines.push(`the unblock preset stays on: ${UNBLOCK_RISK}`);
     if (added.length) lines.push(`WARNING: this change adds ${added.length} broad rule(s), which ${BROAD_RISK}: ${added.join(', ')}`);
     else if (broad.length) lines.push(`broad rules (${broad.length}), unchanged: ${broad.join(', ')}`);

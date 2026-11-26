@@ -497,7 +497,7 @@ export function switchPreflightAuto(paths: Paths, on: boolean): string {
   }
   saveConfig(paths, { ...current.config, preflight_auto: on });
   return on
-    ? `preflight_auto is on in ${paths.config}. At each launch, kharos writes the narrow allow patterns the preflight suggests (never a broad one, never a mirrored organization rule) to a side branch kharos/<id>, made from the branch the profile launches from, and the session starts there. That branch is never changed; /kharos:close deletes the side branch, and kharos show <id> lists what was applied.`
+    ? `preflight_auto is on in ${paths.config}. At each launch, kharos writes the narrow allow patterns the preflight suggests (never a broad one, and never one whose * merges literal words of different commands), and mirrors the organization's ask rules while a mirror confirmation remembered from \`kharos permissions hook write --org-confirmed\` matches the managed settings, to a side branch kharos/<id>, made from the branch the profile launches from, and the session starts there. That branch is never changed; /kharos:close deletes the side branch, and kharos show <id> lists what was applied.`
     : `preflight_auto is off in ${paths.config}: /kharos:run lists the likely prompts and the rule for each, and applies nothing.`;
 }
 

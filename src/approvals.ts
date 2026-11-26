@@ -52,8 +52,8 @@ export function recordHookDecisions(paths: Paths, s: Session, added: readonly Lo
     if (!isPermissionPrompt(e)) continue;
     const tool = e.tool ?? 'unknown tool';
     const input = tool === 'Bash' ? { command: promptCommand(e.text) } : {};
-    // A Bash line too cut to show its command cannot be attributed; the hook allows no command that long.
-    if (tool === 'Bash' && input.command === null) continue;
+    // A Bash line too cut to show its command cannot be attributed to a rule; only the unblock preset allows it.
+    if (tool === 'Bash' && input.command === null && rules.unblock !== true) continue;
     const d = decide({ tool_name: tool, tool_input: input }, rules);
     out.push({
       at: e.ts,
