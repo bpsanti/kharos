@@ -46,7 +46,7 @@ kharos alerts; it does not decide for the person.
 By default it never answers a permission prompt, it never answers a session's question, not even from answers written in advance, and it never merges or deletes a routine or a session.
 The only exception is the permission hook: opt-in, off by default, installed per repository through a diff the person approved, and deciding only in cloud sessions.
 It allows a call only when it is one simple Bash command that matches a rule the person approved: an allow pattern, or an organization ask rule the person chose to mirror, which kharos offers only when the organization has not disabled bypass mode and the person confirms.
-It denies every other call in a cloud session with a message the agent can act on, naming the allowed forms when a rule names the program, and logs every decision.
+It denies every other call in a cloud session with a message the agent can act on, naming the allowed forms when a rule names the program; kharos logs each decision in the sessions it launched and follows.
 Accepted direction, not built yet: its rules may grow from the person's own clicks on the session page: kharos proposes that exact command as a diff and adds it only after the person approves it.
 Rules stay with the repository they were approved for; kharos never offers one repository's rule to another.
 It changes a repository only with the person's explicit yes: a settings diff they approved, which it never commits or pushes, or the initial commit an empty repository needs.
