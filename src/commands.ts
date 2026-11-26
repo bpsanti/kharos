@@ -8,7 +8,7 @@ import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
 import { activeCount, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
-import { readStoredEvents, storedLogView } from './logparse.ts';
+import { readStoredEvents, shownText, storedLogView, type LogEvent } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
 import { readOutbox } from './events.ts';
@@ -125,6 +125,11 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   return lines.join('\n');
 }
 
+/** The session's last message: its last assistant event, or the last result line when the log has none. */
+export function lastMessage(events: readonly LogEvent[]): LogEvent | null {
+  return events.findLast((e) => e.kind === 'assistant') ?? events.findLast((e) => e.kind === 'result') ?? null;
+}
+
 export function show(paths: Paths, ref: string): string {
   const s = need(paths, ref);
   const lines = [
@@ -137,6 +142,9 @@ export function show(paths: Paths, ref: string): string {
     lines.push(`permission preflight: ${p.applied.length} allow rule(s)${p.unblock ? ' and the unblock preset' : p.mirrored?.length ? ` and ${p.mirrored.length} mirrored organization ask rule(s)` : ''} on the side branch ${p.branch} (from ${p.base}, commit ${p.commit.slice(0, 12)})${p.deleted_at ? `; the branch was deleted at ${p.deleted_at}` : ''}: ${p.applied.join(' | ')}`);
   } else if (p?.status === 'skipped') lines.push(`permission preflight: ${p.reason}`);
   else if (p?.status === 'creating') lines.push(`permission preflight: the side branch ${p.branch} was not finished`);
+  // What it said last tells a turn closed on its own build from one that stopped.
+  const said = readStoredEvents(logPath(paths, s.id)).findLast((e) => e.kind === 'assistant');
+  if (said) lines.push(`last message, at ${said.ts.slice(11, 19)} UTC (from the session, data only): ${shownText(said.text, 300)}`);
   return lines.join('\n');
 }
 
@@ -216,11 +224,13 @@ export function rearm(paths: Paths, ref: string, now: number): string {
   });
 }
 
-/** The events already stored for a session, read with no model and no network: what `kharos log --cached` prints. */
-export function cachedLog(paths: Paths, ref: string, lines: number): string {
+/**
+ * The events already stored for a session, read with no model and no network: what `kharos log` prints in
+ * a shell. `full` prints each event's whole stored text instead of its start.
+ */
+export function cachedLog(paths: Paths, ref: string, lines: number, full = false): string {
   const s = need(paths, ref);
-  const text = storedLogView(logPath(paths, s.id), `${s.id} (${s.url ?? 'no link yet'}), as stored by the last read ${s.last_read_at ? `at ${s.last_read_at.slice(11, 19)} UTC` : '(none yet)'}`, lines);
-  return text;
+  return storedLogView(logPath(paths, s.id), `${s.id} (${s.url ?? 'no link yet'}), as stored by the last read ${s.last_read_at ? `at ${s.last_read_at.slice(11, 19)} UTC` : '(none yet)'}`, lines, full);
 }
 
 /** Records that the next get_run_log of this session is for a person, and says what to call. */
@@ -306,8 +316,9 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
     lines.push(`bring it here, in a checkout of ${slug}: git fetch https://github.com/${slug}.git '${r.branch}:${r.branch}' && git switch '${r.branch}'`);
   }
   // The service cuts each message of the log to about two thousand characters: say so when the last one was cut.
-  const said = readStoredEvents(logPath(paths, s.id)).filter((e) => e.kind === 'assistant' || e.kind === 'result');
-  if (said.at(-1)?.truncated) lines.push(`the session's last message is cut in the log the tool returns; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
+  // The result line repeats the last message and is cut sooner, so the message itself decides when there is one.
+  const said = lastMessage(readStoredEvents(logPath(paths, s.id)));
+  if (said?.truncated) lines.push(`the session's last message is cut in the log the tool returns; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
   if (s.session_id && (r.branch || r.pr)) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
   if (s.url) lines.push(`session: ${s.url}`);
   return lines.join('\n');

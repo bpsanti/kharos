@@ -76,7 +76,7 @@ npm install -g kharos
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--no-push] [--queue]` | Launches one cloud session, records it, and starts its follower in the background; `--no-push` leaves out the footer line that asks the session to push work in progress; `--queue` queues a launch that finds every slot taken |
 | `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again (a follower process of its own in a headless Claude Code) |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
-| `/kharos:log <id> [lines]` | Shows the last lines of a session's log; `kharos log <id> [lines] --cached` prints the lines already stored, from a shell, with no model |
+| `/kharos:log <id> [lines]` | Shows the last lines of a session's log; in a shell, `kharos log <id> [lines]` prints the events already stored, with no model, and `--full` prints each one's whole stored text |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
 | `/kharos:close <id> [--ask-stop]` | Stops following a session, and shows where to delete its routine; `--ask-stop` first sends the session a request to stop; cancels a queued launch |
@@ -231,7 +231,7 @@ Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/
 | Runs started by hand, per account | 100 per hour |
 | Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 10 by default, that `/kharos:setup` asks once; `--queue` waits for a slot instead of being refused) |
 | Session cost | not readable: the run log the tool returns carries no token usage or cost, so kharos cannot show what a session spent; the usage page of claude.ai does, and `--deadline` raises an overdue notice past a set time |
-| Message length in the log | each message is cut to about two thousand characters; `/kharos:result` says when the last one was cut, and the session page has the whole text |
+| Message length in the log | each message is cut to about two thousand characters and flattened to one line; `/kharos:result` says when the last one was cut, and the session page has the whole text |
 | Cloud machine | 4 vCPU, 16 GB, 30 GB of disk |
 | Usage | the same plan usage as everything else: five sessions spend five times |
 

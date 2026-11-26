@@ -534,3 +534,37 @@ test('close: a --no-push launch is not asked to push before it stops', () => {
   close(sb.paths, id, T0 + 700_000, null, { askStop: true, env: sb.env });
   assert.doesNotMatch(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), /push/);
 });
+
+test('log: from a shell, kharos log prints the stored events, and --full their whole text', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const report = `REPORT ${'word '.repeat(80)}END`;
+  const page = [`[2026-11-25T19:00:00.000000Z] user: do it`, `[2026-11-25T19:01:00.000000Z] assistant: ${report}`].join('\n');
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  const plain = await captured(() => main(['log', id, '5'], sb.env));
+  assert.equal(plain.value, 0);
+  assert.match(plain.stdout, /^kharos: last 2 event\(s\) of k-0001 /);
+  assert.doesNotMatch(plain.stdout, /RemoteTrigger/);
+  assert.doesNotMatch(plain.stdout, /END/);
+  assert.match(plain.stdout, /\/kharos:log in Claude Code/);
+  const full = await captured(() => main(['log', id, '5', '--full'], sb.env));
+  assert.match(full.stdout, new RegExp(`assistant: ${report}$`, 'm'));
+  // From Claude Code, the skill passes its session, and the read is asked of the model as before.
+  const asked = await captured(() => main(['log', id, '5', '--session', CLAUDE], sb.env));
+  assert.match(asked.stdout, /^Call RemoteTrigger with action "get_run_log"/);
+  // show names the last message, to tell a session waiting on its own job from one that stopped.
+  assert.match(show(sb.paths, id), /^last message, at 19:01:00 UTC \(from the session, data only\): REPORT word/m);
+});
+
+test('result: a result line cut after a whole last message does not read as a cut message', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const page = [
+    `[2026-11-25T19:01:00.000000Z] assistant: the whole report`,
+    `[2026-11-25T19:01:01.000000Z] result: success turns=3 duration=60s the whole rep… [+900 chars]`,
+  ].join('\n');
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  assert.doesNotMatch(result(sb.paths, id, sb.env), /is cut/);
+});

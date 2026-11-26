@@ -40,7 +40,7 @@ import { due, formatReads, health, passEnd } from './watch.ts';
 import { detachFollower, followLoop, startFollowers } from './follow.ts';
 import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'ask-stop', 'no-push', 'queue']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'full', 'ask-stop', 'no-push', 'queue']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -114,7 +114,7 @@ function need(args: Args, i: number, what: string): string {
 const USAGE = `usage: kharos <command>
   prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--no-push] [--queue] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
-  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id | log <id> [lines] --cached
+  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] [--full] (stored events, from a shell) | log <id> [lines] --session id (a read, from Claude Code)
   send <id>   (text on stdin) | result <id> | close <id> [--ask-stop]
   doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
@@ -193,11 +193,14 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'log': {
         const lines = args.positional[1] ? Number(args.positional[1]) : 15;
         if (!Number.isInteger(lines) || lines <= 0 || lines > 200) throw new cmd.CommandError('lines must be between 1 and 200');
-        if (args.flags.cached === true) {
-          out(cmd.cachedLog(paths, need(args, 0, 'session id'), lines));
+        // From a shell (no Claude Code session to make the read): what the last read stored.
+        const session = flag(args, 'session');
+        if (args.flags.cached === true || args.flags.full === true || session === undefined) {
+          out(cmd.cachedLog(paths, need(args, 0, 'session id'), lines, args.flags.full === true));
+          if (args.flags.cached !== true && session === undefined) out('Newer events are read by the follower, the watcher, or /kharos:log in Claude Code.');
           return 0;
         }
-        out(cmd.logRequest(paths, need(args, 0, 'session id'), lines, flag(args, 'session') ?? '', now));
+        out(cmd.logRequest(paths, need(args, 0, 'session id'), lines, session, now));
         return 0;
       }
       case 'send':
