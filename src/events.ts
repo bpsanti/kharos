@@ -85,18 +85,19 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
 
 /**
  * Applies a verdict to a session and returns the events it causes. A verdict that needs a second read
- * (`confirm`) only counts when the previous read saw the same state. A permission prompt is reported
- * once, again after renotify_min while it stays open, and right away when a different prompt replaces it.
+ * (`confirm`) only counts when the previous read saw the same state, and for a permission prompt the
+ * same prompt. A permission prompt is reported once, again after renotify_min while it stays open, and
+ * as soon as it counts when it replaces another.
  */
 export function transition(s: Session, verdict: Verdict, now: number, renotifyMin: number, confirm: boolean): KharosEvent[] {
+  const prompt = verdict.permission ?? null;
   if (confirm) {
-    if (s.pending_state?.state !== verdict.state) {
-      s.pending_state = { state: verdict.state, reads: 1 };
+    if (s.pending_state?.state !== verdict.state || s.pending_state.key !== prompt?.key) {
+      s.pending_state = { state: verdict.state, reads: 1, ...(prompt ? { key: prompt.key } : {}) };
       return [];
     }
   }
   s.pending_state = null;
-  const prompt = verdict.permission ?? null;
   const newPrompt = prompt !== null && s.permission !== undefined && s.permission?.key !== prompt.key;
   s.permission = prompt;
   const previous = s.state;

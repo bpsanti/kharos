@@ -51,7 +51,7 @@ The rules are checked in this order, and the first that matches wins.
 | `invisible` | two failed reads in a row (HTTP error, the session missing from `list_runs`, an empty log for a session that had events), or the account logged in now is not the one that launched it | yes |
 | `failed` | `KHAROS-DONE` with `failed` | yes, terminal |
 | `finished` | `KHAROS-DONE` with `ok` after the last message from a person, no tool call after it in the same turn, and no `KHAROS-QUESTION` after it; turns that events woke later (an `init` with no `user`, such as pull request activity or CI) keep the mark once the last event is a `result` again | yes, terminal |
-| `waiting_permission` | a `permission prompt` event that is still open: the calls open at that moment do not all have results, and the model has not spoken again since | yes, naming the tool |
+| `waiting_permission` | a `permission prompt` event that is still open: the calls open at that moment do not all have results, and the model has not spoken again since; when the session's branch had the permission hook at launch, seen on two reads | yes, naming the tool |
 | `waiting_answer` | `KHAROS-QUESTION` in a closed turn, or `AskUserQuestion` as the last event | yes |
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
 | `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
@@ -79,14 +79,17 @@ A session archived in `list_runs` without an end mark becomes `ended_unmarked`, 
   A message sent while it is open shows as a `user` event but stays queued behind it, so it does not count as an answer; neither does the result of another call made in parallel.
   The `worker_status` of `list_runs` was only seen as `running` or `idle`, never with a value for a pending prompt, so the log event is the only sign kharos reads.
   Why a cloud session prompts at all, and how to change it: [permissions.md](permissions.md).
-- A prompt that the opt-in permission hook answers shows the same `permission prompt` line, followed within a second by the call's result, or by its refusal, which starts with `Refused by the kharos permission hook`.
+- A prompt that the opt-in permission hook answers shows the same `permission prompt` line, followed by its refusal, which starts with `Refused by the kharos permission hook`, or by the call's result once the call ends.
+  A read can land between the two lines, so when the session's branch had the hook at launch, a prompt counts only when the next read of the newest page still finds that same prompt open; without the hook it counts on the first read.
+  The watcher reads such a session again on its next pass.
+  The log has no line for the hook's answer, so an allowed call that is still running at that next read raises the notice too.
   When the session's branch had the hook at launch, the watcher puts each such line through the hook's own decision code with the branch's rules, and logs the decision with the rule that matched, never the command ([permissions.md](permissions.md#the-log-of-the-hooks-decisions)).
 
 If the cloud environment raises the Bash timeout, raise `silence_min` with it.
 
 ## Reads and usage
 
-- A session is read on every pass during its first 20 minutes and while a notice is open, every second pass up to two hours, and every third pass after that.
+- A session is read on every pass during its first 20 minutes, while a notice is open and while a permission prompt waits for its second read, every second pass up to two hours, and every third pass after that.
   A `/loop` pass can come up to half an interval late, and the cadence allows for that.
 - When more than 200 events happened between two reads, the newest page does not reach the stored events; the hook asks for older pages until one reaches them, at most two.
 - Run the watcher with a small model.
@@ -112,5 +115,5 @@ An event is a one-line JSON object, `kharos.event.v1`:
   The tool's input (the command, the file, the URL, the query) is never copied into an event; the person reads it on the session's page.
 - `url` is the direct link to the session, `https://claude.ai/code/session_<id>`.
 - An event is emitted when a notice opens, again every `renotify_min` while it lasts, and `session.back` once when the session returns to normal.
-  A permission prompt that a different one replaces is reported again at once; the same prompt is not reported again before `renotify_min`.
+  A permission prompt that a different one replaces is reported again as soon as it counts (at once without the permission hook); the same prompt is not reported again before `renotify_min`.
 - Delivery is at least once; `id` lets a receiver drop a repeat.

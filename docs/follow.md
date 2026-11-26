@@ -72,6 +72,7 @@ A new follower first reads the current state: a question asked or an end reached
 - kharos cannot stop a cloud session: the `RemoteTrigger` tool has no stop action.
   `/kharos:close` stops the following, `/kharos:send` can ask the session to stop, and the session page stops it.
 - Permission prompts are as before: kharos alerts with the tool and the link, and a person answers on the session page (unless the opt-in permission hook answers it, see [permissions.md](permissions.md)).
+  Where the branch had the hook at launch, the alert waits for a second read to find the same prompt open, so a prompt the hook resolves between reads wakes nobody ([watcher.md](watcher.md#states)).
 - The work comes back as a branch or a pull request, as with any cloud session, not as files changed in your checkout.
 - A follower lives as long as the Claude Code session that started it.
   A headless `claude -p` launch stays running until its followers finish, that is until the cloud session ends; for unattended or many launches, the watcher fits better.
