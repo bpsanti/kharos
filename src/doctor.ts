@@ -2,16 +2,17 @@
 
 import { spawnSync } from 'node:child_process';
 import { claudeBin, readAuthStatus, type AuthStatus } from './account.ts';
+import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './config.ts';
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
 import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
 import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
-import { readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
+import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
-import { loadEnvironments, loadWatch, type EnvironmentBook } from './state.ts';
+import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
 export type Level = 'ok' | 'warn' | 'fail' | 'info';
 
@@ -36,6 +37,8 @@ export interface DoctorDeps {
   hookFiles: (repo: string, revision: string) => RemoteHookFiles;
   /** The local copy of the organization's managed settings. */
   managedPolicy: () => ManagedPolicy;
+  /** The setup script the repository ships for its cloud environment. */
+  setupScript: (repo: string, revision: string) => RemoteSettings;
 }
 
 export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
@@ -50,6 +53,7 @@ export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
     settings: (repo, rev) => readRemoteSettings(repo, rev, env),
     hookFiles: (repo, rev) => readRemoteHookFiles(repo, rev, env),
     managedPolicy: () => readManagedPolicy(env),
+    setupScript: (repo, rev) => readRemoteFile(repo, rev, SETUP_SCRIPT_PATH, env),
   };
 }
 
@@ -124,6 +128,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   };
   const repos = state('repos', paths.repos, () => loadRepos(paths));
   const envs = state('environments', paths.environments, () => loadEnvironments(paths));
+  const setups = state('setups', paths.setups, () => loadSetups(paths));
   const names = opts.profile ? [opts.profile] : Object.keys(config.profiles);
   if (names.length === 0) add('fail', 'profile', 'the configuration has no profile', ['Run /kharos:setup.']);
   add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})`);
@@ -154,13 +159,15 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
       'Turn it off with `kharos permissions auto unblock off`; `kharos permissions approvals` lists what it allowed.',
     ]);
   }
+  const account = auth?.account ?? null;
   for (const name of names) {
     const p = config.profiles[name];
     if (!p) {
       add('fail', `profile ${name}`, 'does not exist');
       continue;
     }
-    checkProfile(name, p, deps, add, repos ?? {}, envs, config.permission_hook, policy);
+    checkProfile(name, p, deps, add, repos ?? {}, config.permission_hook, policy);
+    checkEnvironment(name, p, deps, add, environmentsOf(envs, account), findSetup(setups ?? {}, account, repoSlug(p.repo), p.revision));
   }
 
   const reg = state('registry', paths.registry, () => loadRegistry(paths));
@@ -180,7 +187,6 @@ function checkProfile(
   deps: DoctorDeps,
   add: (l: Level, n: string, d: string, f?: string[]) => void,
   repos: RepoBook,
-  envs: EnvironmentBook | null,
   hookOn: boolean,
   policy: ManagedPolicy,
 ): void {
@@ -211,14 +217,56 @@ function checkProfile(
     ]);
   }
 
+}
+
+/**
+ * Whether the profile's environment fits its repository. No official surface lists environments or shows
+ * what one holds, so the evidence is what the person confirmed and what the account's routines used.
+ */
+function checkEnvironment(
+  name: string,
+  p: Profile,
+  deps: DoctorDeps,
+  add: (l: Level, n: string, d: string, f?: string[]) => void,
+  envs: EnvironmentBook | null,
+  confirmed: EnvironmentSetup | null,
+): void {
+  const label = `${name}: environment`;
+  const slug = repoSlug(p.repo);
+  const key = slug.toLowerCase();
   const seen = envs?.environments.find((e) => e.id === p.environment);
-  if (seen) add('ok', `${name}: environment`, `${p.environment} (used by ${seen.routines} routine(s))`);
-  else if (envs) {
-    add('warn', `${name}: environment`, `${p.environment} is not used by any of your routines`, [
+  const used = seen ? `used by ${seen.routines} routine(s)` : '';
+  const known = confirmed && confirmed.environment !== p.environment ? confirmed.environment : envs?.environments.find((e) => e.id !== p.environment && e.repos?.includes(key))?.id;
+  const assisted = [
+    ...(known ? [`${known} is known for ${slug}: /kharos:setup can point the profile at it.`] : []),
+    `/kharos:setup walks you through creating one for ${slug}: it prepares the setup script, the variable names and the network level, then writes the new id into the profile.`,
+  ];
+  const shipped = () => {
+    const found = deps.setupScript(p.repo, p.revision);
+    return found.status === 'found' ? found.text : null;
+  };
+  if (confirmed?.environment === p.environment) {
+    const script = shipped();
+    if (script !== null && scriptDigest(script) !== confirmed.script_sha256) {
+      add('warn', label, `the setup script changed on ${p.revision}; paste it again`, [
+        `Copy the new script with \`kharos env-guide --profile ${name} --copy\` and paste it into the "Setup script" of ${p.environment} on claude.ai/code.`,
+        'Then confirm it with /kharos:setup.',
+      ]);
+    } else add('ok', label, `${p.environment} (you confirmed it for ${slug}@${p.revision} on ${confirmed.confirmed_at.slice(0, 10)}${used ? `; ${used}` : ''})`);
+  } else if (seen) {
+    // A repository that ships a setup script needs an environment that runs it, which routines on others do not show.
+    if (seen.repos && !seen.repos.includes(key) && shipped() !== null) {
+      add('warn', label, `${p.environment} is ${used}, none on ${slug}, which ships ${SETUP_SCRIPT_PATH}`, [
+        'If this environment runs that script already, say so in /kharos:setup.',
+        ...assisted,
+      ]);
+    } else add('ok', label, `${p.environment} (${used})`);
+  } else if (envs) {
+    add('warn', label, `${p.environment} is not used by any of your routines, and you have not confirmed it for ${slug}`, [
       'Check its id in /schedule or on claude.ai/code; a missing environment fails the fire without starting a session.',
-      'If the project needs tools installed, give the environment a setup script there; it runs in the cloud, not on this machine.',
+      ...assisted,
     ]);
-  } else add('info', `${name}: environment`, `${p.environment} (not compared with your routines yet: /kharos:doctor reads them)`);
+  } else add('info', label, `${p.environment} (not compared with your routines yet: /kharos:doctor reads them)`);
 }
 
 /** Which permission profile the branch a session starts on is on, and what in it would hold a session at a prompt. */

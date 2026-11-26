@@ -221,6 +221,7 @@ function deps(settings: RemoteSettings): DoctorDeps {
     settings: () => settings,
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
     managedPolicy: () => ({ status: 'absent', file: '/home/person/.claude/remote-settings.json' }),
+    setupScript: () => ({ status: 'absent' }),
   };
 }
 

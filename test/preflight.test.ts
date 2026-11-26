@@ -567,6 +567,7 @@ test('doctor: says whether automatic preflight is on, and warns when it cannot a
     ownerType: () => null,
     settings: () => ({ status: 'absent' }),
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
+    setupScript: () => ({ status: 'absent' }),
     managedPolicy: () => NO_POLICY,
   };
   const run = (extra: Record<string, unknown>) => {
@@ -742,6 +743,7 @@ test('unblock: the automatic mode puts it on each side branch while the confirma
     ownerType: () => null,
     settings: () => ({ status: 'absent' }),
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
+    setupScript: () => ({ status: 'absent' }),
     managedPolicy: () => POLICY,
   };
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps)), /warn  unblock preset: permission_unblock is on: the side branch of each launch gets the unblock preset/);

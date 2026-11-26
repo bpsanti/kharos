@@ -7,6 +7,8 @@
 - Automatic preflight (`kharos permissions auto preflight on`, off by default): each launch gets a side branch `kharos/<id>` with those narrow rules and starts there; the launch branch is never changed, and `/kharos:close` deletes the side branch while it holds only that commit.
 - The confirmation to mirror the organization's ask rules is remembered with a fingerprint of its managed settings, and asked again, with what changed, only when they change.
 - The unblock preset (`kharos permissions unblock`, off by default): after one confirmation of what it opens, the permission hook allows every prompt in cloud sessions and mirrors every organization ask rule; refused when the organization disabled bypass mode, deny rules untouched, every allow logged. Hook script version 3.
+- `/kharos:setup` has an assisted path for creating a cloud environment: it prepares the setup script (the repository's `tools/cloud/bootstrap.sh`, or a minimal one), the variable names and the network level, opens claude.ai/code, and writes the new id into the profile after you confirm it (`docs/setup.md`).
+- `/kharos:doctor` warns when no environment is known to fit a profile's repository, and when the setup script changed since you confirmed the environment.
 
 ## 0.1.0
 

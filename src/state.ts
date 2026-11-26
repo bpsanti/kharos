@@ -11,7 +11,7 @@ import type { Paths } from './paths.ts';
  */
 export type Intent =
   | { kind: 'log'; id: string; lines: number; claude_session: string; expires_at: number }
-  | { kind: 'environments'; claude_session: string; expires_at: number };
+  | { kind: 'environments'; claude_session: string; account?: string | null; repo?: string | null; expires_at: number };
 
 const INTENT_TTL_MS = 10 * 60_000;
 
@@ -49,6 +49,8 @@ export function takeIntent<K extends Intent['kind']>(
 
 export interface EnvironmentBook {
   read_at: string;
+  /** The account whose routines were read; null or absent when it is not known. */
+  account?: string | null;
   environments: EnvironmentUse[];
 }
 
@@ -56,8 +58,55 @@ export function loadEnvironments(paths: Paths): EnvironmentBook | null {
   return readState<EnvironmentBook>(paths.environments, (v) => isObject(v) && Array.isArray(v.environments), 'an object with an "environments" list') ?? null;
 }
 
-export function saveEnvironments(paths: Paths, environments: EnvironmentUse[], now: number): void {
-  writeJsonAtomic(paths.environments, { read_at: new Date(now).toISOString(), environments });
+export function saveEnvironments(paths: Paths, environments: EnvironmentUse[], now: number, account: string | null = null): void {
+  writeJsonAtomic(paths.environments, { read_at: new Date(now).toISOString(), account, environments });
+}
+
+/** An environment a person said is set up for a repository on one revision. Environments belong to one account. */
+export interface EnvironmentSetup {
+  account: string;
+  /** owner/name, lowercase. */
+  repo: string;
+  /** The branch or tag whose setup script the person pasted. */
+  revision: string;
+  environment: string;
+  confirmed_at: string;
+  /** The repository's setup script at that time, to tell when it changed since; null when it ships none or it was not read. */
+  script_sha256: string | null;
+}
+
+export type SetupBook = Record<string, EnvironmentSetup>;
+
+export function loadSetups(paths: Paths): SetupBook {
+  return readState<SetupBook>(paths.setups, (v) => isObject(v) && Object.values(v).every(isObject), 'an object of environment setups') ?? {};
+}
+
+const setupKey = (account: string, repo: string, revision: string): string => `${account} ${repo.toLowerCase()} ${revision}`;
+
+export function findSetup(book: SetupBook, account: string | null, repo: string, revision: string): EnvironmentSetup | null {
+  return account ? (book[setupKey(account, repo, revision)] ?? null) : null;
+}
+
+/** The confirmations of this account for the repository, one per revision. */
+export function setupsFor(book: SetupBook, account: string | null, repo: string): EnvironmentSetup[] {
+  if (!account) return [];
+  return Object.entries(book)
+    .filter(([key, s]) => typeof s.revision === 'string' && key === setupKey(account, repo, s.revision))
+    .map(([, s]) => s);
+}
+
+export function recordSetup(paths: Paths, setup: EnvironmentSetup): void {
+  withLock(paths.setups, () => {
+    const all = loadSetups(paths);
+    const repo = setup.repo.toLowerCase();
+    all[setupKey(setup.account, repo, setup.revision)] = { ...setup, repo };
+    writeJsonAtomic(paths.setups, all);
+  });
+}
+
+/** The routines read for this account; another account's environments say nothing about this one's. */
+export function environmentsOf(book: EnvironmentBook | null, account: string | null): EnvironmentBook | null {
+  return book && (!book.account || !account || book.account === account) ? book : null;
 }
 
 export interface WatchState {

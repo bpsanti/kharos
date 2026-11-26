@@ -2,20 +2,33 @@
 // credential; the skills drive RemoteTrigger, and the hooks (`kharos hook <event>`) read its answers.
 
 import fs from 'node:fs';
+import { readAuthStatus } from './account.ts';
 import { action } from './actions.ts';
 import { appendLine, StateError } from './fsutil.ts';
 import * as cmd from './commands.ts';
-import { ConfigError, loadConfig, normalizeRepo, type OutputConfig } from './config.ts';
+import { ConfigError, loadConfig, normalizeRepo, pickProfile, repoSlug, type OutputConfig } from './config.ts';
 import { formatChecks, realDeps, runDoctor } from './doctor.ts';
+import {
+  buildGuide,
+  copyToClipboard,
+  CREATE_URL,
+  defaultEnvironment,
+  formatGuide,
+  GuideError,
+  openBrowser,
+  scriptDigest,
+  SETUP_SCRIPT_PATH,
+  waitForEnvironment,
+} from './environment.ts';
 import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
-import { resolvePaths } from './paths.ts';
+import { resolvePaths, type Paths } from './paths.ts';
 import { formatHookDecisions } from './approvals.ts';
-import { diffHook, diffPermissions, preflight, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
+import { diffHook, diffPermissions, preflight, readRemoteFile, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
 import type { HookChange } from './permission-hook.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
-import { addIntent } from './state.ts';
+import { addIntent, recordSetup } from './state.ts';
 import { readOutbox } from './events.ts';
 import { deliver, deliveryLine } from './outputs/index.ts';
 import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
@@ -23,7 +36,7 @@ import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -99,8 +112,10 @@ const USAGE = `usage: kharos <command>
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id
   send <id>   (text on stdin) | result <id> | close <id>
-  doctor [--profile p] [--no-remote-tool] | environments --session id
-  setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
+  doctor [--profile p] [--no-remote-tool] | environments --session id [--repo url]
+  env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
+  env-wait --since <env_...|none> [--timeout s]
+  setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default] [--confirmed]
   repo-init <owner/name>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
@@ -176,9 +191,24 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(cmd.close(paths, need(args, 0, 'session id'), now, ghForge(realGh(env))));
         return 0;
       case 'environments':
-        addIntent(paths, { kind: 'environments', claude_session: flag(args, 'session') ?? '' }, now);
+        addIntent(paths, { kind: 'environments', claude_session: flag(args, 'session') ?? '', account: readAuthStatus(env)?.account ?? null, repo: flag(args, 'repo') ?? null }, now);
         out('Call RemoteTrigger with action "list" (no other field); its answer becomes the list of environments your routines use.');
         return 0;
+      case 'env-guide':
+        out(envGuide(args, paths, env));
+        return 0;
+      case 'env-wait': {
+        const since = flag(args, 'since');
+        if (since === undefined) throw new cmd.CommandError('--since needs the default environment that env-guide printed, or "none"');
+        const seconds = Math.min(intFlag(args, 'timeout') ?? ENV_WAIT_S, 3600);
+        const id = await waitForEnvironment(since === 'none' ? null : since, seconds * 1000, env);
+        out(
+          id
+            ? `/remote-env saved ${id}. Confirm with the person that it is the environment for this repository before writing it into a profile.`
+            : `no new default environment after ${seconds} s. Ask the person for its env_... id (/schedule shows it), or wait again.`,
+        );
+        return id ? 0 : 1;
+      }
       case 'doctor': {
         const checks = runDoctor(
           paths,
@@ -196,9 +226,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           const known = loadConfig(paths).config.profiles[flag(args, 'profile') ?? ''];
           if (!known) revision = readRemoteHeads(normalizeRepo(flag(args, 'repo') as string), 'HEAD', env).defaultBranch ?? undefined;
         }
+        const name = flag(args, 'profile') ?? need(args, 0, '--profile');
         out(
           cmd.writeProfile(paths, {
-            name: flag(args, 'profile') ?? need(args, 0, '--profile'),
+            name,
             repo: flag(args, 'repo') ?? '',
             environment: flag(args, 'environment') ?? '',
             ...(revision !== undefined ? { revision } : {}),
@@ -209,6 +240,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             makeDefault: args.flags.default === true,
           }),
         );
+        if (args.flags.confirmed === true) out(confirmEnvironment(paths, name, env, now));
         return 0;
       }
       case 'repo-init': {
@@ -303,12 +335,58 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       process.stderr.write(`${err.message}\n`);
       return 1;
     }
-    if (err instanceof cmd.CommandError || err instanceof ConfigError) {
+    if (err instanceof cmd.CommandError || err instanceof ConfigError || err instanceof GuideError) {
       process.stderr.write(`kharos: ${err.message}\n`);
       return 1;
     }
     throw err;
   }
+}
+
+/** How long env-wait waits for /remote-env, unless told otherwise. */
+const ENV_WAIT_S = 600;
+
+/** What to paste into a new cloud environment for a repository, put on the clipboard and the browser when asked. */
+function envGuide(args: Args, paths: Paths, env: NodeJS.ProcessEnv): string {
+  let repo = flag(args, 'repo');
+  let revision = flag(args, 'revision');
+  if (repo === undefined) {
+    const { profile } = pickProfile(loadConfig(paths).config, flag(args, 'profile'));
+    repo = profile.repo;
+    revision ??= profile.revision;
+  }
+  const url = normalizeRepo(repo);
+  if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(url)) throw new cmd.CommandError('--repo must be a GitHub repository (owner/name or https://github.com/owner/name)');
+  revision ??= readRemoteHeads(url, 'HEAD', env).defaultBranch ?? 'HEAD';
+  const heads = revision === 'HEAD' ? null : readRemoteHeads(url, revision, env);
+  // gh answers a missing branch like a missing file, which would pass for a repository without a setup script.
+  if (heads?.readable && !heads.hasRevision) throw new cmd.CommandError(`"${revision}" is not a branch or tag of ${repoSlug(url)}`);
+  const guide = buildGuide(url, revision, (file) => readRemoteFile(url, revision, file, env));
+  const since = defaultEnvironment(env);
+  return formatGuide(guide, {
+    since,
+    ...(args.flags.copy === true ? { copied: copyToClipboard(guide.script, env) } : {}),
+    ...(args.flags.open === true ? { opened: openBrowser(CREATE_URL, env) } : {}),
+  });
+}
+
+/** Records that the person said the profile's environment is set up for its repository, for this account. */
+function confirmEnvironment(paths: Paths, name: string, env: NodeJS.ProcessEnv, now: number): string {
+  const { profile } = pickProfile(loadConfig(paths).config, name);
+  const account = readAuthStatus(env)?.account;
+  if (!account) return 'not recorded as confirmed: Claude Code is not logged in with a claude.ai account.';
+  const script = readRemoteFile(profile.repo, profile.revision, SETUP_SCRIPT_PATH, env);
+  recordSetup(paths, {
+    account,
+    repo: repoSlug(profile.repo),
+    revision: profile.revision,
+    environment: profile.environment,
+    confirmed_at: new Date(now).toISOString(),
+    script_sha256: script.status === 'found' ? scriptDigest(script.text) : null,
+  });
+  const recorded = `recorded: ${profile.environment} is set up for ${repoSlug(profile.repo)}@${profile.revision} in this account.`;
+  if (script.status !== 'unreadable') return recorded;
+  return `${recorded}\n${SETUP_SCRIPT_PATH} could not be read (${script.error}), so /kharos:doctor will ask you to paste the setup script again and confirm once it can read it.`;
 }
 
 /** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */

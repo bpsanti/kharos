@@ -41,7 +41,7 @@ Status: early development.
   - or `/web-setup` in Claude Code, which sends your `gh` token to your Claude account.
 - The repository has at least one commit.
 - A cloud environment, created on claude.ai/code; its id (`env_...`) shows in `/schedule`.
-  If the project needs tools installed, give the environment a setup script; it runs in the cloud, not on your machine.
+  You create it once per account, and `/kharos:setup` prepares what to paste into it: see [creating a cloud environment](docs/setup.md#creating-a-cloud-environment).
 
 ## Install
 
@@ -64,7 +64,7 @@ npm install -g kharos
 
 | Command | What it does |
 |---|---|
-| `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
+| `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs; with no environment that fits, prepares the setup script, variable names and network level of a new one |
 | `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment, permission rules and limits, with the fix for each gap |
 | `/kharos:permissions [default\|standard\|hook\|preflight\|unblock] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session, records it, and starts its follower in the background |
@@ -170,6 +170,7 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 | `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id and a heartbeat |
+| `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account, repository and revision |
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
 | `~/.local/state/kharos/org-confirmations.json` | Your confirmations to mirror the organization's ask rules and of the unblock preset, each with the fingerprint of the managed settings it holds for |

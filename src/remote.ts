@@ -3,6 +3,8 @@
 // condensed log for get_run_log). None of this shape is in the public tool reference, so it is read
 // defensively here and anything unknown is reported as unreadable, never as progress.
 
+import { repoSlug } from './config.ts';
+
 export interface ToolResponse {
   status: number | null;
   json: unknown;
@@ -135,6 +137,19 @@ export interface EnvironmentUse {
   id: string;
   routines: number;
   last_used: string | null;
+  /** The repositories (owner/name, lowercase) those routines run on; absent in a file an older kharos wrote. */
+  repos?: string[];
+}
+
+/** The repositories a routine's sessions clone. */
+function routineRepos(routine: Record<string, unknown> | null): string[] {
+  const ccr = rec(rec(routine?.job_config)?.ccr);
+  const request = rec(routine?.session_request);
+  const sources = [rec(ccr?.session_context)?.sources, rec(request?.session_context)?.sources, request?.sources].flatMap((v) => (Array.isArray(v) ? (v as unknown[]) : []));
+  return sources.flatMap((s) => {
+    const url = rec(rec(s)?.git_repository)?.url;
+    return typeof url === 'string' ? [repoSlug(url).toLowerCase()] : [];
+  });
 }
 
 /** Cloud environments the account's routines use, most recently used first: the tool has no list of environments. */
@@ -148,8 +163,9 @@ export function readEnvironments(r: ToolResponse): EnvironmentUse[] | null {
     const env = ccr?.environment_id ?? rec(o?.session_request)?.environment_id;
     if (typeof env !== 'string' || !/^env_\w+$/.test(env)) continue;
     const when = [o?.last_fired_at, o?.updated_at, o?.created_at].find((v): v is string => typeof v === 'string') ?? null;
-    const cur = seen.get(env) ?? { id: env, routines: 0, last_used: null };
+    const cur = seen.get(env) ?? { id: env, routines: 0, last_used: null, repos: [] };
     cur.routines++;
+    cur.repos = [...new Set([...(cur.repos ?? []), ...routineRepos(o)])];
     if (when && (!cur.last_used || when > cur.last_used)) cur.last_used = when;
     seen.set(env, cur);
   }
