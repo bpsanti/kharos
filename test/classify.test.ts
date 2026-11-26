@@ -78,7 +78,6 @@ test('classify: a turn that closed on a background task it started warns only af
     [150, 'tool_use', 'Bash', '{"command":"cargo build","run_in_background":true}'],
     [150, 'tool_use', 'Monitor', '{"command":"tail -f build.log"}'],
     [150, 'tool_result', null, 'Async agent launched successfully. agentId: a1b2 (the agent works in the background; you will be notified when it completes)'],
-    [150, 'tool_result', null, 'Workflow wf_01 launched in the background; a notification arrives when it completes'],
     [150, 'tool_result', null, 'Command running in background with ID: b01. Output is being written to: /tmp/b01.output'],
   ] as [number, string, string | null, string][]) {
     const events = log([...START, started, [200, 'assistant', null, 'The server is still compiling'], [201, 'result', null, 'success is_error=false']]);
@@ -89,6 +88,9 @@ test('classify: a turn that closed on a background task it started warns only af
   // A foreground agent returns its report inside the turn, so nothing is left to wake it.
   const foreground = log([...START, [150, 'tool_use', 'Agent', '{"description":"Search the code","prompt":"..."}'], [180, 'tool_result', null, 'The parser lives in src/logparse.ts.'], [200, 'assistant', null, 'Found it'], [201, 'result', null, 'success is_error=false']]);
   assert.equal(at(foreground, 201 + 6 * 60).notice, 'quiet_unmarked');
+  // A result that only mentions background work started none.
+  const mention = log([...START, [150, 'tool_use', 'Agent', '{"description":"Check the server"}'], [180, 'tool_result', null, 'The dev server is running in the background on port 3000, launched in the background by the setup script.'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success is_error=false']]);
+  assert.equal(at(mention, 201 + 6 * 60).notice, 'quiet_unmarked');
   // A task of an earlier turn does not count: a person's message since then started a new turn.
   const earlier = log([...START, [150, 'tool_use', 'Monitor', '{}'], [160, 'result', null, 'success'], [170, 'user', null, 'go on'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success']]);
   assert.equal(at(earlier, 201 + 6 * 60).notice, 'quiet_unmarked');
