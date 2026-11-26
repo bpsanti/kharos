@@ -678,6 +678,7 @@ test('unblock: one confirmation of what it opens, for the managed settings finge
   const fp = /--fingerprint ([0-9a-f]{16})/.exec(shown.out)?.[1] ?? '';
   const diff = await kharos(sb, 'permissions', 'unblock', dir);
   assert.match(diff.out, /WARNING: this change turns on the unblock preset/);
+  assert.equal(diff.out, (await kharos(sb, 'permissions', 'hook', 'diff', '--unblock', dir)).out, 'the alias is the same diff as hook diff --unblock');
   assert.match(diff.out, new RegExp(`first the person confirms what the unblock preset opens .*kharos permissions unblock confirm --fingerprint ${fp}`));
   assert.doesNotMatch(diff.out, /--org-confirmed/, 'the unblock confirmation covers the mirroring');
   const early = await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(diff.out), '--unblock', dir);
@@ -695,6 +696,7 @@ test('unblock: one confirmation of what it opens, for the managed settings finge
   assert.match((await kharos(sb, 'permissions', 'hook', 'show', dir)).out, /any other prompt in a cloud session: allowed, by the unblock preset/);
   const back = await kharos(sb, 'permissions', 'hook', 'diff', '--no-unblock', dir);
   assert.match(back.out, /turns off the unblock preset/);
+  assert.equal((await kharos(sb, 'permissions', 'unblock', '--no-unblock', dir)).out, back.out, 'the alias with --no-unblock turns it off too');
   assert.equal((await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(back.out), '--no-unblock', dir)).code, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, HOOK_RULES_PATH), 'utf8')).unblock, undefined);
 });

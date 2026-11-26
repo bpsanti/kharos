@@ -12,7 +12,7 @@ import { LaunchError, preflightLine, prepare, readInstruction } from './launch.t
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths } from './paths.ts';
 import { formatHookDecisions } from './approvals.ts';
-import { diffHook, diffPermissions, EMPTY_CHANGE, preflight, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
+import { diffHook, diffPermissions, preflight, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
 import type { HookChange } from './permission-hook.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
@@ -241,7 +241,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           const what = args.positional[1];
           if (what === 'show') out(unblockShow(paths, env));
           else if (what === 'confirm') out(unblockConfirm(paths, flag(args, 'fingerprint'), env));
-          else out(diffHook(paths, what ?? '.', { ...EMPTY_CHANGE, unblock: 'on' }, env));
+          else out(diffHook(paths, what ?? '.', { ...hookChange(args), unblock: args.flags['no-unblock'] === true ? 'off' : 'on' }, env));
         } else if (sub === 'auto') {
           // Switches of the configuration, apart from the read-only commands a skill may pre-approve.
           const [what, v] = [args.positional[1], args.positional[2]];
