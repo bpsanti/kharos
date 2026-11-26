@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseAuthStatus } from '../src/account.ts';
-import { buildCreateBody, clean, footer, parkedRunAt, PUSH_LINE, readDoneMark, readQuestionMark } from '../src/body.ts';
+import { buildCreateBody, clean, footer, LENGTH_LINE, parkedRunAt, PUSH_LINE, readDoneMark, readQuestionMark } from '../src/body.ts';
 import { ConfigError, normalizeRepo, parseConfig } from '../src/config.ts';
 import { parseArgs } from '../src/cli.ts';
 import { versionAtLeast } from '../src/doctor.ts';
@@ -68,6 +68,8 @@ test('body: a --no-push launch leaves out only the line that asks to push work i
   const without = footer(extra, false);
   assert.ok(withPush.includes(PUSH_LINE));
   assert.ok(!without.includes(PUSH_LINE));
+  // Both say where a long report goes, since the log cuts each message.
+  assert.ok(withPush.includes(LENGTH_LINE) && without.includes(LENGTH_LINE));
   assert.doesNotMatch(without, /push/i);
   assert.equal(without, withPush.replace(PUSH_LINE + '\n', ''));
   assert.ok(without.endsWith('- one more line'));

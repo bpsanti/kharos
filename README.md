@@ -239,6 +239,10 @@ Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/
 | Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 10 by default, that `/kharos:setup` asks once; `--queue` waits for a slot instead of being refused) |
 | Session cost | not readable: the run log the tool returns carries no token usage or cost, so kharos cannot show what a session spent; the usage page of claude.ai does, and `--deadline` raises an overdue notice past a set time |
 | Message length in the log | each message is cut to about two thousand characters and flattened to one line; `/kharos:result` says when the last one was cut, and the session page has the whole text |
+| Deleting a routine | not possible through the tool: each launch leaves a disabled routine, and `/kharos:close` prints the link of its page, where it is deleted |
+| Stopping a session | not possible through the tool: `/kharos:close --ask-stop` asks the session to stop, and its page stops it |
+| Listing cloud environments | only through the bundled `/schedule` skill, which `/kharos:setup` uses; a shell has no way to list them |
+| Refusing a run at a prompt | Claude Code tells a hook only when the auto mode classifier refuses; a "no" in a permission dialog, or a refusal in a headless session outside auto mode, leaves the launch at `launch firing` until it is re-armed |
 | Cloud machine | 4 vCPU, 16 GB, 30 GB of disk |
 | Usage | the same plan usage as everything else: five sessions spend five times |
 

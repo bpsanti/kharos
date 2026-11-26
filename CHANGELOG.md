@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The protocol footer tells the session that the log kharos reads cuts each message to about 2000 characters, so a long report goes in the pull request description or a file on its branch. The README's limits name what the tool cannot do: delete a routine, stop a session, list cloud environments outside `/schedule`, and tell kharos of a run refused in a permission dialog.
 - `session.pr_opened` (`progress`): the session opened a pull request, with its URL in `pr`, as soon as a read shows the result of the call that created it, once per pull request; the firstmate output writes it as a `note`.
 - Moving to the files of each Claude account: until `/kharos:setup` ran on an account, a launch and the permission preflight there name the shared files that hold its profiles and the command that moves them, instead of "no configuration yet" or "known: none". `/kharos:setup` moves nothing while a follower reads an open session of the account from the shared files, and says which, so a follower of an earlier kharos does not lose it. `kharos setup --permissions default` is accepted as `as-is`, the name `/kharos:permissions` uses.
 - A session closed while it still runs is `closing`: it keeps its `watch.max_open` slot, and kharos goes on reading it, with no alerts, only to free the slot when the session ends or its deadline passes, whichever comes first; `kharos close <id> --stopped` frees it at once. Freeing the slot never stops the session. `/kharos:close` and `kharos list` say so, and the slots line names when each closing session frees its slot.
