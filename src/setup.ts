@@ -28,6 +28,8 @@ export interface Environment {
 
 /** What the /schedule skill showed: the account's environments, and its notes about GitHub. */
 export interface ScheduleView {
+  /** Whether the environment list itself was shown; without it, `environments` says nothing about the account. */
+  listed: boolean;
   environments: Environment[];
   notes: string[];
 }
@@ -50,12 +52,13 @@ export function parseScheduleView(text: string): ScheduleView | null {
     }
     const m = ENV_LINE.exec(line);
     if (m) {
+      listed = true;
       if (!environments.some((e) => e.id === m[2])) environments.push({ name: clean(m[1] as string, 100), id: m[2] as string, kind: m[3] as string });
       continue;
     }
     if (/github/i.test(line)) notes.push(clean(line.replace(/^[-*\s⚠]+/u, ''), 400));
   }
-  return listed || environments.length > 0 || notes.length > 0 ? { environments, notes } : null;
+  return listed || notes.length > 0 ? { listed, environments, notes } : null;
 }
 
 export type GitHub =
@@ -412,14 +415,14 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   else if (input.environment !== undefined) {
     const want = input.environment.toLowerCase();
     environment = envs.find((e) => e.name.toLowerCase() === want || e.id === input.environment) ?? null;
-    if (!environment && !input.view && /^env_\w+$/.test(input.environment)) environment = { name: '', id: input.environment, kind: '' };
+    if (!environment && !input.view?.listed && /^env_\w+$/.test(input.environment)) environment = { name: '', id: input.environment, kind: '' };
     if (environment) add('ok', environment.name ? `"${environment.name}"` : `${environment.id} (by id, not checked by name)`);
     else {
       const ranked = rankEnvironments(envs, slug, config);
       add('choose', `no environment of yours is named "${clean(input.environment, 100)}"`, 'Pick one of the environments listed below by name.');
       envQuestion = { kind: 'ask-environment', options: ranked.map((e, i) => ({ name: e.name, recommended: i === 0 })), problem: `no environment named "${clean(input.environment, 100)}"` };
     }
-  } else if (!input.view) {
+  } else if (!input.view?.listed) {
     if (existing) {
       environment = { name: existing.environment_name ?? '', id: existing.environment, kind: '' };
       add('check', `keeps ${existing.environment_name ? `"${existing.environment_name}"` : existing.environment}, not checked against your environments`, 'Run /kharos:setup again through the skill, which lists your environments.');

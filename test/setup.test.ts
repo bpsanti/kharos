@@ -137,10 +137,14 @@ test('setup: a single environment is picked without a question, and an empty rep
 
 test('setup: an empty --from-schedule paste reads as not listed, so an existing environment or an env_ id is kept', () => {
   assert.equal(parseScheduleView(''), null);
-  assert.deepEqual(parseScheduleView('Available environments:'), { environments: [], notes: [] }, 'a list with no entry is an account with no environment');
+  assert.deepEqual(parseScheduleView('Available environments:'), { listed: true, environments: [], notes: [] }, 'a list with no entry is an account with no environment');
 
   const onlyNote = parseScheduleView("- GitHub isn't connected to your Claude account, so example/demo can't be cloned in the cloud. Run /web-setup to connect with your GitHub CLI login");
   assert.equal(readGitHub(onlyNote, 'example/demo', 'example/demo').state, 'not-connected', 'a paste with only the GitHub heads-up still names the missing connection');
+
+  const noteOnly = sandbox();
+  const kept = runSetup(noteOnly.paths, input(noteOnly, { view: onlyNote, environment: 'env_01PASTED', permissions: 'as-is' }), deps());
+  assert.equal(kept.steps[3]?.state, 'ok', 'a paste with GitHub lines only does not say the account has no environment');
 
   const sb = sandbox();
   const byId = runSetup(sb.paths, input(sb, { view: parseScheduleView(''), environment: 'env_01PASTED', permissions: 'as-is' }), deps());
