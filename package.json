@@ -1,6 +1,6 @@
 {
   "name": "kharos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Launch Claude Code cloud sessions from the terminal, follow them, message them mid-run, and get notified when one needs you, is stuck, or is done.",
   "keywords": [
     "claude",
@@ -30,6 +30,7 @@
     "dist/src",
     "dist/cloud",
     ".claude-plugin",
+    "agents",
     "hooks",
     "scripts",
     "skills",
