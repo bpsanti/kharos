@@ -63,7 +63,7 @@ It covers no connector (MCP) tools, and it never removes an `ask` rule: a person
 
 | Found | Rules |
 |---|---|
-| `package.json` | install (`npm ci`, or the install of pnpm, yarn or bun when its lockfile is there), `<pm> test`, and `<pm> run <script>` for each script named build, test, check, lint, typecheck, format, compile, verify, dev, start or serve (with a suffix such as `test:unit`, unless the name says deploy, release, publish, upload or push); these are exact commands, since auto mode drops package-manager run rules with a wildcard |
+| `package.json` | `<pm> install` and the lockfile install (`npm ci`, or `<pm> install --frozen-lockfile` for pnpm, yarn or bun, picked by its lockfile), `<pm> test`, and `<pm> run <script>` for each script named build, test, check, lint, typecheck, format, compile, verify, dev, start or serve (with a suffix such as `test:unit`, unless the name says deploy, release, publish, upload or push); these are exact commands, since auto mode drops package-manager run rules with a wildcard |
 | `Cargo.toml` | `cargo build`, `test`, `check`, `clippy`, `fmt` |
 | `go.mod` | `go build`, `test`, `vet` |
 | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `pytest.ini`, `tox.ini` | `pytest *` |
