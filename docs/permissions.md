@@ -29,7 +29,7 @@ Each line below is from the Claude Code documentation, unless it says it comes f
 So, for a kharos launch, the prompts that wait for a person come from `ask` rules in the repository's `.claude/settings.json`, from repeated classifier blocks, from tools that always ask (such as `AskUserQuestion`, which the watcher reports as `waiting_answer`), and from every command not allowed by a rule when auto mode is not available.
 No setting in the repository can allow everything: broad rules are dropped and no bypass mode exists.
 What helps is narrow allow rules for the commands the work needs.
-In kharos cloud tests, commands that carried a credential inline (`PGPASSWORD=...`, or a password in a URL) raised permission prompts, while the same commands without it did not: keep credentials out of the command line.
+In cloud probes, some local database commands (psql against a local development Postgres) raised permission prompts even with no credential on the command line; expect prompts for such commands and use the waiting-on-permission alert.
 
 Not tested yet:
 

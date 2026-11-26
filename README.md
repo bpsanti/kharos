@@ -102,7 +102,7 @@ It still stops at a prompt for `ask` rules in the repository's `.claude/settings
 Cloud sessions have no bypass mode, and auto mode drops broad allow rules such as `Bash(*)`.
 The routine's `allowed_tools` neither allows nor restricts anything there.
 `/kharos:permissions` shows a repository's rules, and adds narrow allow rules for its own commands (the `standard` profile).
-In kharos cloud tests, commands that carried a credential inline (`PGPASSWORD=...`, or a password in a URL) raised permission prompts, while the same commands without it did not: keep credentials out of the command line.
+In cloud probes, some local database commands (psql against a local development Postgres) raised permission prompts even with no credential on the command line; expect prompts for such commands and use the waiting-on-permission alert.
 `/kharos:doctor` warns when a launch branch would likely stall, or relies on broad rules or modes that cloud sessions ignore: see [docs/permissions.md](docs/permissions.md).
 
 ## Outputs
