@@ -3,10 +3,22 @@
 # the plugin's CLI with it. Hooks call it as `kharos hook <event>`, skills as `kharos <command>`.
 # A Claude Code started from a desktop app may have no `node` on its PATH, so the order is: $KHAROS_NODE,
 # PATH, then the folders Node.js is usually installed in.
+# In a git install it runs the TypeScript sources; the npm package carries only their compiled copy in
+# dist/, because Node.js does not strip types inside node_modules. npm installs the `kharos` command as a
+# symbolic link to this file, so the link is followed to find the plugin's folder.
 # A hook never holds or fails the session: without Node.js it exits quietly, and the commands say so.
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 0
+self=$0
+while [ -h "$self" ]; do
+  link=$(readlink "$self") || exit 1
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+root=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd) || exit 0
 cli=$root/src/cli.ts
+[ -f "$cli" ] || cli=$root/dist/src/cli.js
 home=${HOME:-}
 
 node=
