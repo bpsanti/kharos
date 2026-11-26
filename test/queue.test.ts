@@ -216,6 +216,64 @@ test('queue: resume keeps a launch queued while no slot is free, and close cance
   assert.deepEqual(queueLines(sb.paths, T0 + 5 * MIN), []);
 });
 
+test('queue: a launch the person resumes is theirs: the dispatcher neither fires nor retries it', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  finish(sb, open);
+  assert.match(resume(sb.paths, queued), /a slot is free\. Call RemoteTrigger with action "create"/);
+  const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: queued } }));
+  postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: 'trig_person' } })));
+  assert.equal(loadRegistry(sb.paths).sessions[queued]?.step, 'routine_created');
+  assert.equal(kickQueue(sb.paths, Date.now(), sb.env, () => process.pid), null, 'no dispatcher for a routine the person created');
+  const calls: string[] = [];
+  await dispatchQueued(sb.paths, { env: sb.env, fire: hookFire(sb, 1, calls), spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver });
+  assert.deepEqual(calls, []);
+  const gate = preToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: 'trig_person' }));
+  assert.notEqual((gate?.hookSpecificOutput as any)?.permissionDecision, 'deny', 'the person\'s own run goes through');
+});
+
+test('queue: resuming a routine the queue created but did not run stops its automatic retries', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  finish(sb, open);
+  let t = Date.now();
+  const createOnly: Fire = async (_paths, id) => {
+    const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: id } }, undefined, 'fire'));
+    postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: 'trig_q1' } }), 'fire'));
+    return { ok: false, error: 'the run was not approved' };
+  };
+  await dispatchQueued(sb.paths, { env: sb.env, fire: createOnly, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
+  assert.equal(loadRegistry(sb.paths).sessions[queued]?.step, 'routine_created');
+  t += RETRY_AFTER_MS + 1000;
+  assert.notEqual(kickQueue(sb.paths, t, sb.env, () => process.pid), null, 'the queue retries its own routine');
+  fs.rmSync(path.join(sb.paths.state, 'dispatch.json'), { force: true });
+  assert.match(resume(sb.paths, queued), /action "run" and trigger_id "trig_q1", once/);
+  assert.equal(kickQueue(sb.paths, t, sb.env, () => process.pid), null, 'once the person took it, no dispatcher');
+  assert.deepEqual(queueLines(sb.paths, t), []);
+});
+
+test('queue: a launch left to the person holds up neither the younger queued launches nor a new launch', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  const younger = prepare(sb.paths, launchOpts(sb, { queue: true, now: T0 + 2 * MIN })).id;
+  finish(sb, open);
+  let t = Date.now();
+  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1' });
+  for (let i = 0; i < MAX_FIRE_TRIES; i++) {
+    await dispatchQueued(sb.paths, { env: sb.env, fire: failing, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
+    t += RETRY_AFTER_MS + 1000;
+  }
+  assert.equal(loadRegistry(sb.paths).sessions[queued]?.queue?.tries, MAX_FIRE_TRIES);
+  assert.equal(loadRegistry(sb.paths).sessions[younger]?.queue?.tries, 0, 'the oldest was tried first');
+  const calls: string[] = [];
+  await dispatchQueued(sb.paths, { env: sb.env, fire: hookFire(sb, 1, calls), spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
+  assert.deepEqual(calls, [younger], 'the younger one fires in the free slot');
+  finish(sb, younger);
+  const fresh = prepare(sb.paths, launchOpts(sb, { now: T0 + 3 * MIN }));
+  assert.equal(fresh.step, 'prepared', 'a new launch takes the free slot');
+  assert.equal(loadRegistry(sb.paths).sessions[queued]?.step, 'queued');
+});
+
 const doctorDeps: DoctorDeps = {
   claudeVersion: () => '2.1.332 (Claude Code)',
   auth: () => ({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'pro', account: 'sha256:x' }),

@@ -104,12 +104,14 @@ The re-arm is accepted only within 10 minutes of an empty `list_runs`, asks for 
 ### Queued launches
 
 A launch refused because every `watch.max_open` slot is taken can wait instead: `/kharos:run --queue "<instruction>"` runs every check and the permission preflight as usual, stores the routine body, and records the launch as `queued`, with nothing created.
-When a slot frees (a session ends, is closed or is refused), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch, then the next while slots are free:
+When a slot frees (a session ends, is closed or is refused), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
 
 - The fire is a paid action with nobody present: a minimal headless Claude Code in auto mode makes the same RemoteTrigger calls `/kharos:run --resume` names, so Claude Code's classifier approves the `run`, and the hook allows one `run` per launch, as always.
 - Only the Claude account that queued a launch fires it; under another login it stays queued, and an event says so.
 - The session it opens gets a follower process, and its events go to the outputs.
 - A fire that does not go through is tried again 10 minutes later, 3 times in all; then a `session.not_fired` event asks the person, and `/kharos:run --resume <id>` fires it with the person present.
+  A launch left to the person no longer holds up the queue or a new launch.
+- `/kharos:run --resume <id>` takes a launch out of the queue: from then on the person fires it, and the dispatcher no longer does.
 - A queued launch holds no slot, and is ahead of any new launch: a slot that frees is the queue's first.
 - `kharos list` and `/kharos:doctor` show the queue, and `/kharos:close <id>` cancels a queued launch, with nothing created and nothing spent.
 - When the organization disabled auto mode, `--queue` is refused, since nobody could approve the fire.

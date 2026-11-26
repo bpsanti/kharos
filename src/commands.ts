@@ -6,7 +6,7 @@ import { claudeBin } from './account.ts';
 import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError, type PermissionChoice } from './config.ts';
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
-import { followerMayBeStarting, followerReport, LEASE_STALE_MS, type FollowerInfo } from './lease.ts';
+import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
 import { activeCount, findSession, isFollowed, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, storedLogView } from './logparse.ts';
 import { watchConfig } from './track.ts';
@@ -106,9 +106,6 @@ export function followerLines(paths: Paths, now: number): string[] {
   return lines;
 }
 
-/** A follower's heartbeat counts as stale past this age; the same as its lease. */
-export const FOLLOWER_STALE_MS = LEASE_STALE_MS;
-
 export function list(paths: Paths, opts: { all: boolean; now: number }): string {
   const reg = loadRegistry(paths);
   const rows = Object.values(reg.sessions)
@@ -149,12 +146,35 @@ function need(paths: Paths, ref: string): Session {
   return s;
 }
 
-/** What the model must call next to finish or check a launch that stopped midway. */
+/**
+ * What a person must call next to finish or check a launch that stopped midway. A queued launch takes a
+ * free slot, if one is free, and otherwise stays in the queue. A launch the person goes on with leaves the
+ * queue: the dispatcher no longer fires or retries it.
+ */
 export function resume(paths: Paths, ref: string): string {
-  const s = need(paths, ref);
+  const id = need(paths, ref).id;
+  const max = watchConfig(paths).max_open;
+  return updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id] as Session;
+    if (s.step === 'queued') {
+      if (activeCount(reg) >= max) {
+        const place = queuedLaunches(Object.values(reg.sessions)).findIndex((x) => x.id === id) + 1;
+        return `${id} is still queued (${place} in line): every watch.max_open slot is taken (${slotHolders(reg, Date.now())}). It fires by itself when one frees; /kharos:close ${id} cancels it.`;
+      }
+      s.step = 'prepared';
+      delete s.queue;
+      return `${id}: a slot is free. Call RemoteTrigger with action "create" and body {"kharos_launch":"${id}"}.`;
+    }
+    delete s.queue;
+    return nextCall(s);
+  });
+}
+
+/** The RemoteTrigger call that finishes or checks a launch that stopped midway, as its step says. */
+export function nextCall(s: Session): string {
   switch (s.step) {
     case 'queued':
-      return takeSlot(paths, s.id);
+      return `${s.id} is queued for a free slot; nothing is to be called now.`;
     case 'prepared':
       return `${s.id}: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`;
     case 'routine_created':
@@ -168,24 +188,6 @@ export function resume(paths: Paths, ref: string): string {
     case 'closed':
       return `${s.id} is closed.`;
   }
-}
-
-/**
- * A queued launch that a person asks to fire now: it takes a free slot, if one is free, and goes on as a
- * prepared launch; otherwise it stays in the queue.
- */
-function takeSlot(paths: Paths, id: string): string {
-  const max = watchConfig(paths).max_open;
-  return updateRegistry(paths, (reg) => {
-    const s = reg.sessions[id];
-    if (!s || s.step !== 'queued') return resume(paths, id);
-    if (activeCount(reg) >= max) {
-      const place = queuedLaunches(Object.values(reg.sessions)).findIndex((x) => x.id === id) + 1;
-      return `${id} is still queued (${place} in line): every watch.max_open slot is taken (${slotHolders(reg, Date.now())}). It fires by itself when one frees; /kharos:close ${id} cancels it.`;
-    }
-    s.step = 'prepared';
-    return `${id}: a slot is free. Call RemoteTrigger with action "create" and body {"kharos_launch":"${id}"}.`;
-  });
 }
 
 const REARM_WINDOW_MS = 10 * 60_000;

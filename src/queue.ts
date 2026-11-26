@@ -16,14 +16,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { claudeBin, readAuthStatus } from './account.ts';
 import { clean } from './body.ts';
-import { resume } from './commands.ts';
+import { nextCall } from './commands.ts';
 import { detachedSpawner, detachFollower, ROLE_ENV, type Spawner } from './follow.ts';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { pidAlive } from './lease.ts';
 import { deliver } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
-import { activeCount, loadRegistry, queuedLaunches, updateRegistry, type Session } from './registry.ts';
+import { activeCount, findSession, loadRegistry, queuedLaunches, updateRegistry, type Session } from './registry.ts';
 import { watchConfig } from './track.ts';
 import { PLUGIN_ROOT } from './wait.ts';
 
@@ -54,7 +54,7 @@ export interface FireRun {
   error: string | null;
 }
 
-/** Fires one launch: makes the RemoteTrigger calls `kharos resume` names, through the plugin's hooks. */
+/** Fires one launch: makes the RemoteTrigger calls its step names, through the plugin's hooks. */
 export type Fire = (paths: Paths, id: string, env: NodeJS.ProcessEnv, timeoutMs: number) => Promise<FireRun>;
 
 const FIRE_PROMPT =
@@ -65,6 +65,8 @@ const FIRE_PROMPT =
 
 /** The fire through a minimal headless `claude -p` in auto mode, which may only call RemoteTrigger. */
 export const headlessFire: Fire = async (paths, id, env, timeoutMs) => {
+  const s = findSession(loadRegistry(paths), id);
+  if (!s) return { ok: false, error: `no session ${id} in the registry` };
   const childEnv: NodeJS.ProcessEnv = { ...env, [ROLE_ENV]: 'fire' };
   delete childEnv.ANTHROPIC_API_KEY;
   const r = spawnSync(
@@ -80,8 +82,6 @@ export const headlessFire: Fire = async (paths, id, env, timeoutMs) => {
       '--strict-mcp-config',
       '--tools',
       'RemoteTrigger',
-      '--allowedTools',
-      'RemoteTrigger',
       '--permission-mode',
       'auto',
       '--disable-slash-commands',
@@ -92,7 +92,7 @@ export const headlessFire: Fire = async (paths, id, env, timeoutMs) => {
       FIRE_PROMPT,
       '--output-format',
       'json',
-      resume(paths, id),
+      nextCall(s),
     ],
     { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: timeoutMs },
   );
@@ -133,16 +133,20 @@ function ready(s: Session, now: number): boolean {
   const q = s.queue;
   if (!q) return false;
   if (q.next_try_at !== null && now < Date.parse(q.next_try_at)) return false;
-  return q.tries < MAX_FIRE_TRIES;
+  return !leftToPerson(s);
 }
 
-/** A queued launch to fire now: the oldest that fits in a free slot, or one created by the queue whose run is to try again. */
+/** A queued launch whose tries are used up: it waits for a person, and no longer for a slot. */
+export function leftToPerson(s: Session): boolean {
+  return s.queue !== undefined && s.queue.tries >= MAX_FIRE_TRIES;
+}
+
+/** A queued launch to fire now: the oldest ready one that fits in a free slot, or one the queue created whose run is to try again. */
 export function nextToFire(sessions: Session[], maxOpen: number, now: number): Session | null {
-  const retry = sessions.filter((s) => s.step === 'routine_created' && ready(s, now)).sort((a, b) => a.id.localeCompare(b.id))[0];
+  const retry = sessions.filter((s) => s.step === 'routine_created' && s.queue?.fired_by_queue_at && ready(s, now)).sort((a, b) => a.id.localeCompare(b.id))[0];
   if (retry) return retry;
-  const queued = queuedLaunches(sessions);
-  const oldest = queued[0];
-  if (!oldest || !ready(oldest, now)) return null;
+  const oldest = queuedLaunches(sessions).find((s) => ready(s, now));
+  if (!oldest) return null;
   return activeCount({ sessions: Object.fromEntries(sessions.map((s) => [s.id, s])) }) < maxOpen ? oldest : null;
 }
 
@@ -225,7 +229,7 @@ export async function dispatchQueued(paths: Paths, opts: DispatchOptions): Promi
       if (!picked) break;
       if (picked.skip) {
         out.push(`${picked.id}: not fired: another account is logged in`);
-        break;
+        continue;
       }
       const run = await fire(paths, picked.id, opts.env, FIRE_TIMEOUT_MS);
       const after = updateRegistry(paths, (reg) => {

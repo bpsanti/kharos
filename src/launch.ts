@@ -12,6 +12,7 @@ import { appendLine, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, bodyPath, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
 import { buildEvent, enqueue } from './events.ts';
+import { leftToPerson } from './queue.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, loadConfirmation } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
@@ -134,7 +135,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   // A queued launch is fired later from a headless Claude Code in auto mode, where Claude Code's classifier approves the fire.
   const autoOff = opts.queue ? autoModeRefusal(readManagedPolicy(env)) : null;
   const prepared = updateRegistry(paths, (reg) => {
-    const ahead = queuedLaunches(Object.values(reg.sessions));
+    const ahead = queuedLaunches(Object.values(reg.sessions)).filter((s) => !leftToPerson(s));
     const full = activeCount(reg) + ahead.length >= config.watch.max_open;
     if (full && !opts.queue) {
       throw new LaunchError([
