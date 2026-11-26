@@ -7,7 +7,7 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
-import { activeCount, findSession, isFollowed, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { activeCount, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, storedLogView } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
@@ -158,6 +158,7 @@ export function resume(paths: Paths, ref: string): string {
     const s = reg.sessions[id] as Session;
     if (s.step === 'queued') {
       if (activeCount(reg) >= max) {
+        if (s.queue && leftToPerson(s)) s.queue = { ...s.queue, tries: 0, blocked: null, next_try_at: null };
         const place = queuedLaunches(Object.values(reg.sessions)).findIndex((x) => x.id === id) + 1;
         return `${id} is still queued (${place} in line): every watch.max_open slot is taken (${slotHolders(reg, Date.now())}). It fires by itself when one frees; /kharos:close ${id} cancels it.`;
       }
@@ -409,8 +410,9 @@ export function writeProfile(paths: Paths, input: SetupInput): string {
 export function queueLines(paths: Paths, now: number): string[] {
   const sessions = Object.values(loadRegistry(paths).sessions);
   const queued = queuedLaunches(sessions);
+  const waiting = sessions.filter((s) => s.step === 'queued' && leftToPerson(s)).sort((a, b) => a.id.localeCompare(b.id));
   const stalled = sessions.filter((s) => s.queue && s.step === 'routine_created' && s.queue.blocked);
-  if (queued.length === 0 && stalled.length === 0) return [];
+  if (queued.length === 0 && waiting.length === 0 && stalled.length === 0) return [];
   const lines: string[] = [];
   if (queued.length) {
     const rows = queued.map((s, i) => {
@@ -419,6 +421,7 @@ export function queueLines(paths: Paths, now: number): string[] {
     });
     lines.push(`queue: ${rows.join(', ')}. Each fires by itself when a slot frees, a paid action with nobody present; /kharos:close <id> cancels one.`);
   }
+  for (const s of waiting) lines.push(`queue: ${s.id} waits for you, not fired: ${s.queue?.blocked}; it no longer fires by itself. /kharos:run --resume ${s.id} fires it with you present, or puts it back in line while every slot is taken; /kharos:close ${s.id} cancels it.`);
   for (const s of stalled) lines.push(`queue: ${s.id} was created but not fired: ${s.queue?.blocked}; /kharos:run --resume ${s.id} fires it once, /kharos:close ${s.id} cancels it.`);
   return lines;
 }

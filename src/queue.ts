@@ -23,12 +23,10 @@ import { buildEvent, enqueue } from './events.ts';
 import { pidAlive } from './lease.ts';
 import { deliver } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
-import { activeCount, findSession, loadRegistry, queuedLaunches, updateRegistry, type Session } from './registry.ts';
+import { activeCount, findSession, leftToPerson, loadRegistry, MAX_FIRE_TRIES, queuedLaunches, updateRegistry, type Session } from './registry.ts';
 import { watchConfig } from './track.ts';
 import { PLUGIN_ROOT } from './wait.ts';
 
-/** Tries of one queued launch before kharos stops firing it and asks the person. */
-export const MAX_FIRE_TRIES = 3;
 /** The wait before a queued launch whose fire did not go through is tried again. */
 export const RETRY_AFTER_MS = 10 * 60_000;
 /** How long one headless fire may run: a create, a run, and a list_runs at most. */
@@ -134,11 +132,6 @@ function ready(s: Session, now: number): boolean {
   if (!q) return false;
   if (q.next_try_at !== null && now < Date.parse(q.next_try_at)) return false;
   return !leftToPerson(s);
-}
-
-/** A queued launch whose tries are used up: it waits for a person, and no longer for a slot. */
-export function leftToPerson(s: Session): boolean {
-  return s.queue !== undefined && s.queue.tries >= MAX_FIRE_TRIES;
 }
 
 /** A queued launch to fire now: the oldest ready one that fits in a free slot, or one the queue created whose run is to try again. */

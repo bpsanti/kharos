@@ -110,7 +110,7 @@ When a slot frees (a session ends, is closed or is refused), the hook or command
 - Only the Claude account that queued a launch fires it; under another login it stays queued, and an event says so.
 - The session it opens gets a follower process, and its events go to the outputs.
 - A fire that does not go through is tried again 10 minutes later, 3 times in all; then a `session.not_fired` event asks the person, and `/kharos:run --resume <id>` fires it with the person present.
-  A launch left to the person no longer holds up the queue or a new launch.
+  A launch left to the person no longer holds up the queue or a new launch; resuming it while every slot is taken puts it back in line, and it fires by itself again.
 - `/kharos:run --resume <id>` takes a launch out of the queue: from then on the person fires it, and the dispatcher no longer does.
 - A queued launch holds no slot, and is ahead of any new launch: a slot that frees is the queue's first.
 - `kharos list` and `/kharos:doctor` show the queue, and `/kharos:close <id>` cancels a queued launch, with nothing created and nothing spent.

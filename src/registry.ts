@@ -202,9 +202,17 @@ export function activeCount(reg: Pick<Registry, 'sessions'>): number {
   return Object.values(reg.sessions).filter(holdsSlot).length;
 }
 
-/** The launches waiting in the queue, in the order they fire: the oldest first. */
+/** Tries of one queued launch before kharos stops firing it and asks the person. */
+export const MAX_FIRE_TRIES = 3;
+
+/** A launch made with --queue whose fires are used up: it waits for a person, and no longer for a slot. */
+export function leftToPerson(s: Session): boolean {
+  return s.queue !== undefined && s.queue.tries >= MAX_FIRE_TRIES;
+}
+
+/** The launches waiting in the queue for a slot, in the order they fire: the oldest first. */
 export function queuedLaunches(sessions: Iterable<Session>): Session[] {
-  return [...sessions].filter((s) => s.step === 'queued').sort((a, b) => (a.queue?.queued_at ?? a.created_at).localeCompare(b.queue?.queued_at ?? b.created_at) || a.id.localeCompare(b.id));
+  return [...sessions].filter((s) => s.step === 'queued' && !leftToPerson(s)).sort((a, b) => (a.queue?.queued_at ?? a.created_at).localeCompare(b.queue?.queued_at ?? b.created_at) || a.id.localeCompare(b.id));
 }
 
 const WAITING_ON_A_PERSON = new Set<State>(['waiting_answer', 'waiting_permission']);

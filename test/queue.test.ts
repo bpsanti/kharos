@@ -10,8 +10,8 @@ import { readOutbox } from '../src/events.ts';
 import type { Spawner } from '../src/follow.ts';
 import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
-import { dispatchQueued, kickQueue, MAX_FIRE_TRIES, RETRY_AFTER_MS, type Fire } from '../src/queue.ts';
-import { activeCount, loadRegistry, updateRegistry } from '../src/registry.ts';
+import { dispatchQueued, kickQueue, RETRY_AFTER_MS, type Fire } from '../src/queue.ts';
+import { activeCount, loadRegistry, MAX_FIRE_TRIES, updateRegistry } from '../src/registry.ts';
 import { recordAccess } from '../src/repo.ts';
 import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -272,6 +272,31 @@ test('queue: a launch left to the person holds up neither the younger queued lau
   const fresh = prepare(sb.paths, launchOpts(sb, { now: T0 + 3 * MIN }));
   assert.equal(fresh.step, 'prepared', 'a new launch takes the free slot');
   assert.equal(loadRegistry(sb.paths).sessions[queued]?.step, 'queued');
+});
+
+test('queue: a launch left to the person is out of line until they resume it, and back in line when no slot is free', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  finish(sb, open);
+  let t = Date.now();
+  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1' });
+  for (let i = 0; i < MAX_FIRE_TRIES; i++) {
+    await dispatchQueued(sb.paths, { env: sb.env, fire: failing, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
+    t += RETRY_AFTER_MS + 1000;
+  }
+  const other = prepare(sb.paths, launchOpts(sb, { now: T0 + 3 * MIN })).id;
+  const shown = queueLines(sb.paths, t);
+  assert.equal(shown.length, 1);
+  assert.match(shown[0]!, new RegExp(`^queue: ${queued} waits for you, not fired: claude -p exited 1; it no longer fires by itself\\.`));
+  assert.doesNotMatch(shown[0]!, /\d(st|nd|rd|th) in line/);
+  assert.match(resume(sb.paths, queued), new RegExp(`^${queued} is still queued \\(1 in line\\)`));
+  const q = loadRegistry(sb.paths).sessions[queued]?.queue;
+  assert.deepEqual([q?.tries, q?.blocked, q?.next_try_at], [0, null, null]);
+  assert.match(queueLines(sb.paths, t)[0]!, new RegExp(`^queue: ${queued} \\(1st in line,`));
+  finish(sb, other);
+  const calls: string[] = [];
+  await dispatchQueued(sb.paths, { env: sb.env, fire: hookFire(sb, 1, calls), spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
+  assert.deepEqual(calls, [queued], 'back in line, it fires by itself when the slot frees');
 });
 
 const doctorDeps: DoctorDeps = {
