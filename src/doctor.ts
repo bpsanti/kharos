@@ -156,7 +156,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     add('info', 'limits', `${activeCount(reg)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
   }
   const w = state('watcher', paths.watch, () => loadWatch(paths));
-  if (w) add('info', 'watcher', w.last_beat ? `last heartbeat ${w.last_beat}` : 'never ran: start it with /loop 10m /kharos:watch in a separate session');
+  if (w) add('info', 'watcher', w.last_beat ? `last heartbeat ${w.last_beat}` : 'never ran (the advanced mode; /kharos:run starts a follower for each launch)');
   return checks;
 }
 
