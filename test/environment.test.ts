@@ -229,6 +229,18 @@ test('doctor: a confirmed environment passes until the setup script changes', ()
   );
 });
 
+test('doctor: a confirmation made while the repository shipped no setup script warns once it ships one', () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  saveEnvironments(sb.paths, [], T0, 'sha256:x');
+  recordSetup(sb.paths, { account: 'sha256:x', repo: 'example/demo', revision: 'main', environment: 'env_01TESTENVIRONMENT', confirmed_at: new Date(T0).toISOString(), script_sha256: null });
+  assert.equal(environmentCheck(sb, { setupScript: () => ({ status: 'absent' }) }).level, 'ok');
+  assert.equal(environmentCheck(sb, { setupScript: () => ({ status: 'unreadable', error: 'HTTP 502' }) }).level, 'ok');
+  const added = environmentCheck(sb);
+  assert.equal(added.level, 'warn');
+  assert.match(added.text, /^the setup script changed on main; paste it again\n/);
+});
+
 test('setup --confirmed writes the id into the profile and records it for this account', async () => {
   const sb = sandbox();
   const env = tools(sb, { gh: 'printf "%s" "echo setup"' });
@@ -238,6 +250,13 @@ test('setup --confirmed writes the id into the profile and records it for this a
   const stored = Object.values(JSON.parse(fs.readFileSync(sb.paths.setups, 'utf8')) as Record<string, { account: string }>)[0]!;
   assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'main')?.script_sha256, scriptDigest('echo setup'));
   assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'dev'), null);
+  assert.doesNotMatch(r.stdout, /could not be read/);
+
+  const failing = tools(sb, { gh: 'echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1' });
+  const u = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed'], failing, () => ''));
+  assert.equal(u.value, 0, u.stderr);
+  assert.match(u.stdout, /tools\/cloud\/bootstrap\.sh could not be read \(gh: Bad Gateway \(HTTP 502\)\), so \/kharos:doctor will ask you to paste the setup script again/);
+  assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'main')?.script_sha256, null);
 });
 
 test('env-guide: copies the script, opens the page, and prints no value', async () => {

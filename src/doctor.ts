@@ -246,7 +246,7 @@ function checkEnvironment(
     return found.status === 'found' ? found.text : null;
   };
   if (confirmed?.environment === p.environment) {
-    const script = confirmed.script_sha256 ? shipped() : null;
+    const script = shipped();
     if (script !== null && scriptDigest(script) !== confirmed.script_sha256) {
       add('warn', label, `the setup script changed on ${p.revision}; paste it again`, [
         `Copy the new script with \`kharos env-guide --profile ${name} --copy\` and paste it into the "Setup script" of ${p.environment} on claude.ai/code.`,

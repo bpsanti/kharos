@@ -384,7 +384,9 @@ function confirmEnvironment(paths: Paths, name: string, env: NodeJS.ProcessEnv, 
     confirmed_at: new Date(now).toISOString(),
     script_sha256: script.status === 'found' ? scriptDigest(script.text) : null,
   });
-  return `recorded: ${profile.environment} is set up for ${repoSlug(profile.repo)}@${profile.revision} in this account.`;
+  const recorded = `recorded: ${profile.environment} is set up for ${repoSlug(profile.repo)}@${profile.revision} in this account.`;
+  if (script.status !== 'unreadable') return recorded;
+  return `${recorded}\n${SETUP_SCRIPT_PATH} could not be read (${script.error}), so /kharos:doctor will ask you to paste the setup script again and confirm once it can read it.`;
 }
 
 /** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */

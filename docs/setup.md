@@ -43,7 +43,7 @@ The same from a shell: `kharos env-guide --repo owner/name --copy --open`, `khar
 ## What kharos knows about an environment
 
 Environments belong to one account, and nothing shows what one holds.
-An environment is known to fit a repository when you confirmed it (`--confirmed`, kept by account, repository and revision in `setups.json` of the state folder, with a digest of the setup script) or when one of your routines used it on that repository.
+An environment is known to fit a repository when you confirmed it (`--confirmed`, kept by account, repository and revision in `setups.json` of the state folder, with a digest of the setup script; when the script was absent or could not be read then, any script the repository ships later counts as changed) or when one of your routines used it on that repository.
 
 ## The checks
 
