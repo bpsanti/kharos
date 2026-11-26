@@ -73,8 +73,11 @@ export interface Session {
   step: Step;
   state: State;
   state_since: string;
-  /** A state seen once that needs a second read to count (looping, usage limit). */
-  pending_state: { state: State; reads: number } | null;
+  /**
+   * A state seen once that needs a second read to count (looping, usage limit, and a permission prompt
+   * where the permission hook runs, told apart by the prompt's key).
+   */
+  pending_state: { state: State; reads: number; key?: string } | null;
   last_event_at: string | null;
   last_read_at: string | null;
   reads: number;

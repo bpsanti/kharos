@@ -26,7 +26,8 @@ export interface Read {
 
 /** How often a session is read, as a multiple of the interval: often while young or in trouble. */
 export function cadence(s: Session, now: number): number {
-  if (s.notice) return 1;
+  // A permission prompt that waits for the next read to count: a person may be needed.
+  if (s.notice || s.pending_state?.key) return 1;
   const age = now - Date.parse(s.created_at);
   if (age < 20 * MIN) return 1;
   if (age < 120 * MIN) return 2;

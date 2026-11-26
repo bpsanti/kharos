@@ -59,9 +59,19 @@ export function watchConfig(paths: Paths): WatchConfig {
   }
 }
 
+/**
+ * A permission prompt not reported yet, in a session whose branch had the kharos permission hook at
+ * launch. The hook answers right away, but a read can land between the prompt's line and the line that
+ * shows the answer, so such a prompt counts only when the next read still finds it open.
+ */
+function hookMayAnswer(s: Session, verdict: Verdict): boolean {
+  return Boolean(s.permission_hook) && verdict.permission !== undefined && s.permission?.key !== verdict.permission.key;
+}
+
 /** Applies a verdict, queues its events for delivery, and returns them. */
 export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: WatchConfig = watchConfig(ctx.paths)): KharosEvent[] {
-  const events = transition(s, verdict, ctx.now, watch.renotify_min, CONFIRM_TWICE.has(verdict.state));
+  const confirm = CONFIRM_TWICE.has(verdict.state) || hookMayAnswer(s, verdict);
+  const events = transition(s, verdict, ctx.now, watch.renotify_min, confirm);
   enqueue(ctx.paths, events);
   return events;
 }
@@ -99,7 +109,8 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
 
   const watch = watchConfig(ctx.paths);
   const verdict = classify({ events, seenStart: s.seen_start === true, createdAt: Date.parse(s.created_at), deadlineMin: s.deadline_min, now: ctx.now, watch });
-  const emitted = settle(ctx, s, verdict, watch);
+  // An older page says nothing new about an open prompt, so it is not the next read that confirms one.
+  const emitted = fromCursor && hookMayAnswer(s, verdict) ? [] : settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';
   const more = s.pending_cursor ? ` Older events are missing: call RemoteTrigger get_run_log with session_id "${s.session_id}" and cursor "${s.pending_cursor}".` : '';
   const hook = decided.length ? ` The kharos permission hook answered ${decided.length} prompt(s) (kharos permissions approvals --all).` : '';
