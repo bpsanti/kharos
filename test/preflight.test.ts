@@ -76,7 +76,7 @@ test('preflight: a word that holds a credential is never kept as written', () =>
     ['tool --access-key S3cr3t run', ['tool', '--access-key', null, 'run']],
     ['tool --secret-access-key S3cr3t run', ['tool', '--secret-access-key', null, 'run']],
     ['tool --client-secret S3cr3t run', ['tool', '--client-secret', null, 'run']],
-    ['tool --auth S3cr3t run', ['tool', '--auth', null, 'run']],
+    ['tool --auth-token S3cr3t run', ['tool', '--auth-token', null, 'run']],
     ['tool --api-key=S3cr3t run', ['tool', null, 'run']],
     ['env AWS_SECRET_ACCESS_KEY=S3cr3t aws s3 ls', ['env', null, 'aws', 's3', 'ls']],
     ['env API_KEY=S3cr3t tool', ['env', null, 'tool']],
@@ -84,6 +84,13 @@ test('preflight: a word that holds a credential is never kept as written', () =>
     ['git clone https://bot:S3cr3t@git.example/org/repo', ['git', 'clone', null]],
     // A token by its shape alone: long, letters and digits mixed, no path or host name.
     ['tool run ghp1A2b3C4d5E6f7G8h9I0jKlMn', ['tool', 'run', null]],
+    // A JSON Web Token, a credential header, and a URL password with a slash in it.
+    ['tool --jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl', ['tool', '--jwt', null]],
+    ['curl -H X-Api-Key:abc123def https://api.example/health', ['curl', '-H', null, 'https://api.example/health']],
+    ['curl -H Authorization:Bearer-abc123 https://api.example/health', ['curl', '-H', null, 'https://api.example/health']],
+    ['curl https://u:pa/ss@api.example/health', ['curl', null]],
+    ['aws configure set aws_session_token S3cr3t', ['aws', 'configure', 'set', 'aws_session_token', null]],
+    ['aws configure set aws_access_key_id AKIAEXAMPLE', ['aws', 'configure', 'set', 'aws_access_key_id', null]],
   ];
   for (const [command, words] of cases) assert.deepEqual(toCandidate(command)?.words, words, command);
   // A URL with no password, a port flag, an ssh remote, a long host name and a long path stay as written.
@@ -91,6 +98,21 @@ test('preflight: a word that holds a credential is never kept as written', () =>
   assert.deepEqual(toCandidate('git clone git@github.com:org/repo.git')?.words, ['git', 'clone', 'git@github.com:org/repo.git']);
   assert.deepEqual(toCandidate('redis-cli -h cache01.prod2.example.internal ping')?.words, ['redis-cli', '-h', 'cache01.prod2.example.internal', 'ping']);
   assert.deepEqual(toCandidate('cat logs/2026/session01/output2.txt')?.words, ['cat', 'logs/2026/session01/output2.txt']);
+  // Ordinary identifiers stay as written: commit ids, branch and file names of several parts, database names, other options and headers.
+  const literal = [
+    'git checkout 1577522e2caac6214a9d58c8863c86556c38369c',
+    'git revert 1577522e2caac6214a9d58c8863c86556c38369c',
+    'git push origin release-2026-11-26-hotfix',
+    'rm -rf build_2024_artifacts_old',
+    'psql -d analytics_2024_warehouse',
+    'psql -d analytics2024warehouseprimary',
+    'git log --author someone',
+    'gpg --keyserver keys.example --recv-keys ABCD1234',
+    'tool --passes 3',
+    'aws configure set region us-east-1',
+    'curl -H Accept:application/json https://api.example/health',
+  ];
+  for (const command of literal) assert.deepEqual(toCandidate(command)?.words, command.split(' '), command);
 });
 
 test('automatic preflight: a credential typed in an earlier session never reaches the side branch', () => {

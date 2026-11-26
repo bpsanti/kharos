@@ -186,13 +186,23 @@ function tokenize(text: string): Token[] {
 const PLAIN_RE = /^[\w@%+=:,./-]{1,120}$/;
 
 /** user:password@ userinfo, as in a URL, or a key=value word whose key names a credential. */
-const SECRET_WORD_RE = /[^/@:]*:[^/@]+@|(?:key|secret|token|passw(?:or)?d|pwd)=/i;
-/** An option whose value is a credential. */
-const SECRET_FLAG_RE = /^-[^=]*(?:key|secret|token|pass|auth)[^=]*$/i;
+const SECRET_WORD_RE = /:\/\/[^/@:]*:[^@]*@|[^/@:]*:[^/@]+@|(?:key|secret|token|passw(?:or)?d|pwd)=/i;
+/** A JSON Web Token: base64url JSON, which starts with `eyJ`. */
+const JWT_RE = /^eyJ[\w-]{8,}/;
+/** The options whose value is a credential, by their whole name. */
+const SECRET_FLAGS = new Set(['--token', '--password', '--passwd', '--pass', '--secret', '--api-key', '--apikey', '--auth-token', '--access-key', '--secret-key', '--secret-access-key', '--client-secret']);
+/** The `aws configure set` names whose value is a credential. */
+const AWS_SECRET_RE = /(?:^|\.)aws_(?:secret_access_key|session_token|access_key_id)$/;
+/** Options whose value is a database name. */
+const DATABASE_FLAGS = new Set(['-d', '--dbname', '--database']);
 
-/** A word shaped like a generated credential: long, letters and digits mixed, and neither a path nor a host name. */
+/**
+ * A word shaped like a generated credential: long, letters and digits mixed, and neither a path, a host
+ * name, a hex commit id nor a name of several `-` or `_` separated parts.
+ */
 function credentialShaped(w: string): boolean {
-  return w.length >= 20 && /[a-z]/i.test(w) && /\d/.test(w) && !w.includes('/') && !w.includes('.');
+  if (w.length < 20 || !/[a-z]/i.test(w) || !/\d/.test(w) || /[/.]/.test(w)) return false;
+  return !/^[0-9a-f]+$/i.test(w) && w.split(/[-_]/).length < 3;
 }
 
 /** A word that holds a credential (userinfo, a credential option or key=value, the value after one, or a token by its shape): never kept as written. */
@@ -200,12 +210,14 @@ function secretAt(values: readonly string[], i: number): boolean {
   const w = values[i] as string;
   const program = path.posix.basename(values[0] as string);
   const prev = i > 1 ? (values[i - 1] as string) : '';
-  if (SECRET_WORD_RE.test(w) || credentialShaped(w)) return true;
-  if (SECRET_FLAG_RE.test(prev)) return true;
+  if (SECRET_WORD_RE.test(w) || JWT_RE.test(w)) return true;
+  if (SECRET_FLAGS.has(prev.toLowerCase())) return true;
+  if ((prev === '-H' || prev === '--header') && /key|token|secret|auth/i.test(w.split(':')[0] as string)) return true;
   if (program === 'curl' && (prev === '-u' || prev === '--user') && w.includes(':')) return true;
   if ((program === 'redis-cli' && prev === '-a') || (program === 'sshpass' && prev === '-p')) return true;
-  if (program === 'aws' && values[1] === 'configure' && values[2] === 'set' && i === 4) return true;
-  return /^(?:mysql|mysqldump|mysqladmin|mariadb)/.test(program) && /^-p.+/.test(w);
+  if (program === 'aws' && values[1] === 'configure' && values[2] === 'set' && i === 4) return AWS_SECRET_RE.test(values[3] as string);
+  if (/^(?:mysql|mysqldump|mysqladmin|mariadb)/.test(program) && /^-p.+/.test(w)) return true;
+  return i > 1 && program !== 'git' && !DATABASE_FLAGS.has(prev) && credentialShaped(w);
 }
 
 export interface Candidate {
