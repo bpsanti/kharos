@@ -61,6 +61,8 @@ So there are two ways past the prompt, and kharos never bypasses it:
 Profiles, environments and sessions belong to one Claude account.
 With a `CLAUDE_CONFIG_DIR` other than `~/.claude`, kharos keeps that account's files under `accounts/<folder>-<hash>/` of its configuration and state folders; the default account keeps the folders kharos always used.
 The first `/kharos:setup` on such an account moves its profiles (the ones it wrote, or launched with) and its sessions out of the files every account shared before, and asks once about any profile whose account it cannot tell.
+Until then, a launch, the permission preflight and `/kharos:doctor` on that account name the shared files that hold its profiles and say that `/kharos:setup` moves them, instead of reporting no configuration.
+While a follower reads an open session of the account from the shared files (a kharos from before accounts had files of their own, say), setup moves nothing and says which sessions; it moves them once they end or that follower stops, so no follower loses the session it reads.
 Each profile also records a hash of the account that wrote it, so a launch or `/kharos:doctor` on another account says so plainly instead of firing at an environment that account cannot use.
 
 ## Creating a cloud environment

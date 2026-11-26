@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { migrate, planMigration } from '../src/accounts.ts';
+import { migrate, planMigration, unmigratedNote } from '../src/accounts.ts';
 import { loadConfig, pickProfile, parseConfig } from '../src/config.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import type { ManagedPolicy } from '../src/managed-policy.ts';
@@ -443,4 +443,42 @@ test('setup: asks once per account how many sessions may be open at once, with t
   r = runSetup(sb.paths, unasked({}), deps());
   assert.equal(r.next.kind, 'ready');
   assert.equal(r.maxOpen, null);
+});
+
+test('accounts: open sessions that a follower reads from the shared files right now are not moved, and setup says why', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kharos-home-'));
+  const sb = sandbox();
+  const env = { ...sb.env, HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude-work') } as NodeJS.ProcessEnv;
+  delete env.KHAROS_HOME;
+  const mine = resolvePaths(env);
+  const shared = sharedPaths(env)!;
+  fs.mkdirSync(path.dirname(shared.config), { recursive: true });
+  fs.writeFileSync(shared.config, JSON.stringify({ version: 1, default_profile: 'work', profiles: { work: { repo: 'example/work', environment: 'env_01WORK', account: ME } } }));
+  updateRegistry(shared, (reg) => {
+    reg.sessions['k-0004'] = { id: 'k-0004', profile: 'work', account: ME, step: 'open', state: 'running' } as never;
+  });
+  // A follower of an earlier kharos, alive, reading k-0004 from the shared files.
+  fs.mkdirSync(shared.followers, { recursive: true });
+  const now = Date.now();
+  fs.writeFileSync(path.join(shared.followers, 'k-0004.json'), JSON.stringify({ pid: process.pid, beat: new Date(now).toISOString(), since: new Date(now).toISOString(), kind: 'process' }));
+
+  assert.match(unmigratedNote(mine, shared, ME) ?? '', /has no kharos files of its own yet .*hold 1 profile\(s\) of this account \(work\), 1 session\(s\) it launched\. Run \/kharos:setup once on this account/);
+  assert.deepEqual(migrate(mine, shared, ME, null, now), { state: 'busy', sessions: ['k-0004'] });
+  assert.equal(fs.existsSync(mine.config), false, 'nothing moves while it is read');
+  const r = runSetup(mine, { ...input(sb), env, shared, permissions: 'as-is', environment: 'demo', now }, deps());
+  assert.equal(r.steps[0]?.state, 'missing');
+  assert.match(r.steps[0]?.detail ?? '', /a follower reads right now from those files \(k-0004\), so nothing moved/);
+  assert.equal(fs.existsSync(mine.config), false);
+
+  // Once that follower stops, the move goes on.
+  fs.rmSync(path.join(shared.followers, 'k-0004.json'));
+  assert.equal(migrate(mine, shared, ME, null, now).state, 'done');
+  assert.equal(unmigratedNote(mine, shared, ME), null);
+});
+
+test('setup: --permissions default is the name /kharos:permissions uses for as-is', () => {
+  const sb = sandbox();
+  const r = runSetup(sb.paths, { ...input(sb), permissions: 'default', environment: 'demo' }, deps());
+  assert.equal(loadConfig(sb.paths).config.profiles.demo?.permissions, 'as-is');
+  assert.notEqual(r.next.kind, 'ask-permissions');
 });

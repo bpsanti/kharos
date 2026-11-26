@@ -9,7 +9,8 @@ import { buildCreateBody, clean, gitBranch, MAX_INSTRUCTION_CHARS, sha256, sideB
 import { ConfigError, loadConfig, MAX_OPEN_TRADEOFF, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
 import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
-import type { Paths } from './paths.ts';
+import { unmigratedNote } from './accounts.ts';
+import { sharedPaths, type Paths } from './paths.ts';
 import { activeCount, bodyPath, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
@@ -70,7 +71,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   let config: Config;
   try {
     const loaded = loadConfig(paths);
-    if (!loaded.exists) throw new LaunchError(['kharos has no configuration yet: run /kharos:setup first.']);
+    if (!loaded.exists) throw new LaunchError([unmigratedNote(paths, sharedPaths(env), auth?.account ?? null) ?? 'kharos has no configuration yet: run /kharos:setup first.']);
     config = loaded.config;
     picked = pickProfile(config, opts.profile, auth?.account ?? null);
   } catch (err) {
