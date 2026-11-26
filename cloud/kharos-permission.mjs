@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// kharos permission hook, version 4. `kharos permissions hook` copies this file into a repository as
-// .claude/hooks/kharos-permission.mjs and rewrites it on every change: edit the rules in
-// .claude/kharos-permissions.json instead.
+// kharos permission hook, version 5. With unblock all, kharos writes this file as
+// .claude/hooks/kharos-permission.mjs, with its rules in .claude/kharos-permissions.json, on the side
+// branch of each launch, and writes both again at the next launch: do not edit them there.
 //
 // Claude Code runs it as a PermissionRequest hook, that is, only when a tool call is about to wait for a
 // person's approval. It decides only in cloud sessions (CLAUDE_CODE_REMOTE=true), where no person
@@ -15,8 +15,9 @@
 //   program, or that subcommand of it, with any arguments. The known global options a program takes
 //   before its subcommand are skipped (`Bash(git log:*)` covers `git --no-pager log`).
 // - A broad rule (an allow pattern, a mirrored rule or a prefix rule for a shell, an interpreter, a wrapper or any
-//   program) counts only when the rules file says `"broad": true`, which
-//   kharos writes only when the person asked for broad rules with --broad.
+//   program) counts only when the rules file says `"broad": true`, which kharos writes only when the
+//   rules hold a broad rule. Only the unblock preset brings one: it mirrors the organization's broad ask
+//   rules, and allows every prompt anyway.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
 //   right command or goes on without it instead of waiting.
 // - With the unblock preset (`"unblock": true`, which kharos writes only after the person confirmed
@@ -30,7 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HOOK_VERSION = 4;
+export const HOOK_VERSION = 5;
 
 /** The rules file, next to the hooks folder this script is in. */
 export const RULES_FILE = 'kharos-permissions.json';
