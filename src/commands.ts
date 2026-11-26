@@ -7,7 +7,7 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, followerReport, LEASE_STALE_MS, type FollowerInfo } from './lease.ts';
-import { activeCount, findSession, isFollowed, loadRegistry, logPath, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { activeCount, findSession, isFollowed, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, storedLogView } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
@@ -24,6 +24,7 @@ export function minutes(ms: number): string {
 function stateLabel(s: Session): string {
   if (s.step === 'closed') return 'closed';
   if (s.step === 'refused') return 'refused';
+  if (s.step === 'queued') return 'queued';
   if (s.step === 'prepared' || s.step === 'routine_created' || s.step === 'firing') return `launch ${s.step}`;
   return s.state.replace(/_/g, ' ');
 }
@@ -117,6 +118,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
   const used = activeCount(reg);
   if (used) lines.push(`slots: ${used} of watch.max_open ${watchConfig(paths).max_open} in use: ${slotHolders(reg, opts.now)}`);
+  lines.push(...queueLines(paths, opts.now));
   lines.push(...followerLines(paths, opts.now));
   lines.push(watcherLine(paths, opts.now));
   const lost = loadUndelivered(paths);
@@ -151,6 +153,8 @@ function need(paths: Paths, ref: string): Session {
 export function resume(paths: Paths, ref: string): string {
   const s = need(paths, ref);
   switch (s.step) {
+    case 'queued':
+      return takeSlot(paths, s.id);
     case 'prepared':
       return `${s.id}: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`;
     case 'routine_created':
@@ -164,6 +168,24 @@ export function resume(paths: Paths, ref: string): string {
     case 'closed':
       return `${s.id} is closed.`;
   }
+}
+
+/**
+ * A queued launch that a person asks to fire now: it takes a free slot, if one is free, and goes on as a
+ * prepared launch; otherwise it stays in the queue.
+ */
+function takeSlot(paths: Paths, id: string): string {
+  const max = watchConfig(paths).max_open;
+  return updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id];
+    if (!s || s.step !== 'queued') return resume(paths, id);
+    if (activeCount(reg) >= max) {
+      const place = queuedLaunches(Object.values(reg.sessions)).findIndex((x) => x.id === id) + 1;
+      return `${id} is still queued (${place} in line): every watch.max_open slot is taken (${slotHolders(reg, Date.now())}). It fires by itself when one frees; /kharos:close ${id} cancels it.`;
+    }
+    s.step = 'prepared';
+    return `${id}: a slot is free. Call RemoteTrigger with action "create" and body {"kharos_launch":"${id}"}.`;
+  });
 }
 
 const REARM_WINDOW_MS = 10 * 60_000;
@@ -321,6 +343,12 @@ export function close(paths: Paths, ref: string, now: number, forge: Forge | nul
     cur.closed_at = new Date(now).toISOString();
     cur.notice = null;
   });
+  if (s.step === 'queued') {
+    const lines = [`${s.id} was queued, and is cancelled: no routine was created and nothing was spent.`];
+    const side = closeSideBranch(paths, s, forge, now);
+    if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
+    return lines.join('\n');
+  }
   const lines = [`${s.id} is no longer followed.`];
   if (s.state !== 'finished' && s.state !== 'failed' && s.step === 'open') {
     lines.push(`The cloud session itself was not stopped (the tool has no stop action): ask it to stop with /kharos:send ${s.id}, or stop it at ${s.url}`);
@@ -373,4 +401,22 @@ export function writeProfile(paths: Paths, input: SetupInput): string {
   if (input.makeDefault || config.default_profile === null) config.default_profile = input.name;
   saveConfig(paths, config);
   return `${prev ? 'updated' : 'wrote'} profile ${input.name}: ${repoSlug(profile.repo)}@${profile.revision}, ${profile.environment}, ${profile.model}, deadline ${profile.deadline_min} min${config.default_profile === input.name ? ' (default)' : ''}\nconfig: ${paths.config}`;
+}
+
+/** The queued launches in line, for `kharos list` and the doctor; an empty list when there are none. */
+export function queueLines(paths: Paths, now: number): string[] {
+  const sessions = Object.values(loadRegistry(paths).sessions);
+  const queued = queuedLaunches(sessions);
+  const stalled = sessions.filter((s) => s.queue && s.step === 'routine_created' && s.queue.blocked);
+  if (queued.length === 0 && stalled.length === 0) return [];
+  const lines: string[] = [];
+  if (queued.length) {
+    const rows = queued.map((s, i) => {
+      const since = Math.max(0, Math.round((now - Date.parse(s.queue?.queued_at ?? s.created_at)) / 60_000));
+      return `${s.id} (${i + 1}${['st', 'nd', 'rd'][i] ?? 'th'} in line, queued ${since} min ago${s.queue?.blocked ? `; not fired: ${s.queue.blocked}` : ''})`;
+    });
+    lines.push(`queue: ${rows.join(', ')}. Each fires by itself when a slot frees, a paid action with nobody present; /kharos:close <id> cancels one.`);
+  }
+  for (const s of stalled) lines.push(`queue: ${s.id} was created but not fired: ${s.queue?.blocked}; /kharos:run --resume ${s.id} fires it once, /kharos:close ${s.id} cancels it.`);
+  return lines;
 }

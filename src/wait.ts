@@ -50,7 +50,7 @@ const READER_PROMPT =
 export function stopKey(s: Session): string {
   if (s.step === 'closed' || s.step === 'refused') return `end:${s.step}`;
   if (TERMINAL_STATES.has(s.state)) return `end:${s.state}`;
-  if (s.step === 'prepared' || s.step === 'routine_created') return `launch:${s.step}`;
+  if (s.step === 'queued' || s.step === 'prepared' || s.step === 'routine_created') return `launch:${s.step}`;
   if (!s.notice) return 'ok';
   if (s.notice.event === 'session.waiting_answer' && s.state !== 'waiting_answer') return 'ok';
   if (s.notice.event === 'session.unfollowed') return 'ok';
@@ -152,6 +152,7 @@ function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, fol
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
+  if (o.key === 'launch:queued') return `${s.id} is queued for a free watch.max_open slot, and fires by itself when one frees; /kharos:close ${s.id} cancels it.`;
   if (o.key.startsWith('launch:')) return `${s.id} was never fired (step ${s.step}); /kharos:run --resume ${s.id} fires it once.`;
   if (o.key.startsWith('end:')) {
     const r = o.result;

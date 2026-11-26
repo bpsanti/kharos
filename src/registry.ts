@@ -8,11 +8,13 @@ import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import type { OutputConfig } from './config.ts';
 import type { AlertRef } from './events.ts';
+import type { QueueRecord } from './queue.ts';
 import type { Paths } from './paths.ts';
 import type { PermissionRequest } from './permission-request.ts';
 
 /** Where the launch is. Each step is written before the call that depends on it. */
 export type Step =
+  | 'queued' // body written to disk, waiting for a free watch.max_open slot; kharos fires it by itself then
   | 'prepared' // body written to disk, routine not created yet
   | 'routine_created' // disabled routine exists, not fired
   | 'firing' // `run` allowed; the session id is not known yet
@@ -111,6 +113,8 @@ export interface Session {
   repo_ask?: string[] | null;
   /** The launch left out the footer line that asks the session to push work in progress (`--no-push`). */
   no_push?: boolean;
+  /** Present on a launch made with --queue that found every slot taken: its place in the queue and its fires. */
+  queue?: QueueRecord;
   /** Alerts (notices and ends) that no follower handed on yet, oldest first; the next follower sends them. */
   unacked?: AlertRef[];
   /** What automatic permission preflight did at launch; absent or null when it was off. */
@@ -173,7 +177,7 @@ export function bySessionId(reg: Registry, sessionId: string): Session | undefin
 
 /** Sessions the watcher still follows: launched or launching, not terminal, not closed. */
 export function isFollowed(s: Session): boolean {
-  if (s.step === 'closed' || s.step === 'refused' || s.step === 'prepared' || s.step === 'routine_created') return false;
+  if (s.step === 'closed' || s.step === 'refused' || s.step === 'queued' || s.step === 'prepared' || s.step === 'routine_created') return false;
   return !TERMINAL_STATES.has(s.state);
 }
 
@@ -189,13 +193,18 @@ export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
   }
 }
 
-/** A launch that holds a slot against max_open: anything that may run and is not finished. */
+/** A launch that holds a slot against max_open: anything that may run and is not finished; a queued launch waits for one. */
 function holdsSlot(s: Session): boolean {
-  return s.step !== 'closed' && s.step !== 'refused' && !TERMINAL_STATES.has(s.state);
+  return s.step !== 'closed' && s.step !== 'refused' && s.step !== 'queued' && !TERMINAL_STATES.has(s.state);
 }
 
-export function activeCount(reg: Registry): number {
+export function activeCount(reg: Pick<Registry, 'sessions'>): number {
   return Object.values(reg.sessions).filter(holdsSlot).length;
+}
+
+/** The launches waiting in the queue, in the order they fire: the oldest first. */
+export function queuedLaunches(sessions: Iterable<Session>): Session[] {
+  return [...sessions].filter((s) => s.step === 'queued').sort((a, b) => (a.queue?.queued_at ?? a.created_at).localeCompare(b.queue?.queued_at ?? b.created_at) || a.id.localeCompare(b.id));
 }
 
 const WAITING_ON_A_PERSON = new Set<State>(['waiting_answer', 'waiting_permission']);

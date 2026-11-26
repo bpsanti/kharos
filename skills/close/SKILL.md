@@ -1,5 +1,5 @@
 ---
-description: Stop following a cloud session in kharos, and show where to delete its routine.
+description: Stop following a cloud session in kharos, and show where to delete its routine; a queued launch is cancelled.
 disable-model-invocation: true
 argument-hint: '<id>'
 allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" close:*)

@@ -4,12 +4,14 @@
 import fs from 'node:fs';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import { readAuthStatus } from './account.ts';
+import { autoModeRefusal } from './account-mode.ts';
 import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256, sideBranchLines } from './body.ts';
 import { ConfigError, loadConfig, MAX_OPEN_TRADEOFF, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
 import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
-import { activeCount, bodyPath, formatId, slotHolders, updateRegistry, type Session } from './registry.ts';
+import { activeCount, bodyPath, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
+import { buildEvent, enqueue } from './events.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, loadConfirmation } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
@@ -30,6 +32,8 @@ export interface PrepareOptions {
   footer_lines?: string[];
   /** Leave out the footer line that asks the session to commit and push work in progress every 30 minutes. */
   no_push?: boolean;
+  /** When every watch.max_open slot is taken, queue the launch: kharos fires it by itself when a slot frees. */
+  queue?: boolean;
   claude_session: string | null;
   now: number;
   env?: NodeJS.ProcessEnv;
@@ -127,12 +131,23 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const auto = config.preflight_auto && policy ? planAuto(paths, config, profile, instruction, policy, forge, opts.now) : null;
   const repoAsk = recentRepoRules(paths, profile.repo, profile.revision, opts.now);
 
+  // A queued launch is fired later from a headless Claude Code in auto mode, where Claude Code's classifier approves the fire.
+  const autoOff = opts.queue ? autoModeRefusal(readManagedPolicy(env)) : null;
   const prepared = updateRegistry(paths, (reg) => {
-    if (activeCount(reg) >= config.watch.max_open) {
+    const ahead = queuedLaunches(Object.values(reg.sessions));
+    const full = activeCount(reg) + ahead.length >= config.watch.max_open;
+    if (full && !opts.queue) {
       throw new LaunchError([
-        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.`,
+        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.${ahead.length ? ` ${ahead.length} queued launch(es) wait for a slot before any new one: ${ahead.map((s) => s.id).join(', ')}.` : ''}`,
         `Close finished ones with /kharos:close, answer the ones that wait on you, or raise watch.max_open in ${paths.config}.`,
         `Raising it: ${MAX_OPEN_TRADEOFF}.`,
+        'Or queue it with --queue: kharos fires it by itself when a slot frees, a paid action with nobody present.',
+      ]);
+    }
+    if (full && autoOff) {
+      throw new LaunchError([
+        `Every watch.max_open slot is taken (${slotHolders(reg, opts.now)}), and ${autoOff}: a queued launch is fired in auto mode, so it could not be approved with nobody present.`,
+        'Launch it later, once a slot is free.',
       ]);
     }
     const id = formatId(reg.next_seq);
@@ -157,7 +172,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       created_at: createdAt,
       fired_at: null,
       runs_seen_empty_at: null,
-      step: 'prepared',
+      step: full ? 'queued' : 'prepared',
       state: 'launching',
       state_since: createdAt,
       pending_state: null,
@@ -179,9 +194,11 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       permission_hook: hookRules,
       repo_ask: repoAsk,
       ...(opts.no_push ? { no_push: true } : {}),
+      ...(full ? { queue: { queued_at: createdAt, tries: 0, next_try_at: null, blocked: null, fired_by_queue_at: null } } : {}),
       preflight: auto === null ? null : 'skipped' in auto ? { status: 'skipped', reason: auto.skipped } : { status: 'creating', branch: `kharos/${id}`, base: profile.revision, applied: auto.patterns },
     };
     reg.sessions[id] = s;
+    if (full) enqueue(paths, [buildEvent(s, 'session.queued', 'launching', `every watch.max_open slot is taken (${activeCount(reg)} of ${config.watch.max_open}); it fires by itself when one frees`, opts.now)]);
     return s;
   });
   if (auto === null || 'skipped' in auto) return prepared;

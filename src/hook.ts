@@ -26,6 +26,7 @@ import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
 import { health, isActiveWatcher } from './watch.ts';
 import { rearmFollowers, ROLE_ENV, type Spawner } from './follow.ts';
+import { kickQueue } from './queue.ts';
 
 export interface HookInput {
   hook_event_name: string;
@@ -133,6 +134,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
       if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return WATCHER_DENIED(action);
       const s = reg.sessions[launch];
       if (!s) return deny(`kharos: there is no prepared launch ${launch}. Run /kharos:run again.`);
+      if (s.step === 'queued') return deny(`kharos: launch ${launch} is queued for a free slot, and kharos creates it when one frees; /kharos:run --resume ${launch} takes a slot now if one is free.`);
       if (s.step !== 'prepared') return deny(`kharos: launch ${launch} is past creation (step ${s.step}); do not create it again.`);
       let body: unknown;
       try {
@@ -403,4 +405,16 @@ export function stop(ctx: Ctx, input: HookInput): HookOutput {
   if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return null;
   const r = rearmFollowers(ctx.paths, ctx.now, ctx.env, ctx.spawner);
   return r.lines.length ? { systemMessage: r.lines.join('\n') } : null;
+}
+
+/** The hooks after which a queued launch may fit in a slot that just freed: a read, and a turn end. */
+export const KICKS_QUEUE: ReadonlySet<string> = new Set(['post-tool-use', 'stop']);
+
+/** Starts the dispatcher of queued launches when one fits in a free slot; a hook never fails on it. */
+export function kick(ctx: Ctx): void {
+  try {
+    kickQueue(ctx.paths, ctx.now, ctx.env, ctx.spawner);
+  } catch {
+    // the next hook or command tries again
+  }
 }
