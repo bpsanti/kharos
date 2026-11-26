@@ -6,7 +6,9 @@ import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
-import { readRemoteSettings, type RemoteSettings } from './permissions.ts';
+import { readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
+import { hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
+import { readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
 import { loadEnvironments, loadWatch, type EnvironmentBook } from './state.ts';
@@ -30,6 +32,10 @@ export interface DoctorDeps {
   ownerType: (repo: string) => OwnerType;
   /** The repository's .claude/settings.json on the branch a session starts on. */
   settings: (repo: string, revision: string) => RemoteSettings;
+  /** The kharos permission hook's files on that branch. */
+  hookFiles: (repo: string, revision: string) => RemoteHookFiles;
+  /** The local copy of the organization's managed settings. */
+  managedPolicy: () => ManagedPolicy;
 }
 
 export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
@@ -42,6 +48,8 @@ export function realDeps(env: NodeJS.ProcessEnv): DoctorDeps {
     heads: (u, rev) => readRemoteHeads(u, rev, env),
     ownerType: (repo) => readOwnerType(repo, env),
     settings: (repo, rev) => readRemoteSettings(repo, rev, env),
+    hookFiles: (repo, rev) => readRemoteHookFiles(repo, rev, env),
+    managedPolicy: () => readManagedPolicy(env),
   };
 }
 
@@ -119,13 +127,24 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   const names = opts.profile ? [opts.profile] : Object.keys(config.profiles);
   if (names.length === 0) add('fail', 'profile', 'the configuration has no profile', ['Run /kharos:setup.']);
   add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})`);
+  const policy = deps.managedPolicy();
+  if (policy.status === 'found') {
+    add('info', 'managed policy', `${policy.file}: ${policy.ask.length} ask rule(s), ${policy.deny.length} deny rule(s); bypass mode ${policy.bypassDisabled ? 'disabled by the organization' : 'not disabled'}`);
+  } else if (policy.status === 'absent') {
+    add('info', 'managed policy', `no copy of organization managed settings at ${policy.file} (none for this account, or not fetched on this machine yet)`);
+  } else add('info', 'managed policy', `${policy.file} cannot be read (${policy.error}); its ask rules, if any, are not checked`);
+  if (config.permission_hook) {
+    add('warn', 'permission hook', `permission_hook is on: a repository that has the kharos permission hook answers permission prompts in its cloud sessions with no person asked; see what it allowed with \`kharos permissions approvals\``, [
+      'Turn it off with `kharos permissions hook disable`, and remove the hook from a repository with `kharos permissions hook diff --uninstall`.',
+    ]);
+  }
   for (const name of names) {
     const p = config.profiles[name];
     if (!p) {
       add('fail', `profile ${name}`, 'does not exist');
       continue;
     }
-    checkProfile(name, p, deps, add, repos ?? {}, envs);
+    checkProfile(name, p, deps, add, repos ?? {}, envs, config.permission_hook, policy);
   }
 
   const reg = state('registry', paths.registry, () => loadRegistry(paths));
@@ -146,6 +165,8 @@ function checkProfile(
   add: (l: Level, n: string, d: string, f?: string[]) => void,
   repos: RepoBook,
   envs: EnvironmentBook | null,
+  hookOn: boolean,
+  policy: ManagedPolicy,
 ): void {
   const slug = repoSlug(p.repo);
   const label = `${name}: repo`;
@@ -163,7 +184,7 @@ function checkProfile(
       `Set "revision" of profile ${name} to an existing branch.`,
     ]);
   } else add('ok', label, `${slug}@${p.revision}`);
-  if (!heads.readable || (!heads.empty && heads.hasRevision)) checkPermissions(name, p, deps, add);
+  if (!heads.readable || (!heads.empty && heads.hasRevision)) checkPermissions(name, p, deps, add, hookOn, policy);
 
   const access = repos[slug];
   if (access?.access === 'ok') add('ok', `${name}: claude access`, `a routine for ${slug} was created on ${access.checked_at.slice(0, 10)}`);
@@ -185,27 +206,92 @@ function checkProfile(
 }
 
 /** Which permission profile the branch a session starts on is on, and what in it would hold a session at a prompt. */
-function checkPermissions(name: string, p: Profile, deps: DoctorDeps, add: (l: Level, n: string, d: string, f?: string[]) => void): void {
+function checkPermissions(
+  name: string,
+  p: Profile,
+  deps: DoctorDeps,
+  add: (l: Level, n: string, d: string, f?: string[]) => void,
+  hookOn: boolean,
+  policy: ManagedPolicy,
+): void {
   const label = `${name}: permissions`;
   const where = `${repoSlug(p.repo)}@${p.revision}`;
   const fix = [`/kharos:permissions standard in a checkout of ${repoSlug(p.repo)} shows the change as a diff and writes it after you approve; then commit and push it to ${p.revision}.`];
   const remote = deps.settings(p.repo, p.revision);
   if (remote.status === 'unreadable') {
     add('info', label, `${SETTINGS_PATH} of ${where} could not be read with gh (${remote.error}); a cloud session uses the file on that branch`, [`Run /kharos:permissions in a checkout of ${repoSlug(p.repo)} to see its rules.`]);
+    checkManagedAsk(name, policy, [], hookOn, add);
     return;
   }
+  let settings;
   let rules;
   try {
-    rules = readRules(parseSettings(remote.status === 'found' ? remote.text : null));
+    settings = parseSettings(remote.status === 'found' ? remote.text : null);
+    rules = readRules(settings);
   } catch (err) {
     if (!(err instanceof SettingsError)) throw err;
     add('warn', label, `${SETTINGS_PATH} of ${where}: ${err.message}`, ['Fix the file on that branch.']);
+    checkManagedAsk(name, policy, [], hookOn, add);
     return;
   }
   const findings = assess(rules);
   const counts = `${rules.allow.length} allow, ${rules.ask.length} ask, ${rules.deny.length} deny`;
   const detail = [`${where} is on the ${identify(rules)} permission profile (${remote.status === 'absent' ? 'no settings file' : counts})`, ...findings.map((f) => f.text)].join('; ');
   add(findings.some((f) => f.level === 'warn') ? 'warn' : 'ok', label, detail, fix);
+  const mirrored = checkHook(name, p, settings, deps, add, hookOn);
+  checkManagedAsk(name, policy, mirrored, hookOn, add);
+}
+
+/** Whether the branch has the kharos permission hook, and what it answers; returns the organization rules it mirrors. */
+function checkHook(name: string, p: Profile, settings: Record<string, unknown>, deps: DoctorDeps, add: (l: Level, n: string, d: string, f?: string[]) => void, hookOn: boolean): string[] {
+  const label = `${name}: permission hook`;
+  const where = `${repoSlug(p.repo)}@${p.revision}`;
+  let named = false;
+  try {
+    named = hasHookEntry(settings);
+  } catch (err) {
+    if (!(err instanceof SettingsError)) throw err;
+    add('warn', label, `${SETTINGS_PATH} of ${where}: ${err.message}`);
+    return [];
+  }
+  if (!named) {
+    if (hookOn) add('info', label, `${where} has no kharos permission hook, so its cloud sessions still wait at every prompt`, [`/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the change; then commit and push it to ${p.revision}.`]);
+    return [];
+  }
+  const found = deps.hookFiles(p.repo, p.revision);
+  if (found.status === 'unreadable') {
+    add('info', label, `${where} names the kharos permission hook, but its files could not be read with gh (${found.error})`);
+    return [];
+  }
+  const st = hookState(found.files);
+  const problems: string[] = [];
+  if (st.script === 'missing') problems.push('the script is missing, so prompts still wait');
+  else if (st.script === 'outdated') problems.push('the script is not the one this kharos ships');
+  if (st.rules === null) problems.push(`there is no ${HOOK_RULES_PATH}, so the hook denies every prompt`);
+  else if ('error' in st.rules) problems.push(`${HOOK_RULES_PATH}: ${st.rules.error}, so the hook denies every prompt`);
+  if (!hookOn) problems.push('permission_hook is off, yet the hook answers prompts in cloud sessions on this branch');
+  const rules = st.rules && !('error' in st.rules) ? st.rules : null;
+  const what = rules
+    ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt ${rules.unmatched === 'deny' ? 'denied with the allowed forms' : 'left to the prompt'}`
+    : 'no usable rules';
+  add(problems.length ? 'warn' : 'info', label, [`${where} has the kharos permission hook: ${what}`, ...problems].join('; '), [
+    `/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the hook and changes it (or removes it with --uninstall); then commit and push to ${p.revision}.`,
+  ]);
+  return rules?.mirror ?? [];
+}
+
+/** The organization's ask rules that still stop this profile's cloud sessions at a prompt nobody answers. */
+function checkManagedAsk(name: string, policy: ManagedPolicy, mirrored: readonly string[], hookOn: boolean, add: (l: Level, n: string, d: string, f?: string[]) => void): void {
+  if (policy.status !== 'found') return;
+  const open = policy.ask.filter((r) => !mirrored.includes(r));
+  if (open.length === 0) return;
+  const fix = ["Ask the organization's administrator to narrow them; a repository allow rule cannot outrank them."];
+  fix.push(
+    hookOn
+      ? '/kharos:permissions hook can answer them with your own narrow allow patterns, or mirror them when the organization has not disabled bypass mode.'
+      : 'Or opt in to the kharos permission hook (`kharos permissions hook enable`), which answers them in cloud sessions with your own narrow allow patterns.',
+  );
+  add('warn', `${name}: managed ask rules`, `${open.length} organization ask rule(s) prompt in every cloud session, which has no bypass mode, and the session waits until a person answers: ${open.join(', ')}`, fix);
 }
 
 export function formatChecks(checks: Check[]): string {

@@ -159,7 +159,9 @@ test('account: only a hash of organization and login is kept', () => {
 });
 
 test('cli: arguments and versions', () => {
-  assert.deepEqual(parseArgs(['k-0001', '--all', '--profile', 'demo', '--title=a b']), { positional: ['k-0001'], flags: { all: true, profile: 'demo', title: 'a b' } });
+  assert.deepEqual(parseArgs(['k-0001', '--all', '--profile', 'demo', '--title=a b']), { positional: ['k-0001'], flags: { all: true, profile: 'demo', title: 'a b' }, lists: {} });
+  // --allow and --drop may repeat, and every value is kept in order
+  assert.deepEqual(parseArgs(['hook', 'diff', '--allow', 'psql -d *', '--allow=pg_isready', '--mirror', '.']), { positional: ['hook', 'diff', '.'], flags: { mirror: true }, lists: { allow: ['psql -d *', 'pg_isready'] } });
   assert.equal(versionAtLeast('2.1.332 (Claude Code)', [2, 1, 323]), true);
   assert.equal(versionAtLeast('2.1.300', [2, 1, 323]), false);
   assert.equal(versionAtLeast('3.0.0', [2, 1, 323]), true);

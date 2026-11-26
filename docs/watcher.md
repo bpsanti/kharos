@@ -74,6 +74,8 @@ A session archived in `list_runs` without an end mark becomes `ended_unmarked`, 
   A message sent while it is open shows as a `user` event but stays queued behind it, so it does not count as an answer; neither does the result of another call made in parallel.
   The `worker_status` of `list_runs` was only seen as `running` or `idle`, never with a value for a pending prompt, so the log event is the only sign kharos reads.
   Why a cloud session prompts at all, and how to change it: [permissions.md](permissions.md).
+- A prompt that the opt-in permission hook answers shows the same `permission prompt` line, followed within a second by the call's result, or by its refusal, which starts with `Refused by the kharos permission hook`.
+  When the session's branch had the hook at launch, the watcher puts each such line through the hook's own decision code with the branch's rules, and logs the decision with the rule that matched, never the command ([permissions.md](permissions.md#the-log-of-the-hooks-decisions)).
 
 If the cloud environment raises the Bash timeout, raise `silence_min` with it.
 

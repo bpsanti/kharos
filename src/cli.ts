@@ -9,7 +9,9 @@ import { formatChecks, realDeps, runDoctor } from './doctor.ts';
 import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, prepare, readInstruction } from './launch.ts';
 import { resolvePaths } from './paths.ts';
-import { diffPermissions, showPermissions, writePermissions } from './permissions.ts';
+import { formatHookDecisions } from './approvals.ts';
+import { diffHook, diffPermissions, showHook, showPermissions, switchHook, writeHook, writePermissions } from './permissions.ts';
+import type { HookChange } from './permission-hook.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
 import { readOutbox } from './events.ts';
@@ -18,16 +20,24 @@ import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed']);
+/** Flags that may be given more than once; each value is kept, in order. */
+const LIST_FLAGS = new Set(['allow', 'drop']);
 
 export interface Args {
   positional: string[];
   flags: Record<string, string | true>;
+  lists: Record<string, string[]>;
 }
 
 export function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
+  const lists: Record<string, string[]> = {};
+  const set = (name: string, v: string) => {
+    if (LIST_FLAGS.has(name)) (lists[name] ??= []).push(v);
+    else flags[name] = v;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a === '--') {
@@ -37,7 +47,7 @@ export function parseArgs(argv: string[]): Args {
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq > 0) {
-        flags[a.slice(2, eq)] = a.slice(eq + 1);
+        set(a.slice(2, eq), a.slice(eq + 1));
         continue;
       }
       const name = a.slice(2);
@@ -45,14 +55,14 @@ export function parseArgs(argv: string[]): Args {
       else {
         const v = argv[i + 1];
         if (v === undefined) throw new cmd.CommandError(`--${name} needs a value`);
-        flags[name] = v;
+        set(name, v);
         i++;
       }
       continue;
     }
     positional.push(a);
   }
-  return { positional, flags };
+  return { positional, flags, lists };
 }
 
 function flag(args: Args, name: string): string | undefined {
@@ -90,6 +100,10 @@ const USAGE = `usage: kharos <command>
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
   repo-init <owner/name>
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
+  permissions hook show [dir] | permissions hook enable | permissions hook disable
+  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--unmatched deny|prompt] [--mirror|--unmirror] [--uninstall] [dir]
+  permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
+  permissions approvals [--all] [--session k-0001] [--limit n]
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
@@ -194,7 +208,17 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         if (sub === 'show') out(showPermissions(paths, args.positional[1] ?? '.', env));
         else if (sub === 'diff') out(diffPermissions(args.positional[2] ?? '.', need(args, 1, 'default or standard'), env));
         else if (sub === 'write') out(writePermissions(paths, args.positional[2] ?? '.', need(args, 1, 'default or standard'), flag(args, 'expect'), env));
-        else throw new cmd.CommandError('permissions takes show, diff or write');
+        else if (sub === 'hook') {
+          const what = args.positional[1];
+          const dir = args.positional[2] ?? '.';
+          if (what === 'show') out(showHook(paths, dir, env));
+          else if (what === 'enable' || what === 'disable') out(switchHook(paths, what === 'enable'));
+          else if (what === 'diff') out(diffHook(paths, dir, hookChange(args), env));
+          else if (what === 'write') out(writeHook(paths, dir, hookChange(args), flag(args, 'expect'), args.flags['org-confirmed'] === true, env));
+          else throw new cmd.CommandError('permissions hook takes show, enable, disable, diff or write');
+        } else if (sub === 'approvals') {
+          out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
+        } else throw new cmd.CommandError('permissions takes show, diff, write, hook or approvals');
         return 0;
       }
       case 'due': {
@@ -238,6 +262,20 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
     }
     throw err;
   }
+}
+
+/** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */
+export function hookChange(args: Args): HookChange {
+  const unmatched = flag(args, 'unmatched');
+  if (unmatched !== undefined && unmatched !== 'deny' && unmatched !== 'prompt') throw new cmd.CommandError('--unmatched is deny or prompt');
+  return {
+    allow: args.lists.allow ?? [],
+    drop: args.lists.drop ?? [],
+    unmatched: unmatched ?? null,
+    mirror: args.flags.mirror === true,
+    unmirror: args.flags.unmirror === true,
+    uninstall: args.flags.uninstall === true,
+  };
 }
 
 /** How long delivery may run inside each hook that delivers, well inside its timeout in hooks.json. */

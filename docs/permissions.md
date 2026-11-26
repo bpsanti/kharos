@@ -1,8 +1,9 @@
 # Permissions in cloud sessions
 
 A cloud session that stops at a permission prompt waits until a person answers it on the session page.
-Nobody sees that prompt unless something says so: the watcher turns it into a `session.waiting_permission` event (see [watcher.md](watcher.md)), and `/kharos:permissions` changes what in the repository causes most prompts.
-kharos never answers a prompt: there is no documented way to answer one outside the session page, and it never uses the login.
+Nobody sees that prompt unless something says so: the watcher turns it into a `session.waiting_permission` event (see [watcher.md](watcher.md)), and `/kharos:permissions` changes what in the repository causes prompts.
+By default kharos never answers a prompt: there is no documented way to answer one outside the session page, and it never uses the login.
+The one exception is opt-in: the [permission hook](#the-permission-hook-opt-in), which a person turns on and installs in a repository, answers prompts inside the session with rules the person approved.
 
 ## Where the prompts come from
 
@@ -11,25 +12,43 @@ Each line below is from the Claude Code documentation, unless it says it comes f
 - A cloud session on one repository reads the repository's `.claude/settings.json`, because the file is part of the clone.
   It does not read `~/.claude/settings.json` or `.claude/settings.local.json`: both stay on the person's machine ([settings](https://code.claude.com/docs/en/settings)).
   kharos profiles have one repository each, so their sessions read that file.
+- A cloud session also gets the organization's server-managed settings, fetched from Anthropic's servers when it starts ([cloud environments](https://code.claude.com/docs/en/cloud-environments)).
+  Managed permission rules are the highest level: no other level, command line arguments included, can override them ([permissions](https://code.claude.com/docs/en/permissions)).
 - A session that a routine starts begins in auto mode, unless auto mode is not available ([scheduled tasks](https://code.claude.com/docs/en/routines)).
   Every kharos launch is a routine run.
 - In auto mode, actions that match an allow, ask or deny rule resolve at once; a classifier decides the rest ([permission modes](https://code.claude.com/docs/en/permission-modes)).
   - An `ask` rule always prompts, even in auto mode.
+  - A matching `ask` rule prompts even when a more specific `allow` rule also matches the same call ([permissions](https://code.claude.com/docs/en/permissions)): an allow rule never outranks an ask rule.
+  - An `ask` or `deny` rule matches when any subcommand of a compound command matches it, and past any variable assignment in front.
   - A `deny` rule always blocks, in every mode.
   - On entering auto mode, broad allow rules that grant arbitrary code execution are dropped: `Bash(*)` (the same rule as `Bash`), rules that start with a wildcard, wildcarded interpreters such as `Bash(python*)`, a wrapper followed only by a wildcard such as `Bash(timeout *)`, package-manager run commands, and `Agent` and `Monitor` rules.
     Narrow rules such as `Bash(npm test)` stay, and resolve before the classifier.
   - After the classifier blocks 3 actions in a row, or 20 in the session, a prompt appears in the run's session and waits until someone answers it; these numbers are not configurable.
-  - `autoMode` settings are read only from user settings, managed settings or `--settings`, never from a repository's `.claude/settings.json`.
+  - `autoMode` settings are read only from user settings, managed settings or `--settings`, never from a repository's `.claude/settings.json`; they do not act on `ask` rules, which resolve before the classifier.
 - Cloud sessions have no bypass mode: the mode menu offers Accept edits, Plan and Auto, and `bypassPermissions` and `dontAsk` in settings files are ignored.
   `defaultMode: "auto"` does not take effect from a repository's settings either; cloud sessions honor `acceptEdits`, and they pre-approve file edits in any mode.
+  On a person's machine a session in `bypassPermissions` mode does not stop at the organization's ask rules, unless the managed settings set `permissions.disableBypassPermissionsMode`; the same work in a cloud session stops at every one of them.
 - `permissions.denyInsteadOfPrompting`, which turns a prompt into a denial, is read only from user or managed settings, and a cloud session does not read the user's file.
+- A `PreToolUse` hook does not get past an ask rule: the rule still prompts when the hook returned allow.
+  A `PermissionRequest` hook runs when Claude Code is about to ask for permission, and allows or denies on behalf of the user; it cannot approve what a deny rule refuses ([hooks](https://code.claude.com/docs/en/hooks)).
+  Hooks of the repository run in cloud sessions too, unless the managed settings set `allowManagedHooksOnly`.
 - The `allowed_tools` list of a routine neither allows nor restricts anything, in two kharos tests.
   With `allowed_tools: ["Bash", "Read"]`, `Write` ran with no prompt; with `Bash` in the list, a Bash command that an `ask` rule of the repository covered still prompted.
 
-So, for a kharos launch, the prompts that wait for a person come from `ask` rules in the repository's `.claude/settings.json`, from repeated classifier blocks, from tools that always ask (such as `AskUserQuestion`, which the watcher reports as `waiting_answer`), and from every command not allowed by a rule when auto mode is not available.
+So, for a kharos launch, the prompts that wait for a person come from:
+
+- `ask` rules of the organization's managed settings, which no repository setting outranks;
+- `ask` rules in the repository's `.claude/settings.json`;
+- repeated classifier blocks;
+- tools that always ask, such as `AskUserQuestion`, which the watcher reports as `waiting_answer`;
+- every command not allowed by a rule, when auto mode is not available.
+
+In kharos tests, every prompt that stopped a cloud session came from a managed ask rule (the prompt records `reasonCode: "rule:policySettings"`), for local database clients such as `psql`, whatever the command line held.
+Narrow repository allow rules did not stop those prompts, and neither did `autoMode` settings.
+A repository `PermissionRequest` hook answered them with no person asked: it allowed the exact command it was given in every call, and a denial with a message let the session go on at once.
+`/kharos:doctor` lists the managed ask rules from the local copy of the managed settings, and warns about the ones that would stop a profile's sessions.
 No setting in the repository can allow everything: broad rules are dropped and no bypass mode exists.
-What helps is narrow allow rules for the commands the work needs.
-In cloud probes, some local database commands (psql against a local development Postgres) raised permission prompts even with no credential on the command line; expect prompts for such commands and use the waiting-on-permission alert.
+What helps is narrow allow rules for the commands the work needs, against repository ask rules and the classifier, and the opt-in permission hook, against ask rules of any level.
 
 Not tested yet:
 
@@ -76,6 +95,74 @@ The `make`, `./gradlew` and `mvn` rules are exact commands too: with a trailing 
 The settings file must be plain JSON; kharos refuses to edit a file it cannot parse.
 `write` takes the token that `diff` printed, and refuses when the file changed since, or when the token is for another change.
 
+## The permission hook (opt-in)
+
+The permission hook is off by default.
+`kharos permissions hook enable` sets `permission_hook: true` in the configuration, and `kharos permissions hook disable` sets it back.
+While it is off, kharos installs nothing and only alerts on prompts, as described above.
+While it is on, `/kharos:doctor` warns that it is on.
+
+`/kharos:permissions hook [folder]` works on a local checkout, with the same approve-the-diff flow as the permission profiles.
+`kharos permissions hook diff` shows the change, and `kharos permissions hook write --expect <token>` writes exactly that change, with the same flags; kharos never commits or pushes.
+The change touches three files:
+
+| File | What it holds |
+|---|---|
+| `.claude/settings.json` | one `PermissionRequest` entry, matcher `*`, that runs the script only when `CLAUDE_CODE_REMOTE` is `true`; every other key and hook stays |
+| `.claude/hooks/kharos-permission.mjs` | the script, a copy of [`cloud/kharos-permission.mjs`](../cloud/kharos-permission.mjs); Node.js only, no dependency |
+| `.claude/kharos-permissions.json` | the rules: `allow` patterns, `mirror` (mirrored organization ask rules) and `unmatched` |
+
+The script decides only in a cloud session, where `CLAUDE_CODE_REMOTE` is `true`; on a person's machine it says nothing and the prompt shows as usual.
+In a cloud session it answers each prompt, in this order:
+
+1. A Bash call that is one simple command and matches an allow pattern word for word is allowed.
+   An allow from the hook covers the whole call, so a command that is chained, piped, run in the background or redirected, that substitutes a command, expands a variable, has an unquoted wildcard, or sets a variable in front is never allowed, and neither is one over 600 characters.
+2. The same for a mirrored organization rule (see below).
+3. Anything else is denied, with a message that tells the session what to do instead.
+   When an allow pattern names the program, the message names each allowed form, so the session sends the right command; in kharos tests the next call was the allowed form after every such denial.
+   Otherwise it tells the session to go on without the call, or to stop and say what it needs.
+   In a kharos test in a cloud session started by a routine, the hook answered each prompt within 0.2 s: the exact form ran, a chained call and a call with a variable in front were denied with the allowed form, and the next call was that form.
+   With `"unmatched": "prompt"`, the hook only allows, and everything else waits for a person as it does without the hook: a fit for sessions someone watches on claude.ai.
+
+An allow pattern is a command whose words must match exactly, where a `*` word stands for exactly one word of any content:
+
+```
+kharos permissions hook diff --allow "psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc *" .
+```
+
+This allows `psql -h 127.0.0.1 -p 5432 -U dev -d app -Atc 'select 1'` and nothing longer, shorter or chained.
+kharos refuses a pattern whose program is a wildcard, or a shell, an interpreter or a wrapper (`bash`, `python3`, `env`, `sudo`, `xargs` and the like), since it would allow anything, and a pattern that a deny rule of the managed settings or of the repository covers, since a hook cannot approve what a deny rule refuses.
+`--drop <pattern>` removes a pattern, `--unmatched deny|prompt` sets what happens to the rest, and `--uninstall` removes the three files' kharos parts.
+
+### Mirroring the organization's ask rules
+
+Members of an organization that has not disabled bypass mode can run past its ask rules on their own machines; in a cloud session the same rules stop the work.
+`--mirror` turns the organization's ask rules into a cloud-only allow:
+
+- kharos reads only `permissions.ask`, `permissions.deny` and `disableBypassPermissionsMode` from the local copy of the managed settings, `~/.claude/remote-settings.json` (under `CLAUDE_CONFIG_DIR` when that is set), which Claude Code writes when it fetches them; it never writes that file.
+- With no copy, or one it cannot read, mirroring is unavailable and kharos says so: it never guesses the rules.
+- When the managed settings set `disableBypassPermissionsMode`, kharos refuses: the organization's ask rules then bind every session, on a person's machine too.
+- Otherwise the diff lists every ask rule it converts and every one it keeps as a prompt, with why: rules for other tools than Bash, a rule for every command, and rules for a shell, an interpreter or a wrapper stay prompts.
+- The diff carries a warning to check with the organization's administrator first, and the write needs `--org-confirmed` besides the token.
+- Deny rules are never copied, converted or changed.
+- A mirrored rule allows only a single simple command, like an allow pattern.
+- `--mirror` again refreshes the list from the current copy, and `--unmirror` removes it.
+
+### The log of the hook's decisions
+
+The hook runs in the cloud session, where kharos keeps no state, so the watcher writes the log on this machine.
+At launch, while `permission_hook` is on, kharos reads the hook's rules from the branch the session starts on.
+Each `permission prompt` line the watcher reads then goes through the same decision code the hook runs, and the decision goes to `~/.local/state/kharos/approvals.jsonl`: the time of the prompt, the kharos and cloud session ids, the tool, allow or deny, and the allow pattern or mirrored rule that matched.
+Never the command, nor any other input or output of the call.
+`kharos permissions approvals` lists the approvals; `--all` adds the denials, `--session k-0001` keeps one session.
+Sessions kharos does not follow (started on claude.ai, for example) are not in that log.
+The hook also returns a `systemMessage` with each approval, which Claude Code documents as shown to the user; in a kharos test it did not appear in the condensed run log, so the watcher does not rely on it.
+
+Limits:
+
+- A managed setting `allowManagedHooksOnly` blocks repository hooks; then only a change of the managed settings helps.
+- The hook allows what an organization chose to have a person approve; agree on it with whoever owns those rules.
+
 ## What the doctor says
 
 For each launch profile, `/kharos:doctor` reads `.claude/settings.json` on the branch the profile launches from, with the person's own `gh`, and reports which permission profile it is on: `standard`, `default` (no rules at all) or `custom`.
@@ -88,3 +175,6 @@ It warns when a launch would likely stall, or relies on something cloud sessions
 
 It notes `defaultMode: "auto"` and `autoMode` settings, which a repository's settings cannot set.
 When `gh` cannot read the file, the check is information only.
+
+It also reads the local copy of the organization's managed settings, and warns, per profile, about the ask rules that would stop its cloud sessions (the ones the branch's hook does not mirror).
+It warns while `permission_hook` is on, reports the hook on each branch (its rules, and whether the script and the rules file are usable), and warns when a branch has the hook while `permission_hook` is off.

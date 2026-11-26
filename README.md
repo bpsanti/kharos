@@ -48,7 +48,7 @@ It writes a profile, checks the repository, and tells you exactly what to fix: s
 |---|---|
 | `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
 | `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment, permission rules and limits, with the fix for each gap |
-| `/kharos:permissions [default\|standard] [folder]` | Shows the permission rules a repository gives its cloud sessions, and writes narrow allow rules to its `.claude/settings.json` after you approve the diff; never commits or pushes |
+| `/kharos:permissions [default\|standard\|hook] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session and records it |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
@@ -98,12 +98,14 @@ See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, a
 ## Permission prompts
 
 A cloud session that a routine starts runs in auto mode ([scheduled tasks](https://code.claude.com/docs/en/routines)).
-It still stops at a prompt for `ask` rules in the repository's `.claude/settings.json`, and after the classifier blocks 3 actions in a row or 20 in the session ([permission modes](https://code.claude.com/docs/en/permission-modes)).
-Cloud sessions have no bypass mode, and auto mode drops broad allow rules such as `Bash(*)`.
+It still stops at a prompt for `ask` rules, both the organization's managed ones and the repository's, and after the classifier blocks 3 actions in a row or 20 in the session ([permission modes](https://code.claude.com/docs/en/permission-modes)).
+Cloud sessions have no bypass mode, auto mode drops broad allow rules such as `Bash(*)`, and no allow rule outranks an ask rule.
 The routine's `allowed_tools` neither allows nor restricts anything there.
 `/kharos:permissions` shows a repository's rules, and adds narrow allow rules for its own commands (the `standard` profile).
-In cloud probes, some local database commands (psql against a local development Postgres) raised permission prompts even with no credential on the command line; expect prompts for such commands and use the waiting-on-permission alert.
-`/kharos:doctor` warns when a launch branch would likely stall, or relies on broad rules or modes that cloud sessions ignore: see [docs/permissions.md](docs/permissions.md).
+The opt-in permission hook (off by default) answers prompts in cloud sessions with your own narrow allow patterns, and denies the rest with a message that names the allowed form, so the session sends the right command instead of waiting.
+When the organization has not disabled bypass mode, it can also mirror the organization's ask rules as a cloud-only allow, after you confirm the list; deny rules are never touched.
+The watcher logs each of the hook's decisions, and `kharos permissions approvals` lists them.
+`/kharos:doctor` warns when a launch branch would likely stall, about managed ask rules that would stop a session, about broad rules or modes that cloud sessions ignore, and while the hook is on: see [docs/permissions.md](docs/permissions.md).
 
 ## Outputs
 
@@ -118,6 +120,7 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
+| `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |
 
 `KHAROS_HOME` moves both under one folder, which is how one machine serves several accounts.
 

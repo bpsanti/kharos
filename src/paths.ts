@@ -16,6 +16,8 @@ export interface Paths {
   environments: string;
   bodies: string;
   logs: string;
+  /** The kharos permission hook's decisions, as the watcher read them from session logs. */
+  approvals: string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
@@ -41,5 +43,6 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     environments: path.join(state, 'environments.json'),
     bodies: path.join(state, 'bodies'),
     logs: path.join(state, 'logs'),
+    approvals: path.join(state, 'approvals.jsonl'),
   };
 }
