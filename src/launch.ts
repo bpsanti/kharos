@@ -275,7 +275,7 @@ function planAuto(paths: Paths, config: Config, profile: Profile, instruction: s
     notes.push(
       refusal
         ? `the unblock preset was not applied: ${refusal}`
-        : `the unblock preset was not applied: ${unblockState.state === 'changed' ? describeConfirmation(unblockState, 'unblock') : 'it is not confirmed'}; \`kharos permissions unblock show\` lists what it opens`,
+        : `the unblock preset was not applied: ${unblockState.state === 'changed' ? describeConfirmation(unblockState, 'unblock') : 'it is not confirmed'}; \`kharos permissions unblock-all show\` lists what it opens and confirms it again, in one step`,
     );
   }
   if (!unblock && confirmation.state === 'changed') notes.push(`${describeConfirmation(confirmation)}, so the organization's ask rules were not mirrored: \`kharos permissions hook diff --mirror\` in a checkout asks again`);

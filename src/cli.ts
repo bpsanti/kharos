@@ -28,6 +28,7 @@ import { diffAccountMode, writeAccountMode } from './account-mode.ts';
 import { readManagedPolicy } from './managed-policy.ts';
 import { formatSetup, parseScheduleView, runSetup, SetupError } from './setup.ts';
 import { formatHookDecisions } from './approvals.ts';
+import { applyUnblockAll, showUnblockAll } from './unblock-all.ts';
 import { diffHook, diffPermissions, preflight, readRemoteFile, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
 import type { HookChange } from './permission-hook.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
@@ -120,19 +121,20 @@ const USAGE = `usage: kharos <command>
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
   setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is (or default)|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
+        [--permissions <as-is (or default)|standard|hook|standard+hook|auto-preflight|unblock|unblock-all [--unblock-expect token]|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
+  permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token>   (everything kharos can free for this account, in one step, or all of it taken back)
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
   permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
-  permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
   permissions preflight [dir] | permissions preflight --launch [--profile p] [--revision r]   [--stdin | --file f]: the launch instruction
-  permissions auto <preflight|unblock> <on|off>
-  permissions unblock show | permissions unblock confirm --fingerprint <fp>
+  permissions auto preflight <on|off>
   permissions unblock [dir]   (the same as permissions hook diff --unblock [dir]; --no-unblock turns it off)
+  advanced, one part of unblock-all at a time (docs/permissions.md): permissions unblock show | permissions unblock confirm --fingerprint <fp>
+    | permissions auto unblock <on|off> | permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
   follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
@@ -263,6 +265,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
             ...(intFlag(args, 'max-open') !== undefined ? { maxOpen: intFlag(args, 'max-open') as number } : {}),
             ...accountModeFlags(args),
+            ...(flag(args, 'unblock-expect') !== undefined ? { unblockExpect: flag(args, 'unblock-expect') as string } : {}),
             ...(tools !== undefined ? { allowed_tools: tools.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             ...(args.flags.connectors === true ? { connectors: true } : args.flags['no-connectors'] === true ? { connectors: false } : {}),
             makeDefault: args.flags.default === true,
@@ -306,6 +309,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             const instruction = file !== undefined ? readInstruction(file, stdin) : args.flags.stdin === true ? stdin() : '';
             out(preflight(paths, { dir: launch ? null : (args.positional[1] ?? '.'), ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), ...(launch && flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}), instruction }, env));
           }
+        } else if (sub === 'unblock-all') {
+          const [what, target] = [args.positional[1], args.positional[2]];
+          if (what === 'show' && (target === undefined || target === 'on' || target === 'off')) out(showUnblockAll(paths, env, target ?? 'on'));
+          else if ((what === 'on' || what === 'off') && target === undefined) out(applyUnblockAll(paths, env, what, flag(args, 'expect'), now));
+          else throw new cmd.CommandError('permissions unblock-all takes show [on|off], or on or off with --expect <token>');
         } else if (sub === 'unblock') {
           const what = args.positional[1];
           if (what === 'show') out(unblockShow(paths, env));
@@ -324,7 +332,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           } else throw new cmd.CommandError('permissions account-mode takes diff or write, then auto or off');
         } else if (sub === 'approvals') {
           out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
-        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto, account-mode or approvals');
+        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock-all, unblock, auto, account-mode or approvals');
         return 0;
       }
       case 'due': {

@@ -681,7 +681,7 @@ test('unblock: one confirmation of what it opens, for the managed settings finge
   const diff = await kharos(sb, 'permissions', 'unblock', dir);
   assert.match(diff.out, /WARNING: this change turns on the unblock preset/);
   assert.equal(diff.out, (await kharos(sb, 'permissions', 'hook', 'diff', '--unblock', dir)).out, 'the alias is the same diff as hook diff --unblock');
-  assert.match(diff.out, new RegExp(`first the person confirms what the unblock preset opens .*kharos permissions unblock confirm --fingerprint ${fp}`));
+  assert.match(diff.out, /first the person confirms what the unblock preset opens \(listed above\), once: `kharos permissions unblock-all show` confirms it/);
   assert.doesNotMatch(diff.out, /--org-confirmed/, 'the unblock confirmation covers the mirroring');
   const early = await kharos(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(diff.out), '--unblock', dir);
   assert.equal(early.code, 1);
@@ -748,5 +748,5 @@ test('unblock: the automatic mode puts it on each side branch while the confirma
     managedPolicy: () => POLICY,
     repoRole: () => 'admin',
   };
-  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps)), /warn  unblock preset: permission_unblock is on: the side branch of each launch gets the unblock preset/);
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps)), /warn  unblock all: partly on: on: the confirmation of the unblock preset, automatic unblock; missing: auto mode for the account/);
 });

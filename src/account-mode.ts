@@ -79,7 +79,8 @@ export interface Plan {
   summary: string;
 }
 
-function plan(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, policy: ManagedPolicy): Plan {
+/** The change to the account's user settings that `target` needs; `after` is null when there is nothing to change. Throws when it is not available. */
+export function planAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, policy: ManagedPolicy): Plan {
   const cur = readAccountMode(env);
   if ('error' in cur) throw new CommandError(`${cur.file} cannot be read (${cur.error}); kharos does not edit it`);
   if (target === 'auto') {
@@ -105,7 +106,7 @@ function plan(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, polic
 }
 
 export function diffAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, policy: ManagedPolicy): string {
-  const p = plan(paths, env, target, policy);
+  const p = planAccountMode(paths, env, target, policy);
   if (!p.after || !p.token) return p.summary;
   return [
     p.summary,
@@ -122,7 +123,7 @@ export interface ApprovedChange {
 /** The change an approved diff names, checked against the file as it is now; throws, having written nothing, when it no longer matches. */
 export function approveAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, expect: string | undefined, policy: ManagedPolicy): ApprovedChange {
   if (!expect) throw new CommandError('--expect needs the change token that `kharos permissions account-mode diff` printed, so only an approved diff is written');
-  const p = plan(paths, env, target, policy);
+  const p = planAccountMode(paths, env, target, policy);
   if (p.after && p.token !== expect) throw new CommandError(`${p.file} is not what that diff was made from (the file changed, or the diff was for another change); nothing was written. Show the diff again.`);
   return { target, plan: p };
 }
@@ -131,7 +132,7 @@ export function writeAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: A
   return applyAccountMode(paths, env, approveAccountMode(paths, env, target, expect, policy));
 }
 
-export function applyAccountMode(paths: Paths, env: NodeJS.ProcessEnv, { target, plan: p }: ApprovedChange): string {
+export function applyAccountMode(paths: Paths, env: NodeJS.ProcessEnv, { target, plan: p }: ApprovedChange, undo = '`kharos permissions account-mode diff off`'): string {
   if (!p.after) return p.summary;
   if (target === 'auto') {
     const cur = readAccountMode(env);
@@ -142,6 +143,6 @@ export function applyAccountMode(paths: Paths, env: NodeJS.ProcessEnv, { target,
   fs.writeFileSync(tmp, p.after, { mode: p.before === null ? 0o600 : fs.statSync(p.file).mode & 0o777 });
   fs.renameSync(tmp, p.file);
   return target === 'auto'
-    ? `wrote ${p.file}: this account starts its sessions in auto mode from the next session on, ${ACCOUNT_AUTO_CAVEAT}. Undo with \`kharos permissions account-mode diff off\`.`
+    ? `wrote ${p.file}: this account starts its sessions in auto mode from the next session on, ${ACCOUNT_AUTO_CAVEAT}. Undo with ${undo}.`
     : `wrote ${p.file}: this account's sessions start as before; each kharos launch asks for your approval again.`;
 }

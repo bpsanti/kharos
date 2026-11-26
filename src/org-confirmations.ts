@@ -60,7 +60,18 @@ export function saveConfirmation(paths: Paths, kind: ConfirmationKind, policy: F
   return c;
 }
 
-export type ConfirmationState = { state: 'none' } | { state: 'valid'; at: string } | { state: 'changed'; at: string; changes: string[] };
+/** Forgets one remembered confirmation; true when there was one. */
+export function forgetConfirmation(paths: Paths, kind: ConfirmationKind): boolean {
+  return withLock(paths.confirmations, () => {
+    const book = loadBook(paths);
+    if (!book[kind]) return false;
+    delete book[kind];
+    writeJsonAtomic(paths.confirmations, book);
+    return true;
+  });
+}
+
+export type ConfirmationState ={ state: 'none' } | { state: 'valid'; at: string } | { state: 'changed'; at: string; changes: string[] };
 
 function listChange(what: string, before: readonly string[], now: readonly string[]): string[] {
   const added = now.filter((r) => !before.includes(r));

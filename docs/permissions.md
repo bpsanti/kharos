@@ -243,6 +243,34 @@ When it finds nothing to apply, cannot read the branch, or cannot create the sid
 `/kharos:close` deletes the side branch, only while its tip is still the commit kharos made; a side branch with other commits is kept, with the command to delete it.
 `/kharos:doctor` shows whether automatic preflight is on.
 
+## Unblock all
+
+`/kharos:permissions unblock-all` (in a shell, `kharos permissions unblock-all show`) frees every prompt kharos can free for this Claude account, in one step.
+It lists, once, everything it frees and where each part stands, with one token for that exact change, and changes nothing until the person confirms all of it.
+`kharos permissions unblock-all on --expect <token>` then turns the parts on, in this order:
+
+1. The unblock preset, confirmed for the organization's managed settings as they are now (their fingerprint), as described below.
+2. Automatic unblock: `permission_hook`, `preflight_auto` and `permission_unblock` in this account's kharos configuration, so the side branch of each launch gets the preset.
+3. This account's sessions start in auto mode: `permissions.defaultMode: "auto"` in its own user settings, so launches need no approval prompt (see [Launch approval](setup.md#launch-approval)); every session of the account starts in auto mode then, not only launches.
+
+Each part keeps its own guards: parts 1 and 2 are left out when the organization disables bypass mode, when no copy of its managed settings can be read, or when it allows managed hooks only, and part 3 when it turns auto mode off; the list says which part is left out and why, and the rest is still turned on.
+A part that is on already is skipped, so running it again only finishes what is missing.
+The token holds only while the managed settings, the kharos configuration and the account's settings are what the list was made from; otherwise nothing changes and the list is shown again.
+When a part fails, the parts after it are not touched, and the error says which parts are on.
+`/kharos:permissions unblock-all off` (`kharos permissions unblock-all show off`, then `off --expect <token>`) takes all of it back: it forgets the confirmation, turns `permission_unblock` off and puts `permission_hook` and `preflight_auto` back as they were before, and sets the account's mode back to what it had.
+`/kharos:doctor` shows one `unblock all` line: on, partly on with what is missing, or off.
+`/kharos:setup` offers it as the `unblock-all` permission mode, with the same list and token.
+
+### Advanced: one part at a time
+
+The three parts stay available alone, for scripts and for someone who wants one without the others, such as the preset without auto mode, which changes every session of the account:
+
+| Part | Command |
+|---|---|
+| 1 | `kharos permissions unblock show`, then `kharos permissions unblock confirm --fingerprint <fp>` |
+| 2 | `kharos permissions hook enable`, then `kharos permissions auto unblock on` (`off` turns it off) |
+| 3 | `kharos permissions account-mode diff auto`, then `kharos permissions account-mode write auto --expect <token>` (`diff off` undoes it) |
+
 ## The unblock preset (opt-in)
 
 The unblock preset makes the hook allow every permission prompt it receives in cloud sessions, of any tool, instead of denying the ones no rule allows, so no session waits on a person.
@@ -255,9 +283,9 @@ It is off by default, and these limits stay:
 - Every allow goes to the decision log with its tool and the rule that matched, or `unblock` when none did.
 
 `kharos permissions unblock show` lists what it opens under the current managed settings, remote databases included (Amazon RDS, ElastiCache, DocumentDB, MongoDB Atlas connection strings, and the organization's ask rules for such hosts), and the fingerprint of those settings.
-The person confirms it once with `kharos permissions unblock confirm --fingerprint <fp>`; the confirmation holds while the fingerprint matches, and is asked again, with what changed, when it does not.
-Then `kharos permissions unblock <folder>` (the same as `kharos permissions hook diff --unblock <folder>`) shows the change, and `kharos permissions hook write --expect <token> --unblock <folder>` writes it; `--no-unblock` turns it off again.
-`kharos permissions auto unblock on` turns on automatic preflight with the preset (`permission_unblock` and `preflight_auto`): each launch's side branch gets it, while the confirmation matches.
+[Unblock all](#unblock-all) confirms it, with the rest of what it frees; the confirmation holds while the fingerprint matches, and is asked again, with what changed, when it does not.
+In one checkout instead, `kharos permissions unblock <folder>` (the same as `kharos permissions hook diff --unblock <folder>`) shows the change, and `kharos permissions hook write --expect <token> --unblock <folder>` writes it once the preset is confirmed; `--no-unblock` turns it off again.
+With automatic unblock (part 2 of unblock all), each launch's side branch gets it, while the confirmation matches.
 
 ## What the doctor says
 
@@ -273,4 +301,4 @@ It notes `defaultMode: "auto"` and `autoMode` settings, which a repository's set
 When `gh` cannot read the file, the check is information only.
 
 It also reads the local copy of the organization's managed settings, and warns, per profile, about the ask rules that would stop its cloud sessions (the ones the branch's hook does not mirror).
-It warns while `permission_hook` or `permission_unblock` is on, says whether automatic preflight is on, marks a branch whose hook has the unblock preset, reports the hook on each branch (its rules, and whether the script and the rules file are usable), and warns when a branch has the hook while `permission_hook` is off.
+It warns while `permission_hook` is on, shows one `unblock all` line (on, partly on with what is missing, or off), says whether automatic preflight is on, marks a branch whose hook has the unblock preset, reports the hook on each branch (its rules, and whether the script and the rules file are usable), and warns when a branch has the hook while `permission_hook` is off.

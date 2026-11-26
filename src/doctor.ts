@@ -15,6 +15,7 @@ import { followerProblems, queueLines } from './commands.ts';
 import { LEASE_STALE_MS } from './lease.ts';
 import { describePlan, loadMarker, planMigration } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
+import { describeUnblockAll, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO } from './unblock-all.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
@@ -192,11 +193,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
       'Turn it off with `kharos permissions auto preflight off`.',
     ]);
   }
-  if (config.permission_unblock) {
-    add('warn', 'unblock preset', `permission_unblock is on${config.preflight_auto && config.permission_hook ? '' : ' (inactive until preflight_auto and permission_hook are both on)'}: the side branch of each launch gets the unblock preset, so every permission prompt in its cloud session is allowed, of any tool, with no person asked, while your confirmation matches the organization's managed settings`, [
-      'Turn it off with `kharos permissions auto unblock off`; `kharos permissions approvals` lists what it allowed.',
-    ]);
-  }
+  checkUnblockAll(paths, opts.env, policy, config, add);
   const account = auth?.account ?? null;
   for (const name of names) {
     const p = config.profiles[name];
@@ -371,6 +368,23 @@ function checkPermissions(
   checkManagedAsk(name, policy, mirrored, hookOn, add);
 }
 
+/**
+ * One line for everything `kharos permissions unblock-all` frees: all on, partly on with what is missing, or off.
+ * On, even in part, it warns, since prompts are then answered with no person asked.
+ */
+function checkUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy, config: Config, add: Add): void {
+  const { overall, text } = describeUnblockAll(readUnblockAll(paths, env, policy, config).parts);
+  if (overall === 'on') {
+    add('warn', 'unblock all', `${text}: every permission prompt in the cloud sessions kharos launches is allowed, of any tool, with no person asked, and every session of this account starts in auto mode`, [
+      `Take all of it back with \`${UNBLOCK_ALL_UNDO}\`; \`kharos permissions approvals\` lists what the preset allowed.`,
+    ]);
+  } else if (overall === 'partly') {
+    add('warn', 'unblock all', text, [`\`${UNBLOCK_ALL_SKILL}\` turns on the rest after you confirm once, or \`${UNBLOCK_ALL_UNDO}\` shows how to take back what is on.`]);
+  } else {
+    add('ok', 'unblock all', `${text}; \`${UNBLOCK_ALL_SKILL}\` frees every prompt kharos can free for this account, in one step, after you confirm once`);
+  }
+}
+
 /** Whether this account starts its sessions in auto mode, where the classifier reviews each launch instead of an approval prompt. */
 function checkAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy, add: Add): void {
   const cur = readAccountMode(env);
@@ -381,12 +395,12 @@ function checkAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy, add: Ad
   const refusal = autoModeRefusal(policy);
   if (cur.mode === 'auto' && refusal) {
     add('warn', 'launch approval', `${cur.file} starts this account's sessions in auto mode, but ${refusal}, so each launch asks for approval and a headless one is denied`, [
-      'Ask the organization\'s administrator about auto mode, or take it out of your settings with `kharos permissions account-mode diff off`.',
+      `Ask the organization's administrator about auto mode, or take it out of your settings with \`${UNBLOCK_ALL_UNDO}\`.`,
     ]);
   } else if (cur.mode === 'auto') {
     add('ok', 'launch approval', `this account starts its sessions in auto mode (${cur.file}): Claude Code's classifier reviews each launch, interactive or headless, with no approval prompt, ${ACCOUNT_AUTO_CAVEAT}`);
   } else {
-    add('ok', 'launch approval', `this account's sessions start in ${cur.mode ?? 'the default'} mode, so each launch asks for your approval, and a headless one needs \`claude -p --permission-mode auto\`${refusal ? '' : '; /kharos:setup can start the account in auto mode'}`);
+    add('ok', 'launch approval', `this account's sessions start in ${cur.mode ?? 'the default'} mode, so each launch asks for your approval, and a headless one needs \`claude -p --permission-mode auto\`${refusal ? '' : `; \`${UNBLOCK_ALL_SKILL}\` starts it in auto mode, with the rest of what it frees`}`);
   }
 }
 

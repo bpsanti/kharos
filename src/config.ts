@@ -33,7 +33,7 @@ export interface Profile {
  * files change only through /kharos:permissions, after the person approves its diff, and the automatic modes
  * only when the person turns them on.
  */
-export const PERMISSION_CHOICES = ['as-is', 'standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock', 'auto-unblock'] as const;
+export const PERMISSION_CHOICES = ['as-is', 'standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock', 'unblock-all', 'auto-unblock'] as const;
 export type PermissionChoice = (typeof PERMISSION_CHOICES)[number];
 
 export function isPermissionChoice(v: unknown): v is PermissionChoice {

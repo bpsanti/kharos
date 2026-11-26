@@ -356,7 +356,7 @@ export function diffHook(paths: Paths, dir: string, change: HookChange, env: Nod
   const write = ['kharos permissions hook write', '--expect', plan.token, ...changeFlags(change), ...(ask ? ['--org-confirmed'] : []), shellQuote(co.root)].join(' ');
   const confirmFirst =
     unblock && unblock.state !== 'valid' && policy.status === 'found'
-      ? `; first the person confirms what the unblock preset opens (listed above), once, with \`kharos permissions unblock confirm --fingerprint ${policyFingerprint(policy)}\``
+      ? `; first the person confirms what the unblock preset opens (listed above), once: \`kharos permissions unblock-all show\` confirms it with the rest of what it frees, in one step (for this part alone, see Advanced in docs/permissions.md)`
       : '';
   return [
     ...plan.lines,
@@ -375,7 +375,7 @@ export function writeHook(paths: Paths, dir: string, change: HookChange, expect:
     const confirmed = confirmationState(loadConfirmation(paths, 'unblock'), policy);
     if (confirmed.state !== 'valid') {
       const why = confirmed.state === 'changed' ? describeConfirmation(confirmed, 'unblock') : 'the person has not confirmed what it opens';
-      throw new CommandError(`this change turns on the unblock preset, and ${why}: \`kharos permissions unblock show\` lists what it opens and the command that confirms it; nothing was written`);
+      throw new CommandError(`this change turns on the unblock preset, and ${why}: \`kharos permissions unblock-all show\` lists what it opens and confirms it, with the rest of what it frees, in one step (for this part alone, see Advanced in docs/permissions.md); nothing was written`);
     }
   } else if (plan.mirror && !orgConfirmed) {
     const remembered = confirmationState(loadConfirmation(paths, 'mirror'), policy, plan.mirror.broad.length > 0);
@@ -535,8 +535,8 @@ export function unblockShow(paths: Paths, env: NodeJS.ProcessEnv): string {
     lines.push(`not confirmed for these managed settings. Only after the person confirms all of the above, once: kharos permissions unblock confirm --fingerprint ${fp}`);
   }
   lines.push(
-    'then, in a checkout: `kharos permissions unblock <folder>` shows the change to the hook as a diff, written after you approve it (commit and push it yourself);',
-    `or at every launch, on a side branch of its own: kharos permissions auto unblock on (now ${config.permission_unblock ? 'on' : 'off'}).`,
+    `all of it in one step, with automatic unblock at every launch and auto mode for the account: kharos permissions unblock-all show (automatic unblock is ${config.permission_unblock ? 'on' : 'off'} now);`,
+    'or only in one checkout: `kharos permissions unblock <folder>` shows the change to the hook as a diff, written after you approve it (commit and push it yourself).',
   );
   return lines.join('\n');
 }
@@ -569,13 +569,13 @@ export function switchUnblockAuto(paths: Paths, on: boolean, env: NodeJS.Process
     return `permission_unblock is off in ${paths.config}: automatic preflight, while on, writes the suggested narrow rules again, and mirrors the organization's ask rules while a remembered mirror confirmation matches its managed settings.`;
   }
   if (!current.config.permission_hook) {
-    throw new CommandError('the unblock preset is part of the kharos permission hook, which is opt-in and off: turn it on with `kharos permissions hook enable` first');
+    throw new CommandError(`the unblock preset is part of the kharos permission hook, which is opt-in and off: \`kharos permissions unblock-all show\` turns the hook on with the rest, after one confirmation (for this part alone, see Advanced in docs/permissions.md)`);
   }
   const policy = readManagedPolicy(env);
   const refusal = mirrorRefusal(policy);
   if (refusal) throw new CommandError(`the unblock preset: ${refusal}`);
   if (confirmationState(loadConfirmation(paths, 'unblock'), policy).state !== 'valid') {
-    throw new CommandError("the unblock preset is not confirmed for the organization's managed settings as they are: `kharos permissions unblock show` lists what it opens and the command that confirms it");
+    throw new CommandError(`the unblock preset is not confirmed for the organization's managed settings as they are: \`kharos permissions unblock-all show\` lists what it opens and turns all of it on after one confirmation (for this part alone, see Advanced in docs/permissions.md)`);
   }
   saveConfig(paths, { ...current.config, preflight_auto: true, permission_unblock: true });
   return `permission_unblock and preflight_auto are on in ${paths.config}: at each launch kharos writes the unblock preset to a side branch kharos/<id> and the session starts there, while your confirmation matches the organization's managed settings; ${UNBLOCK_RISK}. /kharos:doctor warns while it is on.`;

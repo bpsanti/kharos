@@ -1,15 +1,16 @@
 ---
-description: Show the permission rules a repository gives its cloud sessions; list the prompts a launch is likely to hit (preflight); add narrow allow rules to its .claude/settings.json (the standard profile), or install the opt-in kharos permission hook or its unblock preset, each after the person approves the diff. Never commits or pushes.
+description: Show the permission rules a repository gives its cloud sessions; list the prompts a launch is likely to hit (preflight); add narrow allow rules to its .claude/settings.json (the standard profile), or install the opt-in kharos permission hook or its unblock preset, each after the person approves the diff; or free every prompt kharos can free for the account in one step (unblock-all), after one confirmation, and take it back (unblock-all off). Never commits or pushes.
 disable-model-invocation: true
-argument-hint: '[default|standard|hook|preflight|unblock|account-mode] [path of the repository checkout]'
-allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions account-mode diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions approvals:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions unblock show:*)
+argument-hint: '[default|standard|hook|preflight|unblock|unblock-all [off]] [path of the repository checkout]'
+allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions account-mode diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions approvals:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions unblock show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions unblock-all show:*)
 ---
 
 Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
 
 `kharos` below stands for `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos"`; always run it with that prefix.
 
-1. Split the request into what to do (`default`, `standard`, `hook`, `preflight` or `unblock`, if one is named) and the folder of the checkout (if one is named; otherwise `.`).
+1. Split the request into what to do (`default`, `standard`, `hook`, `preflight`, `unblock` or `unblock-all`, if one is named) and the folder of the checkout (if one is named; otherwise `.`).
+   For `unblock-all` (also when the person asks to free everything, or to unblock all at once), go to step 11 now: it needs no checkout.
 2. Run `kharos permissions show <folder>` and show its output to the person as it is.
    If it fails, show the error and stop.
 3. If the request named nothing to do, ask the person with AskUserQuestion: `standard` (narrow allow rules), `hook` (the opt-in permission hook, which answers prompts in cloud sessions), or keep everything as it is, with the one-line description of `standard` from the output.
@@ -43,10 +44,19 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
    2. If it is not confirmed, ask one AskUserQuestion that lists everything the output says it opens (every prompt allowed, the organization's ask rules, the remote databases, and what stays), whose yes option says the person accepts all of it.
       Only on an explicit yes, run the `kharos permissions unblock confirm --fingerprint <fp>` command it names, exactly, and show its output.
    3. Then follow `hook` from its step 4, with the flag `--unblock` (or `--no-unblock` to turn it off); the confirmation already covers the mirroring, so ask no second question about the organization.
-   4. The automatic mode (`kharos permissions auto unblock on|off`) is the person's to run; never run it for them.
+   4. To apply the preset at every launch instead, with the account in auto mode too, use `unblock-all` (step 11).
 8. Never commit, push, or open a pull request: say that the change takes effect for cloud sessions only once the person commits it and pushes it to the branch their launches start from, and that `/kharos:doctor` reads that branch.
-9. For `account-mode` (whether this Claude account starts its sessions in auto mode, where the classifier reviews each launch instead of an approval prompt):
+9. Only when the person names `account-mode` itself (an advanced part of `unblock-all`: whether this Claude account starts its sessions in auto mode, where the classifier reviews each launch instead of an approval prompt):
    1. Run `kharos permissions account-mode diff auto` (or `off` to undo it) and show its whole output as it is; if it says there is nothing to change, or that it is not available, stop.
    2. Ask with AskUserQuestion whether to write exactly this change, with the diff in the preview of the yes option and its effect (every session of this account, not only launches) in the question.
    3. Only on an explicit yes, run the `kharos permissions account-mode write ... --expect <token>` command the diff names, exactly, and show its output.
 10. When the person asks what the hook allowed, run `kharos permissions approvals` (add `--all` for the denials too, `--session <id>` for one session) and show its output as it is.
+11. For `unblock-all` (everything kharos can free for this account, in one step) or `unblock-all off` (all of it taken back):
+    1. Run `kharos permissions unblock-all show` (`kharos permissions unblock-all show off` for off) and show its whole output as it is.
+       If it says there is nothing to change or nothing to take back, stop.
+    2. Ask one AskUserQuestion: its question says, in plain words, every part the output turns on (or takes back) and what each frees, the parts it leaves out with why, and that auto mode changes every session of this account, not only launches; its yes option says the person accepts all of it, with the output's diff of the account's settings as the preview of that option.
+       Ask nothing else: this one question is the whole confirmation.
+    3. Only on an explicit yes, run the `kharos permissions unblock-all on --expect <token>` command the output names (`off --expect <token>` for off), exactly, and show its output.
+       If it stops part way, show the error as it is: it says which parts are on.
+       If Claude Code does not let you run it, show the command prefixed with `! ` so the person runs it here; never change the token.
+    4. Never name the separate commands of each part to the person; for one part alone, point to the Advanced section of docs/permissions.md.
