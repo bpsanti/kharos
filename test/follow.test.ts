@@ -4,12 +4,14 @@ import { test } from 'node:test';
 import { close } from '../src/commands.ts';
 import { readOutbox, transition } from '../src/events.ts';
 import { detachedSpawner, detachFollower, followerLog, followLoop, isHeadless, startFollowers, type Spawner } from '../src/follow.ts';
-import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
+import { postToolUse, preToolUse, stop, type HookInput } from '../src/hook.ts';
+import { runHook } from '../src/cli.ts';
+import { updateWatch } from '../src/state.ts';
 import { prepare } from '../src/launch.ts';
-import { LEASE_STALE_MS, liveFollowers, takeLease } from '../src/lease.ts';
+import { followerReport, HANDOVER_MS, LEASE_STALE_MS, liveFollowers, releaseLease, takeLease } from '../src/lease.ts';
 import { loadRegistry, type Session } from '../src/registry.ts';
 import { stopKey, type WaitOutcome } from '../src/wait.ts';
-import { HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
+import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
 const TRIG = 'trig_01TESTROUTINEAAAAAAAAAAA';
@@ -196,4 +198,77 @@ test('wait: a report for the shell loop says how to answer from a shell, and nev
   assert.doesNotMatch(shell.report, /kharos:follow/);
   const agent = outcome(s, 'session.waiting_answer|t', true, { waitedMs: 0, reads: 0, cost: 0 });
   assert.match(agent.report, /subagent_type "kharos:follow"/);
+});
+
+test('stop hook: at a turn end, an open session that nobody follows gets one follower process, and only one', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: string[][] = [];
+  // The spawned process gets the lease under its pid: this test's own process, so it counts as live.
+  const spawner: Spawner = (args) => (calls.push(args), process.pid);
+  const ctx = (now: number, env: NodeJS.ProcessEnv = sb.env) => ({ ...sb.ctx(now), env, spawner });
+  const input: HookInput = { hook_event_name: 'Stop', session_id: 'person' };
+
+  // Right after the fire, the follower may still be starting.
+  assert.equal(stop(ctx(T0 + 30_000), input), null);
+  // In kharos's own sessions (a reader, a follower process, a fire), nothing happens.
+  assert.equal(stop(ctx(T0 + 2 * MIN, { ...sb.env, KHAROS_ROLE: 'reader' }), input), null);
+  assert.equal(calls.length, 0);
+
+  const out = stop(ctx(T0 + 2 * MIN), input) as { systemMessage: string };
+  assert.deepEqual(calls, [['follow', id]]);
+  assert.match(out.systemMessage, /^kharos: k-0001 had no follower; a follower process reads it now \(pid \d+\)/);
+  assert.equal(followerReport(sb.paths, T0 + 2 * MIN)[0]?.kind, 'shell');
+  // The next turn end finds it followed.
+  assert.equal(stop(ctx(T0 + 2 * MIN + 1000), input), null);
+  assert.equal(calls.length, 1);
+});
+
+test('stop hook: a handover, the watcher, a closed or ended session, or no session start nothing', () => {
+  const sb = sandbox();
+  const calls: string[][] = [];
+  const spawner: Spawner = (args) => (calls.push(args), process.pid);
+  const ctx = (now: number) => ({ ...sb.ctx(now), spawner });
+  const input: HookInput = { hook_event_name: 'Stop', session_id: 'person' };
+  writeConfig(sb);
+  assert.equal(stop(ctx(T0), input), null, 'nothing open');
+  assert.equal(fs.existsSync(sb.paths.followers), false, 'and nothing written');
+
+  const id = openOne(sb);
+  // A follower agent is about to start again: its lease was handed over.
+  takeLease(sb.paths, id, T0, process.pid, 'agent');
+  releaseLease(sb.paths, id, process.pid, T0 + MIN);
+  assert.equal(stop(ctx(T0 + 2 * MIN), input), null);
+  assert.equal(calls.length, 0);
+  // The handover ran out: a follower process starts.
+  assert.ok(stop(ctx(T0 + MIN + HANDOVER_MS + 1000), input));
+  assert.equal(calls.length, 1);
+  fs.rmSync(sb.paths.followers, { recursive: true, force: true });
+
+  // The watcher runs: it reads the sessions nobody follows.
+  updateWatch(sb.paths, (w) => {
+    w.last_beat = new Date(T0 + 4 * MIN).toISOString();
+    w.interval_min = 10;
+  });
+  assert.equal(stop(ctx(T0 + 5 * MIN), input), null);
+  // The watcher session itself: nothing either, even once the watcher's heartbeat is old.
+  updateWatch(sb.paths, (w) => {
+    w.watchers['watcher-1'] = new Date(T0 + 39 * MIN).toISOString();
+  });
+  assert.equal(stop(ctx(T0 + 40 * MIN), { hook_event_name: 'Stop', session_id: 'watcher-1' }), null);
+  assert.equal(calls.length, 1);
+
+  close(sb.paths, id, T0 + 50 * MIN);
+  assert.equal(stop(ctx(T0 + 50 * MIN), input), null);
+  assert.equal(calls.length, 1);
+});
+
+test('stop hook: the plugin registers it, and the CLI runs it', async () => {
+  const hooks = JSON.parse(fs.readFileSync(new URL('../hooks/hooks.json', import.meta.url), 'utf8'));
+  assert.deepEqual(hooks.hooks.Stop[0].hooks[0].args.slice(1), ['hook', 'stop']);
+  const sb = sandbox();
+  writeConfig(sb);
+  const r = await captured(() => runHook('stop', sb.ctx(T0), () => JSON.stringify({ hook_event_name: 'Stop', session_id: 'person' })));
+  assert.equal(r.value, 0);
+  assert.equal(r.stdout, '');
 });

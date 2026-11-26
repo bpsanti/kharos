@@ -12,7 +12,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { CommandError } from './commands.ts';
 import { loadConfig, type OutputConfig } from './config.ts';
 import { buildEvent, enqueue } from './events.ts';
-import { claimFollower, LEASE_STALE_MS, releaseLease, takeLease } from './lease.ts';
+import { claimFollower, followerMayBeStarting, LEASE_STALE_MS, liveFollowers, releaseLease, takeLease } from './lease.ts';
+import { childEnv } from './outputs/env.ts';
+import { loadWatch } from './state.ts';
 import { deliver, filePath } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
@@ -118,12 +120,19 @@ export type Spawner = (args: string[], log: string, env: NodeJS.ProcessEnv) => n
 
 const CLI = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './cli.ts' : './cli.js', import.meta.url));
 
+/**
+ * Set in the environment of the processes kharos starts itself (a follower process, a reader, a fire of a
+ * queued launch), whose Claude Code sessions are kharos's own: the Stop hook does nothing there.
+ */
+export const ROLE_ENV = 'KHAROS_ROLE';
+
 export const detachedSpawner: Spawner = (args, log, env) => {
   fs.mkdirSync(path.dirname(log), { recursive: true });
   const fd = fs.openSync(log, 'a', 0o600);
   try {
     // A session of its own (setsid), so closing the Claude Code that started it, or its process group, leaves it running.
-    const child = spawn(process.execPath, [...process.execArgv, CLI, ...args], { detached: true, stdio: ['ignore', fd, fd], env });
+    // The plugin's options (such as the Slack webhook) reach hooks only, never a process that outlives one.
+    const child = spawn(process.execPath, [...process.execArgv, CLI, ...args], { detached: true, stdio: ['ignore', fd, fd], env: { ...childEnv(env), [ROLE_ENV]: 'follower' } });
     child.on('error', () => {});
     child.unref();
     return child.pid ?? null;
@@ -203,4 +212,35 @@ export function startFollowers(paths: Paths, ref: string | null, now: number, en
     'To follow with an agent inside a headless launch instead, start it with CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0: it then stays running until the session ends.',
   );
   return lines.join('\n');
+}
+
+/** Whether the watcher beat within three of its intervals: it reads the sessions nobody follows. */
+function watcherLive(paths: Paths, now: number): boolean {
+  const w = loadWatch(paths);
+  return w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
+}
+
+/**
+ * What the Stop hook does at every turn end: starts a follower process for each open session that no
+ * follower reads (no live lease and no handover) and whose launch is past its first minute. It reads only
+ * local files, and starts nothing while the watcher runs, which reads those sessions already. A follower
+ * process is started under the lease's lock, so two turn ends never start two for one session.
+ */
+export function rearmFollowers(paths: Paths, now: number, env: NodeJS.ProcessEnv, spawner: Spawner = detachedSpawner): { started: string[]; lines: string[] } {
+  const open = Object.values(loadRegistry(paths).sessions).filter(isFollowed);
+  if (open.length === 0) return { started: [], lines: [] };
+  const live = liveFollowers(paths, now);
+  const missing = open.filter((s) => !live.has(s.id) && !followerMayBeStarting(s, now)).sort((a, b) => a.id.localeCompare(b.id));
+  if (missing.length === 0 || watcherLive(paths, now)) return { started: [], lines: [] };
+  const started: string[] = [];
+  const lines: string[] = [];
+  for (const s of missing) {
+    const log = followerLog(paths, s.id);
+    const r = claimFollower(paths, s.id, now, () => spawner(['follow', s.id], log, env));
+    if ('started' in r) {
+      started.push(s.id);
+      lines.push(`kharos: ${s.id} had no follower; a follower process reads it now (pid ${r.started}), and writes to ${log}.`);
+    } else if ('failed' in r) lines.push(`kharos: ${s.id} has no follower, and a follower process could not be started; type /kharos:follow ${s.id}.`);
+  }
+  return { started, lines };
 }

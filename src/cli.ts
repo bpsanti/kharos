@@ -19,7 +19,7 @@ import {
   openBrowser,
   waitForEnvironment,
 } from './environment.ts';
-import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
+import { postToolUse, postToolUseFailure, preToolUse, sessionStart, stop, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
@@ -135,7 +135,7 @@ const USAGE = `usage: kharos <command>
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
   follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
-  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
+  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start|stop>`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
   const paths = resolvePaths(env);
@@ -446,6 +446,7 @@ const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unkno
   'post-tool-use': postToolUse,
   'post-tool-use-failure': postToolUseFailure,
   'session-start': sessionStart,
+  stop,
 };
 
 /**

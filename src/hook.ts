@@ -25,6 +25,7 @@ import { loadSetups, saveEnvironments, setupsFor, takeIntent } from './state.ts'
 import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
 import { health, isActiveWatcher } from './watch.ts';
+import { rearmFollowers, ROLE_ENV, type Spawner } from './follow.ts';
 
 export interface HookInput {
   hook_event_name: string;
@@ -42,6 +43,8 @@ export interface Ctx {
   deliveryBudgetMs?: number;
   /** Test seam: who owns a repository, for the access fix. Defaults to gh. */
   ownerType?: (repo: string) => OwnerType;
+  /** Test seam: how the Stop hook starts a follower process. */
+  spawner?: Spawner;
 }
 
 export type HookOutput = Record<string, unknown> | null;
@@ -387,4 +390,17 @@ export function sessionStart(ctx: Ctx, input: HookInput): HookOutput {
   void input;
   const h = health(ctx.paths, ctx.now);
   return h.ok ? null : { systemMessage: h.line };
+}
+
+/**
+ * At every turn end: an open session that no follower reads gets a follower process of its own, which
+ * goes on after this Claude Code exits. Nothing happens in kharos's own sessions (a reader, a follower
+ * process, a queued launch's fire, the watcher), and nothing reaches the network unless a follower is
+ * missing; the hook never holds the turn.
+ */
+export function stop(ctx: Ctx, input: HookInput): HookOutput {
+  if (ctx.env[ROLE_ENV]) return null;
+  if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return null;
+  const r = rearmFollowers(ctx.paths, ctx.now, ctx.env, ctx.spawner);
+  return r.lines.length ? { systemMessage: r.lines.join('\n') } : null;
 }

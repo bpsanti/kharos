@@ -65,10 +65,23 @@ The key is the open notice and when it opened, or `end:<state>` at the end, so t
 
 ## When the local session closes
 
-Closing the Claude Code session stops its followers with it; no process stays behind.
+Closing the Claude Code session stops its follower agents with it.
 The cloud session goes on, and the registry keeps the last state it read.
 After you open Claude Code again, the session start says which open sessions nobody follows, and `/kharos:follow` (or `/kharos:follow <id>`) starts a new follower for each.
 A new follower first reads the current state: a question asked or an end reached while nobody followed is reported at once.
+
+## The Stop hook
+
+At the end of every turn of any Claude Code session where kharos is loaded, its Stop hook looks for open sessions that no follower reads: no live lease, no handover, and a launch past its first minute.
+It starts a follower process for each (the one `kharos follow <id> --detach` starts), detached, so it outlives that Claude Code; its changes go to the outputs and to `logs/<id>.follower.log`, and the turn shows one line about it.
+
+- It is cheap: it reads the registry and the leases, local files only, and makes no model call and no network call unless a follower is missing; then the follower process it starts does the reading.
+- It never starts a second follower: a follower agent about to start again holds a handover, and a follower process is started under the lease's lock and gets the lease before it runs.
+- It starts nothing while the watcher runs (its heartbeat is within three intervals), since the watcher reads the sessions nobody follows, and nothing in kharos's own sessions: the readers, the follower processes and the watcher.
+- It never holds the turn, and a failure never reaches the session.
+
+So a follower that stops (its Claude Code was closed, or it gave up after failed reads) is replaced at the next turn end of any Claude Code session with kharos, interactive or headless.
+Between the last turn and the next one, nobody reads: for sessions that must be followed with no Claude Code open at all, run the watcher, or `kharos follow <id> --detach` from a shell, and check `kharos health` from cron or launchd.
 
 ## Headless launches
 

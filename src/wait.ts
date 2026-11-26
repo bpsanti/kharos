@@ -204,7 +204,8 @@ export const headlessRead: Reader = async (paths, read, env, now, timeoutMs) => 
     const params = Object.entries(read.params)
       .map(([k, v]) => `${k} "${v}"`)
       .join(' and ');
-    const childEnv = { ...env };
+    // A session of kharos's own: its Stop hook starts no follower.
+    const childEnv: NodeJS.ProcessEnv = { ...env, KHAROS_ROLE: 'reader' };
     delete childEnv.ANTHROPIC_API_KEY;
     const r = spawnSync(
       claudeBin(env),

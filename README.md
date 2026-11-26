@@ -121,6 +121,8 @@ Its report reaches your session like the result of any background subagent:
 
 After a report that is not the end, your session starts the follower again at once, and an answer you send does not wake it before the next real change.
 Closing Claude Code stops its followers; the cloud session goes on, and `/kharos:follow` picks the open sessions up again.
+At the end of every turn of a Claude Code session with kharos, its Stop hook starts a follower process (the one `kharos follow <id> --detach` starts) for each open session that no follower reads, so a follower that died is replaced without anyone asking.
+It reads only local files and calls nothing unless a follower is missing, starts nothing while the watcher runs, and never starts a second follower for a session.
 
 ### Headless launches
 
