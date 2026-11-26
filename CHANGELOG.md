@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A `KHAROS-QUESTION` or `KHAROS-DONE` stands when a repository's Stop hook answers right after it: the feedback of a hook, and a background task's notification, are text Claude Code writes as a `user` event, not a message from a person, so they no longer hide the mark.
 - `/kharos:setup` is one guided flow, once per Claude account: one list of everything a launch needs (account and plan, GitHub connection, repository access, cloud environment, commit identity, permission prompts, profile), in the order each depends on the one before, each with its state and the one action that fixes it, checked again after each fix; then a summary of at most six lines with the next action (`docs/setup.md`).
 - The cloud environment is picked by name from the account's environments, which the bundled `/schedule` skill lists with no routine needed; no `env_...` id is pasted by hand. The profile keeps the name (`environment_name`).
 - The first setup on a repository asks the permission mode once, listing every mode (as is, standard, the permission hook, mirroring, `--broad`, automatic preflight, the unblock preset, automatic unblock) with what it does and its trade-off, and the ones this account or organization rules out with why; the choice is recorded (`permissions`), and the files change only through `/kharos:permissions`.
