@@ -191,10 +191,14 @@ const SECRET_WORD_RE = /:\/\/[^/@]+@|:\/\/[^/@:]*:[^@]*@|[^/@:]*:[^/@]+@|(?:key|
 const TOKEN_PREFIX_RE = /(?:^|[=:])(?:sk_live_|sk_test_|rk_live_|sk-ant-|sk-proj-|github_pat_|gh[pousr]_|glpat-|xox[abprs]-|(?:AKIA|ASIA)[A-Z0-9]{16})/;
 /** A JSON Web Token: base64url JSON, which starts with `eyJ`. */
 const JWT_RE = /^eyJ[\w-]{8,}/;
-/** An option whose value is a credential: its last `-` separated part names one (--db-password, --github-token, --auth), or it ends in api-key, auth-token, access-key or secret-key. */
+/**
+ * An option whose value is a credential: its last `-` separated part names one (--db-password,
+ * --github-token, --auth), or it ends in api-key, auth-token, access-key or secret-key. A negation
+ * (--no-password) and an option that reads the credential from stdin (--with-token, --password-stdin) take none.
+ */
 function secretFlag(option: string): boolean {
   const o = option.toLowerCase();
-  if (!o.startsWith('-') || o.includes('=')) return false;
+  if (!o.startsWith('-') || o.includes('=') || o.startsWith('--no-') || o === '--with-token') return false;
   const last = o.split('-').pop() as string;
   return ['token', 'password', 'passwd', 'pass', 'secret', 'apikey', 'auth'].includes(last) || /(?:api|auth|access|secret)-(?:key|token)$/.test(o);
 }
@@ -218,9 +222,10 @@ function secretAt(values: readonly string[], i: number): boolean {
   const program = path.posix.basename(values[0] as string);
   const prev = i > 1 ? (values[i - 1] as string) : '';
   if (TOKEN_PREFIX_RE.test(w) || SECRET_WORD_RE.test(w) || JWT_RE.test(w)) return true;
-  if (secretFlag(prev)) return true;
+  const inline = /^(-{1,2}[^=]+)=/.exec(w);
+  if (secretFlag(prev) || (inline !== null && secretFlag(inline[1] as string))) return true;
   if ((prev === '-H' || prev === '--header') && /key|token|secret|auth/i.test(w.split(':')[0] as string)) return true;
-  if (program === 'curl' && (prev === '-u' || prev === '--user') && w.includes(':')) return true;
+  if (program === 'curl' && (((prev === '-u' || prev === '--user') && w.includes(':')) || /^(?:-u|--user=).*:/.test(w))) return true;
   if ((program === 'redis-cli' && prev === '-a') || (program === 'sshpass' && prev === '-p')) return true;
   if (program === 'aws' && values[1] === 'configure' && values[2] === 'set' && i === 4) return AWS_SECRET_RE.test(values[3] as string);
   if (/^(?:mysql|mysqldump|mysqladmin|mariadb)/.test(program) && /^-p.+/.test(w)) return true;
