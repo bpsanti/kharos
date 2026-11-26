@@ -109,6 +109,7 @@ An event is a one-line JSON object, `kharos.event.v1`:
 ```
 
 - `class` is `progress` (`session.opened`, `session.back`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
+- `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.
 - `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for.
   Only `session.waiting_answer` carries `question`, and only `session.finished` carries `summary`, both cleaned of control characters and cut.
 - Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for.

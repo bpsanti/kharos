@@ -18,7 +18,7 @@ The person wants this done once, with as few questions as possible: never ask wh
    If the skill is not available, or you have no RemoteTrigger tool, skip this step and add `--no-remote-tool` in step 3 when you have no RemoteTrigger tool.
 3. Run, with the lines of step 2 unchanged between the markers (nothing between them when you skipped it), and the choices the person made so far as flags:
    ```
-   kharos setup --repo <owner/repo> --from-schedule [--profile <name>] [--revision <branch>] [--environment "<name>"] [--confirmed] [--permissions <mode>] [--adopt <profiles>] <<'KHAROS_SCHEDULE'
+   kharos setup --repo <owner/repo> --from-schedule [--profile <name>] [--revision <branch>] [--environment "<name>"] [--confirmed] [--permissions <mode>] [--max-open <n>] [--adopt <profiles>] <<'KHAROS_SCHEDULE'
    <the lines of step 2>
    KHAROS_SCHEDULE
    ```
@@ -41,6 +41,8 @@ The person wants this done once, with as few questions as possible: never ask wh
      When the output says "Ask too: start this account's sessions in auto mode?", add a second question to the same call: yes (with the diff it prints as the preview of the yes option, and its effect on every session of the account in the description) or no.
      Then run step 3 again with `--permissions <mode>`, and with `--account-mode auto --account-expect <the token it printed>` on yes, or `--account-mode as-is` on no; setup writes the account's settings only on that yes.
      When the output still has another question open (the environment, or its setup script), ask them in the same AskUserQuestion call.
+   - `next: ask-max-open`: ask one AskUserQuestion with the numbers the output offers, the recommended one first, and its trade-off in the description; then run step 3 again with `--max-open <n>`.
+   - Whenever the output has a line that starts with `Ask too: open sessions:`, add that question to the AskUserQuestion call of this step, with the numbers it offers, and pass `--max-open <n>` from then on.
    - `next: ready`: the summary is the end of the setup.
      When its `Next:` line starts with `/kharos:permissions` and this folder is a checkout of the repository, carry it out now: run `kharos action permissions --session ${CLAUDE_SESSION_ID}` and follow the instructions it prints exactly, with the mode as their request.
      A command in it marked "yours to run" is the person's: show it, prefixed with `! ` so they can run it here, and never run it yourself.

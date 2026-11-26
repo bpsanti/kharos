@@ -16,6 +16,10 @@ It shows one list of everything a launch needs, in the order each step depends o
 6. Permission prompts: every mode kharos has, each with what it does and its trade-off, the ones this account or organization rules out marked with why; you pick one, once.
 7. Profile: written only when the steps above are settled, as the default profile when it is the first one.
 
+Once per account, it also asks how many cloud sessions may be open at once (`watch.max_open`), with the question it asks anyway, or alone before the profile is written.
+It offers 10 (the default), 5 or 20, and any number can be named.
+The cap is kharos's own: each open session spends plan usage like any other session, the service publishes no limit on concurrent cloud sessions, and it caps runs started by hand at 30 per routine and 100 per account per hour.
+
 It works on the first gap, checks again after you fix it, and asks only what it cannot settle itself.
 Run again, it asks nothing it already knows.
 It ends with a summary of at most six lines: ready or not, and the next action.

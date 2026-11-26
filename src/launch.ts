@@ -5,11 +5,11 @@ import fs from 'node:fs';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import { readAuthStatus } from './account.ts';
 import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256, sideBranchLines } from './body.ts';
-import { ConfigError, loadConfig, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
+import { ConfigError, loadConfig, MAX_OPEN_TRADEOFF, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
 import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
-import { activeCount, bodyPath, formatId, updateRegistry, type Session } from './registry.ts';
+import { activeCount, bodyPath, formatId, slotHolders, updateRegistry, type Session } from './registry.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, loadConfirmation } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
@@ -127,8 +127,9 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const prepared = updateRegistry(paths, (reg) => {
     if (activeCount(reg) >= config.watch.max_open) {
       throw new LaunchError([
-        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}.`,
-        'Close finished ones with /kharos:close, or raise watch.max_open in the configuration.',
+        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.`,
+        `Close finished ones with /kharos:close, answer the ones that wait on you, or raise watch.max_open in ${paths.config}.`,
+        `Raising it: ${MAX_OPEN_TRADEOFF}.`,
       ]);
     }
     const id = formatId(reg.next_seq);

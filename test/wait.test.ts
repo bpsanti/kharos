@@ -312,8 +312,11 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
 test('followers: the open sessions no live follower reads, health and list count followers', async () => {
   const sb = sandbox();
   const id = openOne(sb);
-  assert.match(health(sb.paths, T0).line, /^kharos: 1 open session\(s\) with no follower: k-0001 "Fix the typo\.", and the watcher never ran\. Type \/kharos:follow/);
-  assert.match(list(sb.paths, { all: false, now: T0 }), /no follower reads k-0001: type \/kharos:follow/);
+  // Within a minute of the fire, the follower may still be starting: no one is told to start another.
+  assert.doesNotMatch(list(sb.paths, { all: false, now: T0 + 30_000 }), /no follower reads/);
+  assert.equal(health(sb.paths, T0 + 30_000).ok, true);
+  assert.match(health(sb.paths, T0 + MIN).line, /^kharos: 1 open session\(s\) with no follower: k-0001 "Fix the typo\.", and the watcher never ran\. Type \/kharos:follow/);
+  assert.match(list(sb.paths, { all: false, now: T0 + MIN }), /no follower reads k-0001: type \/kharos:follow/);
   const start = followersToStart(sb.paths, null, T0);
   assert.ok(start.split('\n').includes(`The kharos command is: ${KHAROS}. The session id is ${id}.`));
   assert.match(start, /subagent_type "kharos:follow", run_in_background true/);

@@ -11,7 +11,8 @@ import { ACCOUNT_AUTO_CAVEAT, ACCOUNT_AUTO_EFFECT, applyAccountMode, approveAcco
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { findSetup, loadSetups, recordSetup } from './state.ts';
 import { clean } from './body.ts';
-import { isPermissionChoice, loadConfig, normalizeRepo, otherAccount, PERMISSION_CHOICES, repoSlug, saveConfig, type Config, type PermissionChoice, type Profile } from './config.ts';
+import { DEFAULT_WATCH, isPermissionChoice, loadConfig, MAX_OPEN_CHOICES, MAX_OPEN_TRADEOFF, maxOpenChosen, normalizeRepo, otherAccount, PERMISSION_CHOICES, repoSlug, saveConfig, type Config, type PermissionChoice, type Profile } from './config.ts';
+import { activeCount, loadRegistry } from './registry.ts';
 import { accountChecks, CHECKED_BY_CLAUDE_CODE, LAUNCH_APPROVAL, runDoctor, type Check, type DoctorDeps } from './doctor.ts';
 import { hooksBlocked, mirrorRefusal, type ManagedPolicy } from './managed-policy.ts';
 import { hasHookEntry, hookState, UNBLOCK_RISK } from './permission-hook.ts';
@@ -139,14 +140,24 @@ export type Next =
       /** The change that starts this account's sessions in auto mode, to ask about with its diff; null when it is not asked. */
       account: { diff: string; token: string } | null;
     }
+  /** How many cloud sessions may be open at once (watch.max_open), asked once per account. */
+  | { kind: 'ask-max-open' }
   | { kind: 'ready'; summary: string[] }
   | { kind: 'not-ready'; summary: string[] };
+
+/** The watch.max_open question, asked once per account: the values to offer, recommended first, and the sessions open now. */
+export interface MaxOpenQuestion {
+  options: number[];
+  open: number;
+}
 
 export interface SetupResult {
   repo: string;
   profile: string;
   steps: Step[];
   next: Next;
+  /** Asked with the question of `next`, or as `next` itself once nothing else is open; null once answered. */
+  maxOpen: MaxOpenQuestion | null;
 }
 
 export interface SetupInput {
@@ -171,6 +182,8 @@ export interface SetupInput {
   accountExpect?: string;
   /** The person said the picked environment is set up for the repository (it runs its setup script). */
   confirmed?: boolean;
+  /** How many cloud sessions may be open at once, the person's answer to the watch.max_open question. */
+  maxOpen?: number;
   /** The folders every account shared, when this account has files of its own. */
   shared: Paths | null;
   /** Profiles of the shared files whose account kharos cannot tell, that the person said are theirs; [] for none. */
@@ -548,9 +561,17 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     permQuestion = { kind: 'ask-permissions', options, offer: choice ? [] : offer(options, standardInPlace ? 'as-is' : 'standard'), account };
   }
 
+  // The cap on open sessions, kharos's own: asked once per account, with the next question that is asked anyway.
+  const maxOpen: MaxOpenQuestion | null =
+    input.maxOpen === undefined && !maxOpenChosen(paths) ? { options: [...MAX_OPEN_CHOICES], open: activeCount(loadRegistry(paths)) } : null;
+
   // 7. The profile, written once everything above is settled.
   const blockedAt = steps.findIndex((s) => s.state === 'missing' || s.state === 'choose' || s.state === 'waiting');
-  const result = (next: Next): SetupResult => ({ repo: slug, profile: name, steps, next });
+  const result = (next: Next): SetupResult => ({ repo: slug, profile: name, steps, next, maxOpen });
+  if (blockedAt < 0 && maxOpen) {
+    add('choose', `${name}: written once you say how many cloud sessions may be open at once`, 'Pick watch.max_open, asked once for this account.');
+    return result({ kind: 'ask-max-open' });
+  }
   if (blockedAt >= 0) {
     add('waiting', `${name}: written once steps 1 to ${TITLES.length - 1} are settled`);
     const s = steps[blockedAt] as Step;
@@ -587,9 +608,13 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     });
   }
   if (acctChange) applyAccountMode(paths, input.env, acctChange);
-  if (input.accountMode !== undefined) {
+  if (input.accountMode !== undefined || input.maxOpen !== undefined) {
     const cfg = loadConfig(paths).config;
-    saveConfig(paths, { ...cfg, account_mode: input.accountMode });
+    saveConfig(paths, {
+      ...cfg,
+      ...(input.accountMode !== undefined ? { account_mode: input.accountMode } : {}),
+      ...(input.maxOpen !== undefined ? { watch: { ...cfg.watch, max_open: input.maxOpen } } : {}),
+    });
   }
   const isDefault = /\(default\)/.test(written.split('\n')[0] ?? '');
   add('ok', written.split('\n')[0] as string);
@@ -624,6 +649,15 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
 
 export class SetupError extends Error {}
 
+function maxOpenQuestion(q: MaxOpenQuestion, also: boolean): string {
+  const [rec, ...rest] = q.options;
+  return (
+    `${also ? 'Ask too: open sessions: h' : 'H'}ow many cloud sessions may be open at once on this account (watch.max_open, asked once)? ` +
+    `Offer ${rec} (recommended)${rest.length ? `, ${rest.join(', ')}` : ''}; any positive number can be named. ` +
+    `Trade-off: ${MAX_OPEN_TRADEOFF}. Open now: ${q.open}; the default is ${DEFAULT_WATCH.max_open}.`
+  );
+}
+
 const LABEL: Record<StepState, string> = { ok: 'ok', missing: 'missing', choose: 'choose', check: 'check', note: 'note', waiting: 'waiting' };
 
 /** The report: the whole list up front while something is left, the short summary once it is ready. */
@@ -655,6 +689,8 @@ export function formatSetup(r: SetupResult): string {
     if (n.offer.length) lines.push(`To offer in the question, recommended first: ${n.offer.join(', ')}; any other available mode above can be named.`);
     if (n.account) lines.push('', `Ask too: start this account's sessions in auto mode? Yes writes this change (token ${n.account.token}); no leaves the account as it is.`, n.account.diff);
   }
+  // Asked in the same AskUserQuestion call as the question of this step, or alone once it is the last one.
+  if (r.maxOpen && n.kind.startsWith('ask-')) lines.push('', maxOpenQuestion(r.maxOpen, n.kind !== 'ask-max-open'));
   lines.push(`next: ${n.kind === 'person' ? `person (step ${n.step})` : n.kind}`);
   return lines.join('\n');
 }

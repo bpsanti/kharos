@@ -8,7 +8,7 @@ import { clean } from './body.ts';
 import type { WatchConfig } from './config.ts';
 import { oneLine, readOutbox, type KharosEvent } from './events.ts';
 import type { Paths } from './paths.ts';
-import { liveFollowers } from './lease.ts';
+import { followerMayBeStarting, liveFollowers } from './lease.ts';
 import { collectGarbage, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
 import { loadWatch, updateWatch } from './state.ts';
 import { settle, watchConfig } from './track.ts';
@@ -188,7 +188,7 @@ export function health(paths: Paths, now: number, watch: WatchConfig = watchConf
     .sort((a, b) => a.id.localeCompare(b.id));
   if (open.length === 0) return { ok: true, line: 'kharos: no open session' };
   const followers = liveFollowers(paths, now);
-  const nobody = open.filter((s) => !followers.has(s.id));
+  const nobody = open.filter((s) => !followers.has(s.id) && !followerMayBeStarting(s, now));
   const byFollowers = open.length - nobody.length;
   if (nobody.length === 0) return { ok: true, line: `kharos: ${open.length} open session(s), each read by a follower` };
   const w = loadWatch(paths);

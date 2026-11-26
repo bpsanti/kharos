@@ -18,11 +18,26 @@ export interface TrackCtx {
 
 const SAID = new Set(['assistant', 'result']);
 
-/** Events after the last message from a person: marks in the prompt or in older turns do not count. */
+/**
+ * Text that Claude Code itself puts into the session as a `user` event: the feedback of a hook that held
+ * the turn open (a repository's Stop hook asking to push, say), or a background task's notification.
+ * Observed: `user: Stop hook feedback: [command hook]: ...`.
+ */
+const SYSTEM_USER_RE = /^\s*(?:[A-Z][A-Za-z]* hook feedback:|<task-notification>)/;
+
+/** A `user` event that Claude Code wrote, not a message from a person. */
+export function isSystemUser(e: LogEvent): boolean {
+  return e.kind === 'user' && SYSTEM_USER_RE.test(e.text);
+}
+
+/**
+ * Events after the last message from a person: marks in the prompt or in older turns do not count.
+ * A hook's feedback or a task notification is no such message, so a mark written just before it stands.
+ */
 export function sinceLastUser(events: readonly LogEvent[]): LogEvent[] {
   let last = -1;
   events.forEach((e, i) => {
-    if (e.kind === 'user') last = i;
+    if (e.kind === 'user' && !isSystemUser(e)) last = i;
   });
   return events.slice(last + 1);
 }

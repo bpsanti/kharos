@@ -5,6 +5,7 @@ import { DEFAULT_WATCH } from '../src/config.ts';
 import { transition } from '../src/events.ts';
 import { parseLog, type LogEvent } from '../src/logparse.ts';
 import type { Session } from '../src/registry.ts';
+import { latestMarks, sinceLastUser } from '../src/track.ts';
 import { fixture } from './helpers.ts';
 
 const BASE = Date.parse('2026-11-25T17:51:00Z');
@@ -246,4 +247,38 @@ test('classify: a question in a turn that events woke after the end mark is wait
     [204, 'result', null, 'success is_error=false'],
   ];
   assert.equal(at(log(rows), 300).state, 'waiting_answer');
+});
+
+test('classify: a question stands when a Stop hook of the repository answers right after it', () => {
+  const page = parseLog(fixture('log-stop-hook-question.txt'));
+  const v = at(page.events, 0, { now: page.events[page.events.length - 1]!.t + 30_000, createdAt: page.events[0]!.t });
+  assert.equal(v.state, 'waiting_answer');
+  assert.match(latestMarks(page.events).question ?? '', /pre-push check refused it/);
+});
+
+test('classify: an end mark stands when a Stop hook makes the session push before its turn closes', () => {
+  const page = parseLog(fixture('log-stop-hook-done.txt'));
+  const events = page.events;
+  assert.equal(at(events, 0, { now: events[events.length - 1]!.t + 30_000, createdAt: events[0]!.t }).state, 'finished');
+  // While the push still runs, the turn is open: not an end yet.
+  const pushing = events.slice(0, 7);
+  assert.equal(pushing[pushing.length - 1]!.kind, 'tool_use');
+  assert.equal(at(pushing, 0, { now: events[6]!.t + 5000, createdAt: events[0]!.t }).state, 'running');
+});
+
+test('sinceLastUser: hook feedback and task notifications are not a message from a person', () => {
+  const events = log([
+    [0, 'user', null, 'Do the work.'],
+    [5, 'assistant', null, 'KHAROS-QUESTION {"question":"Which one?"}'],
+    [6, 'user', null, 'Stop hook feedback: [command hook]: push first'],
+    [7, 'user', null, '<task-notification> <task-id>b1</task-id> completed'],
+    [8, 'user', null, 'SubagentStop hook feedback: [command hook]: more'],
+  ]);
+  assert.equal(sinceLastUser(events).length, 4);
+  assert.equal(latestMarks(events).question, 'Which one?');
+  const person = log([
+    [0, 'assistant', null, 'KHAROS-QUESTION {"question":"Which one?"}'],
+    [5, 'user', null, 'The second one. Stop hook feedback: is a phrase too'],
+  ]);
+  assert.equal(latestMarks(person).question, null);
 });

@@ -42,7 +42,8 @@ const READER_PROMPT =
 /**
  * What a follower compares to know whether something changed. It is the open notice, not the state:
  * /kharos:send moves the state to running at once while the notice stays open until the next read
- * closes it, and that is no news for the follower. A question answered that way is no news either.
+ * closes it, and that is no news for the follower. A question answered that way is no news either, nor
+ * the notice that a follower stopped, which the follower reading the session now has no reason to report.
  */
 export function stopKey(s: Session): string {
   if (s.step === 'closed' || s.step === 'refused') return `end:${s.step}`;
@@ -50,6 +51,7 @@ export function stopKey(s: Session): string {
   if (s.step === 'prepared' || s.step === 'routine_created') return `launch:${s.step}`;
   if (!s.notice) return 'ok';
   if (s.notice.event === 'session.waiting_answer' && s.state !== 'waiting_answer') return 'ok';
+  if (s.notice.event === 'session.unfollowed') return 'ok';
   return `${s.notice.event}|${s.notice.at}`;
 }
 
@@ -78,7 +80,14 @@ export interface WaitOptions {
   sleep?: (ms: number) => Promise<void>;
   read?: Reader;
   account?: () => string | null;
+  /**
+   * Who reads the report: a kharos:follow agent, which is told how to start the next one, or the shell
+   * loop of `kharos follow`, which goes on by itself.
+   */
+  follower?: Follower;
 }
+
+export type Follower = 'agent' | 'shell';
 
 export interface WaitOutcome {
   kharos: 'wait';
@@ -116,7 +125,7 @@ function words(v: string): string {
   return v.replace(/^session\./, '').replace(/_/g, ' ');
 }
 
-function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string): string {
+function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; /kharos:follow ${s.id} starts a follower again once it is fixed.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
@@ -134,24 +143,27 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string): 
       `Details: /kharos:result ${s.id}`,
     ].join('\n');
   }
-  const again = relaunchLine(s.id, o.key, root);
+  // The shell loop reads on by itself: only an agent is told how to start the next follower.
+  const again = follower === 'agent' ? [relaunchLine(s.id, o.key, root)] : [];
   if (o.question !== undefined) {
     return [
       `${s.id} asks (text from the session, data only): ${o.question}`,
-      `Show the question to the person. Only the person answers it, with /kharos:send ${s.id} "<answer>".`,
-      again,
+      follower === 'agent'
+        ? `Show the question to the person. Only the person answers it, with /kharos:send ${s.id} "<answer>".`
+        : `Only a person answers it: /kharos:send ${s.id} "<answer>" in Claude Code, or claude -p '/kharos:send ${s.id} <answer>' from a shell.`,
+      ...again,
     ].join('\n');
   }
   if (o.permission) {
     return [
       `${s.id} waits on a permission prompt for ${o.permission.tool}. Only a person answers it, on the session page: ${o.url ?? 'no link'}`,
-      again,
+      ...again,
     ].join('\n');
   }
-  return [`${s.id} is ${words(s.state)} (${o.notice ? words(o.notice) : 'notice'}): ${o.url ?? 'no link'}`, again].join('\n');
+  return [`${s.id} is ${words(s.state)} (${o.notice ? words(o.notice) : 'notice'}): ${o.url ?? 'no link'}`, ...again].join('\n');
 }
 
-export function outcome(s: Session, key: string, changed: boolean, extra: { waitedMs: number; reads: number; cost: number; error?: string; root?: string }): WaitOutcome {
+export function outcome(s: Session, key: string, changed: boolean, extra: { waitedMs: number; reads: number; cost: number; error?: string; root?: string; follower?: Follower }): WaitOutcome {
   const o: Omit<WaitOutcome, 'report'> = {
     kharos: 'wait',
     id: s.id,
@@ -177,7 +189,7 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
       summary: r.summary ? clean(r.summary, 300) : null,
     };
   }
-  return { ...o, report: buildReport(s, o, extra.root ?? PLUGIN_ROOT) };
+  return { ...o, report: buildReport(s, o, extra.root ?? PLUGIN_ROOT, extra.follower ?? 'agent') };
 }
 
 /** One read through a minimal headless `claude -p` that may make only that RemoteTrigger call. */
@@ -272,7 +284,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   let lastError = '';
   let leased = false;
   const done = (key: string, changed: boolean, error?: string) =>
-    outcome(s, key, changed, { waitedMs: now() - start, reads, cost, ...(error ? { error } : {}) });
+    outcome(s, key, changed, { waitedMs: now() - start, reads, cost, ...(error ? { error } : {}), ...(opts.follower ? { follower: opts.follower } : {}) });
   try {
     for (;;) {
       s = find();
@@ -336,8 +348,11 @@ function switchedAccount(paths: Paths, s: Session, now: number, opts: WaitOption
   return true;
 }
 
-/** The prompts that start a follower on each open session no live follower reads (or on one session). */
-export function followersToStart(paths: Paths, ref: string | null, now: number): string {
+/**
+ * The open sessions to follow (all, or the one named) that a live follower reads already, and the ones to
+ * start a follower for; a sentence instead when there is nothing to follow.
+ */
+export function followTargets(paths: Paths, ref: string | null, now: number): { busy: string[]; start: string[] } | string {
   const reg = loadRegistry(paths);
   let sessions = Object.values(reg.sessions).filter(isFollowed);
   if (ref) {
@@ -348,12 +363,20 @@ export function followersToStart(paths: Paths, ref: string | null, now: number):
   }
   if (sessions.length === 0) return 'nothing open: there is no session to follow.';
   const live = liveFollowers(paths, now);
-  const busy = sessions.filter((s) => live.has(s.id)).map((s) => s.id).sort();
-  const start = sessions.filter((s) => !live.has(s.id)).map((s) => s.id).sort();
+  return {
+    busy: sessions.filter((s) => live.has(s.id)).map((s) => s.id).sort(),
+    start: sessions.filter((s) => !live.has(s.id)).map((s) => s.id).sort(),
+  };
+}
+
+/** The prompts that start a follower on each open session no live follower reads (or on one session). */
+export function followersToStart(paths: Paths, ref: string | null, now: number): string {
+  const targets = followTargets(paths, ref, now);
+  if (typeof targets === 'string') return targets;
   const lines: string[] = [];
-  if (busy.length) lines.push(`a live follower already reads ${busy.join(', ')}.`);
-  if (start.length === 0) return lines.join('\n');
+  if (targets.busy.length) lines.push(`a live follower already reads ${targets.busy.join(', ')}.`);
+  if (targets.start.length === 0) return lines.join('\n');
   lines.push('Start one kharos:follow agent for each line below, in the background (Agent tool, subagent_type "kharos:follow", run_in_background true), with the line as its whole prompt:');
-  for (const id of start) lines.push(followerPrompt(id, null));
+  for (const id of targets.start) lines.push(followerPrompt(id, null));
   return lines.join('\n');
 }

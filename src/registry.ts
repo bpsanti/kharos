@@ -174,13 +174,33 @@ export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
   for (const s of Object.values(reg.sessions)) {
     if (!s.closed_at || now - Date.parse(s.closed_at) < LOG_RETENTION_MS) continue;
     fs.rmSync(logPath(paths, s.id), { force: true });
+    fs.rmSync(path.join(paths.logs, `${s.id}.follower.log`), { force: true });
     fs.rmSync(bodyPath(paths, s.id), { force: true });
   }
 }
 
-/** Counts launches that hold a slot against max_open: everything that may run and is not finished. */
+/** A launch that holds a slot against max_open: anything that may run and is not finished. */
+function holdsSlot(s: Session): boolean {
+  return s.step !== 'closed' && s.step !== 'refused' && !TERMINAL_STATES.has(s.state);
+}
+
 export function activeCount(reg: Registry): number {
-  return Object.values(reg.sessions).filter((s) => s.step !== 'closed' && s.step !== 'refused' && !TERMINAL_STATES.has(s.state)).length;
+  return Object.values(reg.sessions).filter(holdsSlot).length;
+}
+
+const WAITING_ON_A_PERSON = new Set<State>(['waiting_answer', 'waiting_permission']);
+
+/** The launches that hold a slot, each with its state; one that waits on a person says for how long. */
+export function slotHolders(reg: Registry, now: number): string {
+  const rows = Object.values(reg.sessions)
+    .filter(holdsSlot)
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((s) => {
+      if (s.step !== 'open') return `${s.id} launch ${s.step.replace(/_/g, ' ')}`;
+      const label = `${s.id} ${s.state.replace(/_/g, ' ')}`;
+      return WAITING_ON_A_PERSON.has(s.state) ? `${label} for ${Math.max(0, Math.round((now - Date.parse(s.state_since)) / 60_000))} min` : label;
+    });
+  return rows.length ? rows.join(', ') : 'none';
 }
 
 export function bodyPath(paths: Paths, id: string): string {

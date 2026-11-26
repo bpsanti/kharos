@@ -102,8 +102,26 @@ export const DEFAULT_WATCH: WatchConfig = {
   quiet_end_min: 40,
   loop_failures: 4,
   renotify_min: 60,
-  max_open: 5,
+  max_open: 10,
 };
+
+/**
+ * What a person weighs when choosing watch.max_open: kharos's own cap, since the service publishes none
+ * for concurrent cloud sessions.
+ */
+export const MAX_OPEN_CHOICES = [10, 5, 20] as const;
+export const MAX_OPEN_TRADEOFF =
+  'each open session spends plan usage like any other session (ten at once spend ten times); the service publishes no limit on concurrent cloud sessions, and caps runs started by hand at 30 per routine and 100 per account per hour';
+
+/** Whether the configuration file sets watch.max_open itself, rather than taking the default. */
+export function maxOpenChosen(paths: Paths): boolean {
+  try {
+    const raw = JSON.parse(fs.readFileSync(paths.config, 'utf8')) as { watch?: Record<string, unknown> };
+    return typeof raw?.watch === 'object' && raw.watch !== null && raw.watch.max_open !== undefined;
+  } catch {
+    return false;
+  }
+}
 
 export const DEFAULT_PROFILE_FIELDS = {
   revision: 'main',

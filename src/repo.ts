@@ -5,6 +5,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
+import { ghSpawnError } from './forge.ts';
 import { repoSlug } from './config.ts';
 import type { Paths } from './paths.ts';
 
@@ -146,7 +147,7 @@ export function initialCommit(repo: string, env: NodeJS.ProcessEnv = process.env
     ['api', '-X', 'PUT', `repos/${slug}/contents/README.md`, '-f', 'message=Initial commit', '-f', `content=${content}`, '--jq', '.commit.sha'],
     { encoding: 'utf8', timeout: 30_000, env },
   );
-  if (r.error) return { ok: false, detail: 'gh is not installed: create the first commit on github.com instead' };
+  if (r.error) return { ok: false, detail: `${ghSpawnError(r.error, 30_000).error}: create the first commit on github.com instead` };
   if (r.status !== 0) return { ok: false, detail: (r.stderr || '').trim().slice(0, 300) || 'gh api failed' };
   return { ok: true, detail: `README.md committed (${r.stdout.trim().slice(0, 12)})` };
 }

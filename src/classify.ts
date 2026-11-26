@@ -7,7 +7,7 @@ import type { WatchConfig } from './config.ts';
 import type { LogEvent } from './logparse.ts';
 import { describePermission, type PermissionRequest } from './permission-request.ts';
 import type { State } from './registry.ts';
-import { latestMarks, sinceLastUser } from './track.ts';
+import { isSystemUser, latestMarks, sinceLastUser } from './track.ts';
 
 /** A condition someone should hear about. `null` means nothing to report. */
 export type NoticeKind =
@@ -135,10 +135,11 @@ export function classify(input: ClassifyInput): Verdict {
 
   // finished: the end mark after the last message from a person, no work in its own turn after it,
   // and no question after it. Events (pull request activity, CI) can wake a finished session with no
-  // message from a person (an `init` with no `user`); once those turns close again, the end mark stands.
+  // message from a person (an `init` with no `user`), and so can a hook that holds the turn open (a
+  // repository's Stop hook asking to push); once those turns close again, the end mark stands.
   if (marks.done?.status === 'ok' && marks.questionAt < marks.doneAt) {
     const after = turn.slice(marks.doneAt + 1);
-    const woke = after.findIndex((e) => e.kind === 'init');
+    const woke = after.findIndex((e) => e.kind === 'init' || isSystemUser(e));
     const sameTurn = woke < 0 ? after : after.slice(0, woke);
     if (!sameTurn.some((e) => WORK.has(e.kind))) {
       if (woke < 0) return { state: 'finished', notice: 'finished', reason: 'the session wrote its end mark' };

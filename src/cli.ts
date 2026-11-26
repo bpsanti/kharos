@@ -36,9 +36,10 @@ import { deliver, deliveryLine } from './outputs/index.ts';
 import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
-import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
+import { detachFollower, followLoop, startFollowers } from './follow.ts';
+import { wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -112,13 +113,13 @@ function need(args: Args, i: number, what: string): string {
 const USAGE = `usage: kharos <command>
   prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
-  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id
+  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id | log <id> [lines] --cached
   send <id>   (text on stdin) | result <id> | close <id>
   doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
   setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
+        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
@@ -133,6 +134,7 @@ const USAGE = `usage: kharos <command>
   permissions unblock [dir]   (the same as permissions hook diff --unblock [dir]; --no-unblock turns it off)
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
+  follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
@@ -182,6 +184,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'log': {
         const lines = args.positional[1] ? Number(args.positional[1]) : 15;
         if (!Number.isInteger(lines) || lines <= 0 || lines > 200) throw new cmd.CommandError('lines must be between 1 and 200');
+        if (args.flags.cached === true) {
+          out(cmd.cachedLog(paths, need(args, 0, 'session id'), lines));
+          return 0;
+        }
         out(cmd.logRequest(paths, need(args, 0, 'session id'), lines, flag(args, 'session') ?? '', now));
         return 0;
       }
@@ -236,6 +242,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             ...(intFlag(args, 'deadline') !== undefined ? { deadline_min: intFlag(args, 'deadline') as number } : {}),
             ...(flag(args, 'environment') !== undefined ? { environment: flag(args, 'environment') as string } : {}),
             ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
+            ...(intFlag(args, 'max-open') !== undefined ? { maxOpen: intFlag(args, 'max-open') as number } : {}),
             ...accountModeFlags(args),
             ...(tools !== undefined ? { allowed_tools: tools.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             ...(args.flags.connectors === true ? { connectors: true } : args.flags['no-connectors'] === true ? { connectors: false } : {}),
@@ -327,8 +334,16 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         return 0;
       }
       case 'followers':
-        out(followersToStart(paths, args.positional[0] ?? null, now));
+        out(startFollowers(paths, args.positional[0] ?? null, now, env));
         return 0;
+      case 'follow': {
+        const id = need(args, 0, 'session id');
+        if (args.flags.detach === true) {
+          out(detachFollower(paths, id, now, env));
+          return 0;
+        }
+        return await followLoop(paths, { id, env, write: out });
+      }
       case 'health': {
         const h = health(paths, now);
         out(h.line);

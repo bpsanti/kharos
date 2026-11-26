@@ -39,7 +39,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 }
 
 function input(sb: Sandbox, over: Partial<SetupInput> = {}): SetupInput {
-  return { repo: 'example/demo', makeDefault: false, view: parseScheduleView(LISTED), here: 'example/demo', noRemoteTool: false, shared: null, adopt: null, now: T0, env: sb.env, accountMode: 'as-is', ...over };
+  return { repo: 'example/demo', makeDefault: false, view: parseScheduleView(LISTED), here: 'example/demo', noRemoteTool: false, shared: null, adopt: null, now: T0, env: sb.env, accountMode: 'as-is', maxOpen: 10, ...over };
 }
 
 test('setup: reads the environments and the GitHub heads-up the /schedule skill shows', () => {
@@ -410,4 +410,37 @@ test('setup: asks once whether this account starts in auto mode, writes it only 
   assert.equal(r2.next.account, null);
   assert.match(r2.next.options.find((o) => o.id === 'account-auto')?.unavailable ?? '', /disableAutoMode/);
   assert.throws(() => diffAccountMode(fresh.paths, env, 'auto', noAuto), /disableAutoMode/);
+});
+
+test('setup: asks once per account how many sessions may be open at once, with the next question asked anyway', () => {
+  const sb = sandbox();
+  const unasked = (over: Partial<SetupInput>): SetupInput => {
+    const i = input(sb, over);
+    delete i.maxOpen;
+    return i;
+  };
+  // The question rides along with the permission question, in the same AskUserQuestion call.
+  let r = runSetup(sb.paths, unasked({ environment: 'demo' }), deps());
+  assert.equal(r.next.kind, 'ask-permissions');
+  assert.deepEqual(r.maxOpen, { options: [10, 5, 20], open: 0 });
+  assert.match(formatSetup(r), /^Ask too: open sessions: how many cloud sessions may be open at once on this account \(watch\.max_open, asked once\)\? Offer 10 \(recommended\), 5, 20;/m);
+  assert.match(formatSetup(r), /the service publishes no limit on concurrent cloud sessions/);
+
+  // Everything else settled: it is the last question, and nothing is written before the answer.
+  r = runSetup(sb.paths, unasked({ environment: 'demo', permissions: 'as-is' }), deps());
+  assert.equal(r.next.kind, 'ask-max-open');
+  assert.equal(r.steps[6]?.state, 'choose');
+  assert.match(formatSetup(r), /^How many cloud sessions may be open at once/m);
+  assert.match(formatSetup(r), /next: ask-max-open$/);
+  assert.equal(loadConfig(sb.paths).exists, false);
+
+  r = runSetup(sb.paths, input(sb, { environment: 'demo', permissions: 'as-is', maxOpen: 20 }), deps());
+  assert.equal(r.next.kind, 'ready');
+  assert.equal(loadConfig(sb.paths).config.watch.max_open, 20);
+  assert.equal(JSON.parse(fs.readFileSync(sb.paths.config, 'utf8')).watch.max_open, 20);
+
+  // Answered once: not asked again.
+  r = runSetup(sb.paths, unasked({}), deps());
+  assert.equal(r.next.kind, 'ready');
+  assert.equal(r.maxOpen, null);
 });

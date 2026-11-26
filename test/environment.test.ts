@@ -245,7 +245,7 @@ test('doctor: a confirmation made while the repository shipped no setup script w
 test('setup --confirmed writes the id into the profile and records it for this account', async () => {
   const sb = sandbox();
   const env = tools(sb, { gh: 'printf "%s" "echo setup"' });
-  const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--account-mode', 'as-is'], env, () => ''));
+  const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--account-mode', 'as-is', '--max-open', '10'], env, () => ''));
   assert.equal(r.value, 0);
   assert.match(r.stdout, /^Ready: profile demo \(default\) launches on example\/demo@main in env_01NEW\./);
   const stored = Object.values(JSON.parse(fs.readFileSync(sb.paths.setups, 'utf8')) as Record<string, { account: string }>)[0]!;

@@ -25,8 +25,10 @@ Each run spends plan usage, so keep the task small and the deadline short.
    ```
 3. Write a profile on a branch made for the test, with `kharos setup --repo <owner/repo> --revision <branch> --environment env_... --permissions as-is` (with no `--from-schedule`, an `env_...` id is taken as it is), and add a `command` output that appends events to a file, to see each delivery.
 4. Launch with `/kharos:run`.
-   In a headless session the `run` step needs an approval that `--allowedTools` does not give; the launch then stops at `firing`, and `/kharos:run --resume <id>` (with `--permission-mode bypassPermissions` for that one call) finds no session in `list_runs` and fires once.
-5. Follow it: `/kharos:run` starts the `kharos:follow` agent in the background, and its reports arrive in the launching session.
+   In a headless session the `run` step needs an approval that `--allowedTools` does not give: launch with `--permission-mode auto` (or from an account whose sessions start in auto mode).
+   A `run` refused at that prompt leaves the launch at `launch firing`; `/kharos:run --resume <id>` then finds no session in `list_runs` and says to re-arm it, and `/kharos:run --rearm <id>` followed by `/kharos:run --resume <id>` fires it once.
+5. Follow it: an interactive `/kharos:run` starts the `kharos:follow` agent in the background, and its reports arrive in the launching session.
+   A headless one starts `kharos follow <id>` detached instead and exits; its JSON lines are in `logs/<id>.follower.log` of the state folder.
    For the watcher instead, run watcher passes (`/kharos:watch`), with `watch.interval_min` lowered for the test.
    `kharos wait <id> --max 60` in a shell shows one wait's JSON line without an agent.
 6. Check each step against the session page on claude.ai/code.
