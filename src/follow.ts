@@ -8,10 +8,12 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { CommandError } from './commands.ts';
 import { loadConfig, type OutputConfig } from './config.ts';
+import { buildEvent, enqueue } from './events.ts';
 import { liveFollowers } from './lease.ts';
-import { filePath } from './outputs/index.ts';
+import { deliver, filePath } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, type Session } from './registry.ts';
 import { followersToStart, followTargets, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
@@ -30,13 +32,38 @@ function settled(o: WaitOutcome): boolean {
   return o.key.startsWith('end:') || o.key.startsWith('launch:');
 }
 
+/** How long the follower waits before it tries again after a failed wait: about 15 minutes in all. */
+export const RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 480_000] as const;
+
+export interface FollowLoopOptions {
+  id: string;
+  env: NodeJS.ProcessEnv;
+  write: (line: string) => void;
+  wait?: typeof wait;
+  waitOptions?: Partial<WaitOptions>;
+  sleep?: (ms: number) => Promise<void>;
+  deliver?: typeof deliver;
+}
+
+/** Nobody reads the session any more: says so to the outputs, since a detached follower has no one watching its log. */
+async function reportStopped(paths: Paths, opts: FollowLoopOptions): Promise<void> {
+  const s = findSession(loadRegistry(paths), opts.id);
+  if (!s) return;
+  const now = Date.now();
+  enqueue(paths, [buildEvent(s, 'session.unfollowed', s.state, `its follower stopped because reads kept failing; kharos follow ${s.id} --detach starts it again`, now)]);
+  await (opts.deliver ?? deliver)({ paths, env: opts.env, now, platform: process.platform, inHook: false });
+}
+
 /**
  * The follower's loop, in the shell: waits on the session again and again, prints the JSON line of each
- * change, and returns at its end (0) or when it cannot read it (1).
+ * change, and returns at its end (0). A failed wait is tried again after a growing delay; when it still
+ * fails, the loop tells the outputs that nobody follows the session and returns 1.
  */
-export async function followLoop(paths: Paths, opts: { id: string; env: NodeJS.ProcessEnv; write: (line: string) => void; wait?: typeof wait; waitOptions?: Partial<WaitOptions> }): Promise<number> {
+export async function followLoop(paths: Paths, opts: FollowLoopOptions): Promise<number> {
   const run = opts.wait ?? wait;
+  const sleep = opts.sleep ?? ((ms: number) => delay(ms));
   let since: string | null = null;
+  let retries = 0;
   for (;;) {
     const o = await run(paths, {
       id: opts.id,
@@ -49,8 +76,17 @@ export async function followLoop(paths: Paths, opts: { id: string; env: NodeJS.P
       ...opts.waitOptions,
     });
     if (o.changed || o.error || settled(o)) opts.write(JSON.stringify(o));
-    if (o.error) return 1;
     if (settled(o)) return 0;
+    if (o.error) {
+      const next = RETRY_DELAYS_MS[retries++];
+      if (next === undefined) {
+        await reportStopped(paths, opts);
+        return 1;
+      }
+      await sleep(next);
+      continue;
+    }
+    retries = 0;
     since = o.key;
   }
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import { close } from '../src/commands.ts';
+import { readOutbox } from '../src/events.ts';
 import { detachedSpawner, detachFollower, followerLog, followLoop, isHeadless, startFollowers, type Spawner } from '../src/follow.ts';
 import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
@@ -95,9 +96,49 @@ test('follow: the shell loop prints each change, goes on by itself, and stops at
   assert.deepEqual(sinces, [null, 'ok', 'session.waiting_answer|t1']);
   assert.deepEqual(lines.map((l) => JSON.parse(l).key), ['session.waiting_answer|t1', 'end:finished']);
 
-  const failed = await followLoop(sb.paths, { id, env: sb.env, write: (l) => lines.push(l), wait: async () => ({ ...base, changed: false, key: 'ok', error: 'reads failed' }) });
+});
+
+test('follow: a failed wait is tried again with a growing delay, and only then the outputs hear nobody follows', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const base = { kharos: 'wait', id, state: 'running', notice: null, url: null, waited_s: 1, reads: 1, reader_cost_usd: 0, report: '' } as const;
+  const failure: WaitOutcome = { ...base, changed: false, key: 'ok', error: 'reads failed' };
+  const slept: number[] = [];
+  let delivered = 0;
+  const loop = (answers: WaitOutcome[], lines: string[]) =>
+    followLoop(sb.paths, {
+      id,
+      env: sb.env,
+      write: (l) => lines.push(l),
+      wait: async () => answers.shift() ?? failure,
+      sleep: async (ms) => void slept.push(ms),
+      deliver: async () => {
+        delivered++;
+        return { sent: 0, failed: 0, gaveUp: [], skipped: false, configError: null };
+      },
+    });
+
+  // A short outage: the follower goes on after it, and the outputs hear nothing.
+  const lines: string[] = [];
+  const recovered = await loop([failure, failure, { ...base, changed: false, key: 'ok' }, { ...base, changed: true, key: 'end:finished', state: 'finished' }], lines);
+  assert.equal(recovered, 0);
+  assert.deepEqual(slept, [60_000, 120_000]);
+  assert.equal(delivered, 0);
+  assert.equal(readOutbox(sb.paths).filter((i) => i.event.event === 'session.unfollowed').length, 0);
+  assert.equal(JSON.parse(lines.at(-1) ?? '{}').key, 'end:finished');
+
+  // Reads that keep failing: four tries over about 15 minutes, then a needs_you event and exit 1.
+  slept.length = 0;
+  const failed = await loop([], lines);
   assert.equal(failed, 1);
+  assert.deepEqual(slept, [60_000, 120_000, 240_000, 480_000]);
   assert.match(lines.at(-1) ?? '', /reads failed/);
+  assert.equal(delivered, 1);
+  const events = readOutbox(sb.paths).filter((i) => i.event.event === 'session.unfollowed');
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.event.class, 'needs_you');
+  assert.equal(events[0]?.event.session, id);
+  assert.match(events[0]?.event.reason ?? '', new RegExp(`kharos follow ${id} --detach`));
 });
 
 test('follow: a detached follower runs on its own and writes to its log', async () => {

@@ -690,7 +690,7 @@ export function formatSetup(r: SetupResult): string {
     if (n.account) lines.push('', `Ask too: start this account's sessions in auto mode? Yes writes this change (token ${n.account.token}); no leaves the account as it is.`, n.account.diff);
   }
   // Asked in the same AskUserQuestion call as the question of this step, or alone once it is the last one.
-  if (r.maxOpen && (n.kind === 'ask-max-open' || n.kind.startsWith('ask-'))) lines.push('', maxOpenQuestion(r.maxOpen, n.kind !== 'ask-max-open'));
+  if (r.maxOpen && n.kind.startsWith('ask-')) lines.push('', maxOpenQuestion(r.maxOpen, n.kind !== 'ask-max-open'));
   lines.push(`next: ${n.kind === 'person' ? `person (step ${n.step})` : n.kind}`);
   return lines.join('\n');
 }
