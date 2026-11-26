@@ -34,7 +34,7 @@ Status: early development.
 - A claude.ai login on a Pro, Max, Team or Enterprise plan. API keys, Bedrock and Vertex do not work, and `ANTHROPIC_API_KEY` must not be set, because it takes precedence over the login.
   On Team and Enterprise, an owner can turn off cloud sessions or scheduled tasks; then the `RemoteTrigger` tool does not appear.
 - Claude Code 2.1.323 or newer.
-- Node.js 22.18 or newer on the machine (the plugin is TypeScript that Node runs directly, with no build and no runtime dependency).
+- Node.js 22.18 or newer on the machine (the plugin is TypeScript that Node runs directly, with no build and no runtime dependency; the npm package carries the compiled JavaScript).
 - GitHub access for the Claude side, one of:
   - the Claude GitHub App installed with access to the repository (https://github.com/apps/claude); in an organization only an owner can install it;
   - or `/web-setup` in Claude Code, which sends your `gh` token to your Claude account.
@@ -51,6 +51,13 @@ Status: early development.
 
 Then run `/kharos:setup` in the repository you want to launch sessions on.
 It writes a profile, checks the repository, and tells you exactly what to fix: see [docs/setup.md](docs/setup.md).
+
+The plugin runs the `kharos` CLI by itself.
+To run it from your own shell too, for `kharos health` from cron or launchd or `kharos permissions approvals`, install it from npm:
+
+```
+npm install -g kharos
+```
 
 ## Commands
 
@@ -156,6 +163,7 @@ One launch, one crossing; nothing is fired twice.
 npm ci
 npm run check        # typecheck and tests
 npm run validate     # claude plugin validate . --strict
+npm run build        # compile to dist/, which only the npm package ships
 ```
 
 This project is not affiliated with or endorsed by Anthropic.

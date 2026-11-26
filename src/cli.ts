@@ -347,6 +347,7 @@ export function launchOutputs(args: Args): { outputs: OutputConfig[]; footer: st
   return { outputs: [{ type: 'firstmate', ...target, events: ['*'] }], footer: mode === 'dedicated' ? [DEDICATED_FOOTER] : [] };
 }
 
-if (process.argv[1]?.endsWith('/src/cli.ts')) {
+// src/cli.ts in a git install, dist/src/cli.js in the npm package.
+if (/\/src\/cli\.[jt]s$/.test(process.argv[1] ?? '')) {
   process.exitCode = await main(process.argv.slice(2));
 }

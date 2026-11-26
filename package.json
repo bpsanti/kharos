@@ -1,18 +1,56 @@
 {
   "name": "kharos",
   "version": "0.1.0",
-  "private": true,
   "description": "Launch Claude Code cloud sessions from the terminal, follow them, message them mid-run, and get notified when one needs you, is stuck, or is done.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-code-plugin",
+    "cloud",
+    "remote",
+    "sessions",
+    "monitor",
+    "notifications"
+  ],
+  "author": "Bruno Santi",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bpsanti/kharos.git"
+  },
+  "homepage": "https://github.com/bpsanti/kharos#readme",
+  "bugs": {
+    "url": "https://github.com/bpsanti/kharos/issues"
+  },
   "type": "module",
+  "bin": {
+    "kharos": "scripts/kharos"
+  },
+  "files": [
+    "dist/src",
+    "dist/cloud",
+    ".claude-plugin",
+    "hooks",
+    "scripts",
+    "skills",
+    "assets/brand/png/icon-512.png",
+    "assets/brand/wordmark.svg",
+    "assets/brand/wordmark-dark-card.svg"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && node -e \"fs.copyFileSync('cloud/kharos-permission.mjs', 'dist/cloud/kharos-permission.mjs')\"",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --disable-warning=ExperimentalWarning 'test/**/*.test.ts'",
     "validate": "claude plugin validate . --strict",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
