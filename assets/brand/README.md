@@ -11,6 +11,7 @@ The kharos mark is an obol, the coin paid for the crossing, with a canoe over wa
 | `icon-small.svg` | Simplified icon for 32 px and below (no dotted ring, heavier wave) |
 | `wordmark.svg` | Mark and name, for light backgrounds |
 | `wordmark-dark.svg` | Mark and name, for dark backgrounds |
+| `wordmark-dark-card.svg` | Mark and name on a rounded dark red card (`#3F0F16`), used by the README in dark mode |
 | `png/icon-{1024,512,256,64}.png` | Raster exports of `icon.svg` |
 | `png/icon-{32,16}.png` | Raster exports of `icon-small.svg` |
 | `png/avatar.png` | Square 1024 px avatar with a full-bleed background, for GitHub and other services that crop their own shape |
