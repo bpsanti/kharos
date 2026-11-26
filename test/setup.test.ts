@@ -403,6 +403,7 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   if (done.next.kind === 'ready') {
     assert.match(done.next.summary.join('\n'), /Permissions: unblock all: .*\(now on: all three parts/);
     assert.match(done.next.summary.join('\n'), /launches need no approval prompt/);
+    assert.doesNotMatch(done.next.summary.join('\n'), /Next: \/kharos:permissions unblock-all/, 'what setup just turned on is not the next step');
   }
   const cfg = loadConfig(sb.paths).config;
   assert.deepEqual([cfg.permission_hook, cfg.preflight_auto, cfg.permission_unblock], [true, true, true]);

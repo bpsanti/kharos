@@ -663,7 +663,8 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     return result({ kind: 'not-ready', summary: [`Not ready: ${f.name}: ${f.detail}`, `Next: ${f.fix?.[0] ?? 'run /kharos:doctor for the fix'}`] });
   }
   const confirmed = github?.state === 'connected' || loadRepos(paths)[slug]?.access === 'ok';
-  const todo = choice ? permissionAction(choice, actx) : null;
+  // Unblock all applied just now has nothing left to turn on, so it is not the next step.
+  const todo = choice ? permissionAction(choice, { ...actx, unblockAllOn: actx.unblockAllOn || unblockNow }) : null;
   // A permissions warning that the next action fixes is that action, not a second thing to look at.
   const open = warns.filter((c) => !(todo && c.name === `${name}: permissions`));
   const summary = [
