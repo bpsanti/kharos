@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runsOtherCommands } from '../cloud/kharos-permission.mjs';
+import { broadRuleWhy } from '../cloud/kharos-permission.mjs';
 
 export type ManagedPolicy =
   | { status: 'found'; file: string; ask: string[]; deny: string[]; bypassDisabled: boolean; managedHooksOnly: boolean }
@@ -100,39 +100,34 @@ export function hooksBlocked(policy: ManagedPolicy): string | null {
 export interface MirrorPlan {
   /** Ask rules that become a cloud-only allow. */
   converted: string[];
-  /** Ask rules that stay as they are, each with why. */
-  kept: { rule: string; why: string }[];
+  /** The converted rules that are broad: they allow any command they cover. */
+  broad: string[];
+  /** Ask rules that stay as they are, each with why; `broad` marks the ones --broad would convert. */
+  kept: { rule: string; why: string; broad?: true }[];
 }
 
 /**
  * Which managed ask rules can become a cloud-only allow: Bash rules that name their program. A rule
  * for every command, for a program it does not name, or for a shell, an interpreter or a wrapper, would
- * allow anything, so it stays a prompt; so does any rule for another tool. Deny rules are not part of this at all.
+ * allow anything, so it stays a prompt unless the person asked for broad rules; so does any rule for
+ * another tool, always. Deny rules are not part of this at all.
  */
-export function planMirror(ask: readonly string[]): MirrorPlan {
+export function planMirror(ask: readonly string[], allowBroad = false): MirrorPlan {
   const converted: string[] = [];
-  const kept: { rule: string; why: string }[] = [];
+  const broad: string[] = [];
+  const kept: { rule: string; why: string; broad?: true }[] = [];
   for (const rule of ask) {
-    const m = /^Bash\((.*)\)$/s.exec(rule);
-    if (!m) {
-      kept.push({ rule, why: rule === 'Bash' ? 'it covers every command' : 'only Bash rules are mirrored' });
+    if (rule !== 'Bash' && !/^Bash\(.+\)$/s.test(rule)) {
+      kept.push({ rule, why: 'only Bash rules are mirrored' });
       continue;
     }
-    const body = (m[1] as string).trim();
-    if (body.replace(/[*:\s]/g, '') === '') {
-      kept.push({ rule, why: 'it covers every command' });
-      continue;
-    }
-    const program = body.split(/[\s:]/)[0] as string;
-    if (program.includes('*')) {
-      kept.push({ rule, why: 'it does not name its program' });
-      continue;
-    }
-    if (runsOtherCommands(program)) {
-      kept.push({ rule, why: `${program} runs other commands, so an allow would cover anything` });
+    const why = broadRuleWhy(rule);
+    if (why !== null && !allowBroad) {
+      kept.push({ rule, why, broad: true });
       continue;
     }
     converted.push(rule);
+    if (why !== null) broad.push(rule);
   }
-  return { converted, kept };
+  return { converted, broad, kept };
 }

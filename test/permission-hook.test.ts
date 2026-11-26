@@ -8,6 +8,7 @@ import {
   decide,
   hookOutput,
   parsePattern,
+  readHookRules,
   REFUSAL_PREFIX,
   splitCommand,
   type HookRules,
@@ -130,13 +131,13 @@ test('permission hook: splits only single simple commands with literal words', (
 });
 
 test('permission hook: allows a command that matches an allow pattern word for word', () => {
-  assert.deepEqual(decide(bash("psql -h 127.0.0.1 -p 5470 -U dev -d postgres -Atc 'select 1'"), RULES), { behavior: 'allow', rule: RULES.allow[0], source: 'allow' });
-  assert.deepEqual(decide(bash('pg_isready -h 127.0.0.1'), RULES), { behavior: 'allow', rule: 'pg_isready -h 127.0.0.1', source: 'allow' });
+  assert.deepEqual(decide(bash("psql -h 127.0.0.1 -p 5470 -U dev -d postgres -Atc 'select 1'"), RULES), { behavior: 'allow', rule: RULES.allow[0], source: 'allow', broad: false });
+  assert.deepEqual(decide(bash('pg_isready -h 127.0.0.1'), RULES), { behavior: 'allow', rule: 'pg_isready -h 127.0.0.1', source: 'allow', broad: false });
   // One more word, one word less, or a longer command is not the pattern.
   for (const c of ['pg_isready -h 127.0.0.1 -t 1', 'pg_isready', `psql -h 127.0.0.1 -p 5470 -U dev -d postgres -Atc '${'x'.repeat(700)}'`]) {
     assert.equal(decide(bash(c), RULES)?.behavior, 'deny', c);
   }
-  const out = hookOutput({ behavior: 'allow', rule: 'pg_isready -h 127.0.0.1', source: 'allow' });
+  const out = hookOutput({ behavior: 'allow', rule: 'pg_isready -h 127.0.0.1', source: 'allow', broad: false });
   assert.deepEqual(out.hookSpecificOutput, { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } });
 });
 
@@ -219,10 +220,11 @@ test('permission hook: mirroring lists every rule it converts, keeps deny rules 
 
   assert.deepEqual(planMirror(POLICY.permissions.ask), {
     converted: ['Bash(redis-cli:*)'],
+    broad: [],
     kept: [
-      { rule: 'Bash(*.db.example.com*)', why: 'it does not name its program' },
-      { rule: 'Bash(python3:*)', why: 'python3 runs other commands, so an allow would cover anything' },
-      { rule: 'Bash', why: 'it covers every command' },
+      { rule: 'Bash(*.db.example.com*)', why: 'it does not name its program', broad: true },
+      { rule: 'Bash(python3:*)', why: 'python3 runs other commands, so an allow would cover anything', broad: true },
+      { rule: 'Bash', why: 'it covers every command', broad: true },
       { rule: 'WebFetch(domain:internal.example)', why: 'only Bash rules are mirrored' },
     ],
   });
@@ -430,7 +432,7 @@ test('doctor: reads the managed-policy copy, warns about the ask rules that stop
   assert.equal(off.find((c) => c.name === 'permission hook'), undefined, 'no hook warning while it is off');
 
   const settings = JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, hooks: { PermissionRequest: [{ matcher: '*', hooks: [{ type: 'command', command: HOOK_COMMAND }] }] } });
-  const files: HookFiles = { settings, script: shippedScript(), rules: JSON.stringify({ version: 1, allow: ['pg_isready'], mirror: ['Bash(redis-cli:*)', 'Bash(*.db.example.com*)'] }) };
+  const files: HookFiles = { settings, script: shippedScript(), rules: JSON.stringify({ version: 1, broad: true, allow: ['pg_isready'], mirror: ['Bash(redis-cli:*)', 'Bash(*.db.example.com*)'] }) };
   const withHook = deps({ settings: () => ({ status: 'found', text: settings }), hookFiles: () => ({ status: 'found', files }) });
 
   // The hook on the branch while the setting is off is a warning of its own.
@@ -445,6 +447,7 @@ test('doctor: reads the managed-policy copy, warns about the ask rules that stop
   const hook = on.find((c) => c.name === 'demo: permission hook');
   assert.equal(hook?.level, 'info');
   assert.match(hook?.detail ?? '', /1 allow pattern\(s\), 2 mirrored organization ask rule\(s\), any other prompt denied/);
+  assert.match(hook?.detail ?? '', /1 broad rule\(s\), which allow any command they cover in this repository's cloud sessions, with no person asked: Bash\(\*\.db\.example\.com\*\)$/);
   // Mirrored rules no longer stop the session; the rest still do.
   assert.match(on.find((c) => c.name === 'demo: managed ask rules')?.detail ?? '', /^3 organization ask rule\(s\) .*: Bash\(python3:\*\), Bash, WebFetch/);
 
@@ -502,4 +505,116 @@ test('permission hook: a real cloud log (names changed) attributes every decisio
   ]);
   const last = page.events[page.events.length - 1]!;
   assert.equal(classify({ events: page.events, seenStart: true, createdAt: page.events[0]!.t, deadlineMin: 30, now: last.t + 60_000, watch: DEFAULT_WATCH }).state, 'running');
+});
+
+test('permission hook: a broad allow pattern is refused without --broad, and accepted and marked with it', async () => {
+  const sb = sandbox();
+  writeConfig(sb, { permission_hook: true });
+  writePolicy(sb);
+  const dir = gitRepo(sb);
+  for (const p of ['bash *', 'sh * *', '* foo']) {
+    const refused = await run(sb, 'permissions', 'hook', 'diff', '--allow', p, dir);
+    assert.equal(refused.code, 1, p);
+    assert.match(refused.err, /is refused: it is broad \((bash runs other commands|sh runs other commands|its program is a wildcard)\), so it would allow any command; add --broad to allow it anyway/, p);
+  }
+
+  const diff = await run(sb, 'permissions', 'hook', 'diff', '--allow', 'bash *', '--allow', 'pg_isready', '--broad', dir);
+  assert.equal(diff.code, 0, diff.err);
+  assert.match(diff.out, /^allow patterns \(2\): bash \* \(broad\) \| pg_isready$/m);
+  assert.match(diff.out, /^WARNING: this change adds 1 broad rule\(s\), which allow any command they cover in this repository's cloud sessions, with no person asked: bash \*$/m);
+  assert.match(diff.out, /--allow 'bash \*' --allow pg_isready --broad/);
+  const token = tokenOf(diff.out);
+  // The write states the same change: without --broad it is refused, and nothing is written.
+  const bare = await run(sb, 'permissions', 'hook', 'write', '--expect', token, '--allow', 'bash *', '--allow', 'pg_isready', dir);
+  assert.equal(bare.code, 1);
+  assert.match(bare.err, /add --broad/);
+  assert.equal(fs.existsSync(path.join(dir, HOOK_RULES_PATH)), false);
+  const wrote = await run(sb, 'permissions', 'hook', 'write', '--expect', token, '--allow', 'bash *', '--allow', 'pg_isready', '--broad', dir);
+  assert.equal(wrote.code, 0, wrote.err);
+  const rules = JSON.parse(fs.readFileSync(path.join(dir, HOOK_RULES_PATH), 'utf8'));
+  assert.deepEqual(rules, { version: 1, broad: true, allow: ['bash *', 'pg_isready'], mirror: [] });
+
+  // The hook allows the broad form, marks it, and still only as a single simple command.
+  assert.deepEqual(decide(bash('bash ./scripts/setup.sh'), rules), { behavior: 'allow', rule: 'bash *', source: 'allow', broad: true });
+  assert.equal(decide(bash('bash x; rm y'), rules).behavior, 'deny');
+  assert.match(hookOutput(decide(bash('bash x'), rules)).systemMessage ?? '', /allowed this call by the broad rule bash \*/);
+  // A broad pattern in a rules file that does not say "broad": true is an error, so the hook allows nothing.
+  assert.throws(() => readHookRules({ version: 1, allow: ['bash *'] }), /bash runs other commands/);
+  assert.throws(() => readHookRules({ version: 1, broad: 'yes', allow: [] }), /"broad" must be true or false/);
+
+  const show = await run(sb, 'permissions', 'hook', 'show', dir);
+  assert.match(show.out, /allow patterns \(2\): bash \* \(broad\) \| pg_isready/);
+  assert.match(show.out, /broad rules \(1\) allow any command they cover in this repository's cloud sessions, with no person asked: bash \*/);
+
+  // A later narrow change keeps the accepted broad pattern without --broad; dropping it removes the flag.
+  const more = await run(sb, 'permissions', 'hook', 'diff', '--allow', 'git status', dir);
+  assert.equal(more.code, 0, more.err);
+  assert.match(more.out, /^broad rules \(1\), unchanged: bash \*$/m);
+  assert.doesNotMatch(more.out, /WARNING/);
+  const drop = await run(sb, 'permissions', 'hook', 'diff', '--drop', 'bash *', dir);
+  assert.equal((await run(sb, 'permissions', 'hook', 'write', '--expect', tokenOf(drop.out), '--drop', 'bash *', dir)).code, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, HOOK_RULES_PATH), 'utf8')), { version: 1, allow: ['pg_isready'], mirror: [] });
+});
+
+test('permission hook: a broad pattern a deny rule covers stays refused, with --broad too', async () => {
+  const sb = sandbox();
+  writeConfig(sb, { permission_hook: true });
+  writePolicy(sb);
+  const dir = gitRepo(sb, { permissions: { deny: ['Bash(sh:*)'] } });
+  const repo = await run(sb, 'permissions', 'hook', 'diff', '--allow', 'sh *', '--broad', dir);
+  assert.equal(repo.code, 1);
+  assert.match(repo.err, /allow pattern "sh \*" is refused: the deny rule Bash\(sh:\*\) covers it/);
+  const sb2 = sandbox();
+  writeConfig(sb2, { permission_hook: true });
+  const all = gitRepo(sb2, { permissions: { deny: ['Bash'] } });
+  assert.match((await run(sb2, 'permissions', 'hook', 'diff', '--allow', '* *', '--broad', all)).err, /the deny rule Bash covers it/);
+  assert.match((await run(sb, 'permissions', 'hook', 'diff', '--uninstall', '--broad', dir)).err, /--uninstall takes no other change/);
+});
+
+test('permission hook: broad organization ask rules are mirrored only with --broad, and the write still needs --org-confirmed', async () => {
+  const sb = sandbox();
+  writeConfig(sb, { permission_hook: true });
+  writePolicy(sb);
+  const dir = gitRepo(sb);
+
+  const narrow = await run(sb, 'permissions', 'hook', 'diff', '--mirror', dir);
+  assert.match(narrow.out, /stays a prompt: Bash\(python3:\*\) \(python3 runs other commands, so an allow would cover anything\), unless mirrored with --broad/);
+  assert.match(narrow.out, /stays a prompt: WebFetch\(domain:internal\.example\) \(only Bash rules are mirrored\)$/m);
+
+  assert.deepEqual(planMirror(POLICY.permissions.ask, true), {
+    converted: ['Bash(redis-cli:*)', 'Bash(*.db.example.com*)', 'Bash(python3:*)', 'Bash'],
+    broad: ['Bash(*.db.example.com*)', 'Bash(python3:*)', 'Bash'],
+    kept: [{ rule: 'WebFetch(domain:internal.example)', why: 'only Bash rules are mirrored' }],
+  });
+  const diff = await run(sb, 'permissions', 'hook', 'diff', '--mirror', '--broad', dir);
+  assert.equal(diff.code, 0, diff.err);
+  assert.match(diff.out, /WARNING: this change adds 3 broad rule\(s\), which allow any command they cover in this repository's cloud sessions, with no person asked: Bash\(\*\.db\.example\.com\*\), Bash\(python3:\*\), Bash$/m);
+  assert.match(diff.out, /WARNING: check with your organization's administrator before approving this/);
+  assert.match(diff.out, /cloud-only allow \(4\): Bash\(redis-cli:\*\), Bash\(\*\.db\.example\.com\*\) \(broad\), Bash\(python3:\*\) \(broad\), Bash \(broad\)$/m);
+  assert.match(diff.out, /--mirror --broad --org-confirmed/);
+  assert.doesNotMatch(diff.out, /rm -rf|\.env/, 'deny rules never reach the repository');
+  const token = tokenOf(diff.out);
+  const unconfirmed = await run(sb, 'permissions', 'hook', 'write', '--expect', token, '--mirror', '--broad', dir);
+  assert.match(unconfirmed.err, /written only with --org-confirmed/);
+  assert.equal((await run(sb, 'permissions', 'hook', 'write', '--expect', token, '--mirror', dir)).code, 1, 'without --broad the plan differs, so the token does not match');
+  assert.equal(fs.existsSync(path.join(dir, HOOK_RULES_PATH)), false);
+  const wrote = await run(sb, 'permissions', 'hook', 'write', '--expect', token, '--mirror', '--broad', '--org-confirmed', dir);
+  assert.equal(wrote.code, 0, wrote.err);
+  const rules = readHookRules(JSON.parse(fs.readFileSync(path.join(dir, HOOK_RULES_PATH), 'utf8')));
+  assert.equal(rules.broad, true);
+  assert.deepEqual(decide(bash("python3 -c 'print(1)'"), rules), { behavior: 'allow', rule: 'Bash(python3:*)', source: 'mirror', broad: true });
+  assert.deepEqual(decide(bash('redis-cli ping'), rules), { behavior: 'allow', rule: 'Bash(redis-cli:*)', source: 'mirror', broad: false });
+  assert.equal(decide(bash('bash -c x'), rules).behavior, 'allow');
+  assert.equal(decide(bash('ls | wc'), rules).behavior, 'deny', 'still a single simple command');
+
+  // A refresh without --broad turns the broad rules back into prompts.
+  const refresh = await run(sb, 'permissions', 'hook', 'diff', '--mirror', dir);
+  assert.match(refresh.out, /cloud-only allow \(1\): Bash\(redis-cli:\*\)$/m);
+  assert.match(refresh.out, /^-  "broad": true,$/m);
+
+  // The approval log marks a decision by a broad rule.
+  const prompt = (command: string) => `[2026-11-25T19:00:01.000000Z] permission prompt Bash: ${JSON.stringify({ command })}`;
+  const s = { id: 'k-0001', session_id: 'cse_x', permission_hook: rules } as Session;
+  assert.deepEqual(recordHookDecisions(sb.paths, s, parseLog(prompt("python3 -c 'x'")).events).map((d) => d.broad), [true]);
+  assert.match((await run(sb, 'permissions', 'approvals')).out, /allowed by broad mirrored organization rule Bash\(python3:\*\)/);
 });
