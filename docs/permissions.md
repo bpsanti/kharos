@@ -60,7 +60,7 @@ Neither profile covers connector (MCP) tools.
 
 | Found | Rules |
 |---|---|
-| `package.json` | install (`npm ci`, or the install of pnpm, yarn or bun when its lockfile is there), `<pm> test *`, and `<pm> run <script> *` for each script named build, test, check, lint, typecheck, format, compile or verify (with any suffix such as `test:unit`) |
+| `package.json` | install (`npm ci`, or the install of pnpm, yarn or bun when its lockfile is there), `<pm> test *`, and `<pm> run <script> *` for each script named build, test, check, lint, typecheck, format, compile or verify (with a suffix such as `test:unit`, unless the name says deploy, release, publish, upload or push) |
 | `Cargo.toml` | `cargo build`, `test`, `check`, `clippy`, `fmt` |
 | `go.mod` | `go build`, `test`, `vet` |
 | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `pytest.ini`, `tox.ini` | `pytest *`, `python -m pytest *` |

@@ -46,7 +46,7 @@ The rules are checked in this order, and the first that matches wins.
 | `invisible` | two failed reads in a row (HTTP error, the session missing from `list_runs`, an empty log for a session that had events), or the account logged in now is not the one that launched it | yes |
 | `failed` | `KHAROS-DONE` with `failed` | yes, terminal |
 | `finished` | `KHAROS-DONE` with `ok` after the last message from a person, no tool call after it in the same turn, and no `KHAROS-QUESTION` after it; turns that events woke later (an `init` with no `user`, such as pull request activity or CI) keep the mark once the last event is a `result` again | yes, terminal |
-| `waiting_permission` | a `permission prompt` event that is still open: the calls open at that moment do not all have results, and the model has not spoken again since | yes, naming the tool and what it asks for |
+| `waiting_permission` | a `permission prompt` event that is still open: the calls open at that moment do not all have results, and the model has not spoken again since | yes, naming the tool |
 | `waiting_answer` | `KHAROS-QUESTION` in a closed turn, or `AskUserQuestion` as the last event | yes |
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
 | `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
@@ -95,15 +95,14 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "previous_state":"running","since":"2026-11-25T18:40:00Z","at":"2026-11-25T18:44:10Z",
  "url":"https://claude.ai/code/session_...","repo":"owner/repo","pr":null,"branch":null,
  "reason":"permission request for Bash with no answer for 4 min","open_notice":null,
- "permission":{"tool":"Bash","request":"PGPASSWORD=… psql -h db.example.test -c 'select 1'"}}
+ "permission":{"tool":"Bash"}}
 ```
 
 - `class` is `progress` (`session.opened`, `session.back`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
 - `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for.
   Only `session.waiting_answer` carries `question`, and only `session.finished` carries `summary`, both cleaned of control characters and cut.
-- Only `session.waiting_permission` carries `permission`: the tool, and a summary of what it would do of at most 120 characters.
-  The summary reads only the field that names the action (the command of `Bash`, the file of `Read`, `Edit` and `Write`, the pattern of `Glob` and `Grep`, the URL of `WebFetch`, the query of `WebSearch`); for any other tool it lists the input's field names and no value.
-  Secrets are taken out: environment assignments (`PGPASSWORD=…`), credentials in URLs, URL queries, authorization headers, flags such as `--password`, and known or long opaque tokens.
+- Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for.
+  The tool's input (the command, the file, the URL, the query) is never copied into an event; the person reads it on the session's page.
 - `url` is the direct link to the session, `https://claude.ai/code/session_<id>`.
 - An event is emitted when a notice opens, again every `renotify_min` while it lasts, and `session.back` once when the session returns to normal.
   A permission prompt that a different one replaces is reported again at once; the same prompt is not reported again before `renotify_min`.

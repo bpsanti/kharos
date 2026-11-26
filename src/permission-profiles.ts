@@ -72,8 +72,8 @@ export const STANDARD_BASE: readonly string[] = [
 
 export const OPEN_RULES: readonly string[] = ['Bash', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Agent'];
 
-/** Script and target names that build, test or check, never deploy or release. */
-const BUILD_TEST_RE = /^(?:build|test|tests|check|lint|typecheck|type-check|types|format|fmt|compile|verify)(?:[:._-][\w:.-]*)?$/;
+/** Script and target names that build, test or check, and name no deploy, release, publish, upload or push step. */
+const BUILD_TEST_RE = /^(?!.*(?:deploy|release|publish|upload|push))(?:build|test|tests|check|lint|typecheck|type-check|types|format|fmt|compile|verify)(?:[:._-][\w:.-]*)?$/i;
 const SAFE_NAME_RE = /^[\w:.-]+$/;
 
 function packageManager(files: readonly string[]): string {

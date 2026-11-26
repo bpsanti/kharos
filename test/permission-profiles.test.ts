@@ -43,6 +43,14 @@ test('permission profiles: standard allows the build and test commands the repos
   assert.deepEqual(buildRules(readFacts(['package.json'], '{not json', null)), ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test *)']);
 });
 
+test('permission profiles: standard allows no build or test script whose name says it deploys, releases, publishes, uploads or pushes', () => {
+  const names = ['build:deploy', 'test:release', 'build-and-publish', 'check:publish', 'build:upload', 'build-push', 'build:Deploy'];
+  const pkg = JSON.stringify({ scripts: Object.fromEntries([...names, 'build:prod'].map((n) => [n, 'x'])) });
+  const make = [...names.map((n) => n.replace(/:/g, '-')), 'build-release', 'test-unit'].map((t) => `${t}:\n\tx\n`).join('');
+  const rules = buildRules(readFacts(['package.json', 'Makefile'], pkg, make));
+  assert.deepEqual(rules, ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test *)', 'Bash(npm run build:prod *)', 'Bash(make test-unit *)']);
+});
+
 test('permission profiles: standard adds allow rules after the existing ones and keeps ask, deny and every other key', () => {
   const settings = { env: { A: '1' }, permissions: { allow: ['Bash(npm test *)', 'Read'], ask: ['Bash(git push *)'], deny: ['Read(./.env)'], defaultMode: 'acceptEdits' }, hooks: {} };
   const next = applyProfile(settings, 'standard', NO_FACTS);

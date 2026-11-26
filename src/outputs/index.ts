@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ConfigError, loadConfig, type OutputConfig } from '../config.ts';
-import { oneLine, permissionLine, readOutbox, type KharosEvent, type OutboxItem } from '../events.ts';
+import { oneLine, readOutbox, type KharosEvent, type OutboxItem } from '../events.ts';
 import { appendLine, expandHome, isObject, readState, withLock, writeJsonAtomic } from '../fsutil.ts';
 import type { Paths } from '../paths.ts';
 import { loadRegistry } from '../registry.ts';
@@ -71,8 +71,7 @@ function title(ev: KharosEvent): string {
 }
 
 function notify(ev: KharosEvent, ctx: SendCtx): void {
-  const detail = permissionLine(ev);
-  const body = `${ev.title} | ${ev.reason}${detail ? ` | ${detail}` : ''}`;
+  const body = `${ev.title} | ${ev.reason}`;
   const lim = limit(ctx, NOTIFIER_TIMEOUT_MS);
   let r;
   if (ctx.platform === 'darwin') {
@@ -101,10 +100,7 @@ async function slack(o: Extract<OutputConfig, { type: 'slack' }>, ev: KharosEven
     throw new Error(`${o.webhook_env} is not set`);
   }
   if (!/^https:\/\/hooks\.slack\.com\//.test(url)) throw new Error(`${o.webhook_env} is not a Slack incoming webhook URL`);
-  const detail = permissionLine(ev);
-  const text = [`*${slackEscape(title(ev))}*`, slackEscape(ev.title), slackEscape(`${ev.state.replace(/_/g, ' ')}: ${ev.reason}`), detail ? slackEscape(`asks for ${detail}`) : '', ev.pr ? `PR: ${ev.pr}` : '', ev.url ?? '']
-    .filter(Boolean)
-    .join('\n');
+  const text = [`*${slackEscape(title(ev))}*`, slackEscape(ev.title), slackEscape(`${ev.state.replace(/_/g, ' ')}: ${ev.reason}`), ev.pr ? `PR: ${ev.pr}` : '', ev.url ?? ''].filter(Boolean).join('\n');
   const lim = limit(ctx, SLACK_TIMEOUT_MS);
   let res: Response;
   try {

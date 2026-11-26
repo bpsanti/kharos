@@ -91,7 +91,7 @@ claude --model haiku
 
 Each pass reads the sessions that are due, and code (not the model) classifies each one: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
 A closed turn is never taken for the end: only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
-A session waiting at a permission prompt raises a notice that names the tool and what it asks for (secrets taken out), with the link to the session, where a person answers it.
+A session waiting at a permission prompt raises a notice that names the tool, with the link to the session, where a person answers it; what the tool would run never leaves the machine.
 `kharos health` exits with 1 when sessions are open and the watcher stopped, for launchd, cron or any other check.
 See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
 

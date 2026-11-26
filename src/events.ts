@@ -39,8 +39,8 @@ export interface KharosEvent {
   summary?: string;
   /** Only on session.finished of a launch reported to a dedicated firstmate task. */
   sheet?: string;
-  /** Only on session.waiting_permission: the tool and a redacted summary of what it would do. */
-  permission?: { tool: string; request: string };
+  /** Only on session.waiting_permission: the tool the open prompt is for. */
+  permission?: { tool: string };
 }
 
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
@@ -79,14 +79,8 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
   if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
-  if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool, request: s.permission.request };
+  if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool };
   return ev;
-}
-
-/** The tool and request of a permission event, for a person: `Bash: git push origin main`. */
-export function permissionLine(ev: KharosEvent): string | null {
-  if (!ev.permission) return null;
-  return ev.permission.request ? `${ev.permission.tool}: ${ev.permission.request}` : ev.permission.tool;
 }
 
 /**
