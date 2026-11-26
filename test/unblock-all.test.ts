@@ -317,7 +317,6 @@ test('unblock-all: with no copy of the managed settings, show says why and the o
   const again = await kharos(sb, 'permissions', 'unblock-all', 'show');
   assert.match(again.out, /1\. .*off now \(the organization's managed settings changed since you confirmed the unblock preset on .*a copy of the organization's managed settings appeared at .*remote-settings\.json/);
   assert.doesNotMatch(again.out, /--no-org-settings/, 'with a copy, the statement is not offered');
-  assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'show', '--no-org-settings')).code, 1, 'nor accepted');
   assert.equal(describeUnblockAll(readUnblockAll(sb.paths, sb.env).parts).overall, 'partly');
   const reconfirmed = await kharos(sb, 'permissions', 'unblock-all', 'on', '--expect', tokenOf(again.out));
   assert.equal(reconfirmed.code, 0, reconfirmed.err);
@@ -328,10 +327,10 @@ test('unblock-all: with no copy of the managed settings, show says why and the o
 test('unblock-all: off takes back the statement that the account has no organization settings with the rest', async () => {
   const sb = account(null);
   writeConfig(sb);
-  const shown = await kharos(sb, 'permissions', 'unblock-all', 'show', '--no-org-settings');
-  assert.match(shown.out, /With your statement that this account has no organization settings: there is no copy at /);
-  assert.match(shown.out, /What the unblock preset frees/);
-  assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'on', '--no-org-settings', '--expect', tokenOf(shown.out))).code, 0);
+  const shown = await kharos(sb, 'permissions', 'unblock-all', 'show');
+  const statement = /change ([0-9a-f]{12}), with the statement "this account has no organization settings"/.exec(shown.out)?.[1] ?? '';
+  assert.ok(statement);
+  assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'on', '--no-org-settings', '--expect', statement)).code, 0);
   const offShown = await kharos(sb, 'permissions', 'unblock-all', 'show', 'off');
   assert.match(offShown.out, /1\. forgets your confirmation of the unblock preset, and your statement that this account has no organization settings: set now/);
   const off = await kharos(sb, 'permissions', 'unblock-all', 'off', '--expect', tokenOf(offShown.out));
@@ -340,5 +339,6 @@ test('unblock-all: off takes back the statement that the account has no organiza
   assert.equal(loadConfirmation(sb.paths, 'no-org-settings'), null);
   assert.equal(loadConfirmation(sb.paths, 'unblock'), null);
   assert.equal(readUnblockAll(sb.paths, sb.env).policy.status, 'absent');
+  assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'show', '--no-org-settings')).code, 1, 'the statement goes only with on');
   assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'show', 'off', '--no-org-settings')).code, 1, 'the statement goes only with on');
 });

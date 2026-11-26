@@ -322,8 +322,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         if (sub === 'unblock-all') {
           const [what, target] = [args.positional[1], args.positional[2]];
           const statement = args.flags['no-org-settings'] === true;
-          const on = (what === 'show' && target !== 'off') || what === 'on';
-          if (statement && !on) throw new cmd.CommandError('--no-org-settings goes with show or on: it is a statement made when unblock all is turned on');
+          if (statement && what !== 'on') throw new cmd.CommandError('--no-org-settings goes only with on: it is a statement made when unblock all is turned on');
           const policy = withNoOrgSettings(readAccountPolicy(paths, env), statement);
           if (what === 'show' && (target === undefined || target === 'on' || target === 'off')) out(showUnblockAll(paths, env, target ?? 'on', policy));
           else if ((what === 'on' || what === 'off') && target === undefined) out(applyUnblockAll(paths, env, what, flag(args, 'expect'), now, policy));
