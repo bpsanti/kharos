@@ -4,6 +4,7 @@
 // stopped watcher from a quiet one.
 
 import { readAuthStatus } from './account.ts';
+import { clean } from './body.ts';
 import type { WatchConfig } from './config.ts';
 import { oneLine, readOutbox, type KharosEvent } from './events.ts';
 import type { Paths } from './paths.ts';
@@ -15,6 +16,7 @@ import { settle, watchConfig } from './track.ts';
 const MIN = 60_000;
 const ACCOUNT_TTL_MS = 10 * MIN;
 const MAX_WATCHERS = 10;
+const TITLE_MAX = 40;
 
 export interface Read {
   session: string;
@@ -163,6 +165,12 @@ export function passEnd(paths: Paths, opts: { watcher: string | null; now: numbe
   return parts.length ? `watch: ${parts.join('; ')}${tail}` : `watch: ${open} open, no change${tail}`;
 }
 
+/** A session's id, with its title when the title is short enough for one line. */
+function named(s: Session): string {
+  const title = clean(s.title, TITLE_MAX + 1);
+  return title && title.length <= TITLE_MAX ? `${s.id} "${title}"` : s.id;
+}
+
 export interface Health {
   ok: boolean;
   line: string;
@@ -174,20 +182,23 @@ export interface Health {
  */
 export function health(paths: Paths, now: number, watch: WatchConfig = watchConfig(paths)): Health {
   const reg = loadRegistry(paths);
-  const open = Object.values(reg.sessions).filter(isFollowed).map((s) => s.id);
+  const open = Object.values(reg.sessions)
+    .filter(isFollowed)
+    .sort((a, b) => a.id.localeCompare(b.id));
   if (open.length === 0) return { ok: true, line: 'kharos: no open session' };
   const followers = liveFollowers(paths, now);
-  const nobody = open.filter((id) => !followers.has(id));
+  const nobody = open.filter((s) => !followers.has(s.id));
   const byFollowers = open.length - nobody.length;
   if (nobody.length === 0) return { ok: true, line: `kharos: ${open.length} open session(s), each read by a follower` };
   const w = loadWatch(paths);
   const every = w.interval_min ?? watch.interval_min;
   const followerPart = byFollowers ? ` (${byFollowers} more read by a follower)` : '';
+  const names = nobody.map((s) => named(s)).join(', ');
   const fix = `Type /kharos:follow in a Claude Code session to follow them there, or start /loop ${every}m /kharos:watch in a separate session.`;
-  if (!w.last_beat) return { ok: false, line: `kharos: ${nobody.length} open session(s) with no follower${followerPart}, and the watcher never ran. ${fix}` };
+  if (!w.last_beat) return { ok: false, line: `kharos: ${nobody.length} open session(s) with no follower: ${names}${followerPart}, and the watcher never ran. ${fix}` };
   const ago = now - Date.parse(w.last_beat);
   if (ago > 3 * every * MIN) {
-    return { ok: false, line: `kharos: ${nobody.length} open session(s) with no follower${followerPart}, and no watcher heartbeat for ${Math.round(ago / MIN)} min. ${fix}` };
+    return { ok: false, line: `kharos: ${nobody.length} open session(s) with no follower: ${names}${followerPart}, and no watcher heartbeat for ${Math.round(ago / MIN)} min. ${fix}` };
   }
   return { ok: true, line: `kharos: ${open.length} open session(s)${byFollowers ? `, ${byFollowers} read by a follower` : ''}, watcher heartbeat ${Math.round(ago / MIN)} min ago` };
 }

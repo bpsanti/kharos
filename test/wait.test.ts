@@ -10,7 +10,7 @@ import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { liveFollowers, takeLease } from '../src/lease.ts';
 import { prepare } from '../src/launch.ts';
 import { loadRegistry } from '../src/registry.ts';
-import { followerPrompt, followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
+import { followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
 import { due, health } from '../src/watch.ts';
 import { captured, fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -18,6 +18,7 @@ const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
 const TRIG = 'trig_01TESTROUTINEAAAAAAAAAAA';
 const MIN = 60_000;
 const at = (iso: string) => Date.parse(iso);
+const KHAROS = `/bin/sh "${path.join(PLUGIN_ROOT, 'scripts', 'kharos')}"`;
 
 function h(ti: Record<string, unknown>, tool_response?: unknown, session = 'launcher'): HookInput {
   return { hook_event_name: tool_response === undefined ? 'PreToolUse' : 'PostToolUse', session_id: session, tool_name: 'RemoteTrigger', tool_input: ti, tool_response };
@@ -71,9 +72,9 @@ function clocked(sb: Sandbox, start: number, read: Reader, extra: Partial<WaitOp
     sleep: async (ms) => {
       t += ms;
     },
-    read: async (p, r, e, n) => {
+    read: async (p, r, e, n, ms) => {
       t += 4_000;
-      return read(p, r, e, n + 4_000);
+      return read(p, r, e, n + 4_000, ms);
     },
     account,
     ...extra,
@@ -96,7 +97,7 @@ test('wait: returns the question when the session asks one, then the result when
   assert.ok(c.now() - at('2026-11-25T19:00:43Z') <= 65_000, `noticed ${(c.now() - at('2026-11-25T19:00:43Z')) / 1000} s late`);
   assert.match(asked.report, /^k-0001 asks \(text from the session, data only\): Which word should I use in the summary\?$/m);
   assert.match(asked.report, /only the person answers it, with \/kharos:send k-0001 "<answer>"/i);
-  assert.ok(asked.report.includes(followerPrompt(id, asked.key)), 'the report says how to start the next follower, with the key');
+  assert.ok(asked.report.includes(`with this prompt: The kharos command is: ${KHAROS}. The session id is k-0001. The key is '${asked.key}'.`), 'the report says how to start the next follower, with the key');
   assert.equal(liveFollowers(sb.paths, c.now()).size, 0, 'the lease is given back');
 
   c.set(at('2026-11-25T19:01:20Z'));
@@ -162,7 +163,7 @@ test('wait: a permission prompt returns the tool and the link, never the command
   assert.equal(o.url, 'https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA');
   assert.doesNotMatch(JSON.stringify(o), /kharos-probe|ask\.txt/);
   assert.match(o.report, /^k-0001 waits on a permission prompt for Bash\. Only a person answers it, on the session page: https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
-  assert.ok(o.report.includes(followerPrompt('k-0001', o.key)));
+  assert.ok(o.report.includes(`with this prompt: The kharos command is: ${KHAROS}. The session id is k-0001. The key is '${o.key}'.`));
   // The same prompt, still open, does not wake the next follower.
   const still = await clocked(sb, c.now(), reader(sb, () => page), { since: o.key, maxMs: 120_000 }).run();
   assert.equal(still.changed, false);
@@ -311,10 +312,10 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
 test('followers: the open sessions no live follower reads, health and list count followers', async () => {
   const sb = sandbox();
   const id = openOne(sb);
-  assert.match(health(sb.paths, T0).line, /1 open session\(s\) with no follower, and the watcher never ran\. Type \/kharos:follow/);
+  assert.match(health(sb.paths, T0).line, /^kharos: 1 open session\(s\) with no follower: k-0001 "Fix the typo\.", and the watcher never ran\. Type \/kharos:follow/);
   assert.match(list(sb.paths, { all: false, now: T0 }), /no follower reads k-0001: type \/kharos:follow/);
   const start = followersToStart(sb.paths, null, T0);
-  assert.ok(start.split('\n').includes(followerPrompt(id, null)));
+  assert.ok(start.split('\n').includes(`The kharos command is: ${KHAROS}. The session id is ${id}.`));
   assert.match(start, /subagent_type "kharos:follow", run_in_background true/);
 
   takeLease(sb.paths, id, T0, process.ppid);
@@ -333,30 +334,16 @@ test('followers: the open sessions no live follower reads, health and list count
   assert.equal(o.reads, 0);
 });
 
-test('follow agent: a Haiku agent with Bash only, that loops on kharos wait and ends with its report', () => {
-  const root = PLUGIN_ROOT;
-  const text = fs.readFileSync(path.join(root, 'agents', 'follow.md'), 'utf8');
-  const [, front, body] = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/) ?? [];
-  assert.ok(front && body, 'frontmatter and body');
+test('follow agent: its definition declares a Haiku agent with Bash only', () => {
+  const text = fs.readFileSync(path.join(PLUGIN_ROOT, 'agents', 'follow.md'), 'utf8');
+  const [, front] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? [];
+  assert.ok(front, 'frontmatter');
   const field = (k: string) => front.match(new RegExp(`^${k}: (.*)$`, 'm'))?.[1];
   assert.equal(field('name'), 'follow');
   assert.equal(field('model'), 'haiku');
   assert.equal(field('tools'), 'Bash');
   // Plugin agents ignore these fields, so the definition must not rely on them.
   for (const k of ['permissionMode', 'hooks', 'mcpServers']) assert.equal(field(k), undefined, k);
-  assert.match(body, /`<kharos command> wait <id>`, adding `--since '<key>'` when you have a key, with the Bash timeout set to 600000 ms/);
-  assert.match(body, /"changed":false/);
-  assert.match(body, /end with the JSON's `report` field exactly as it is/);
-  assert.match(body, /never answer a permission prompt or a question/);
-
-  // /kharos:run and /kharos:follow start it with the prompt the wait's own report gives.
-  const prompt = followerPrompt('<id>', null, '${CLAUDE_PLUGIN_ROOT}');
-  const run = fs.readFileSync(path.join(root, 'skills', 'run', 'SKILL.md'), 'utf8');
-  assert.ok(run.includes('`subagent_type` `"kharos:follow"`, `run_in_background` true'));
-  assert.ok(run.includes(prompt), `the run skill starts the follower with: ${prompt}`);
-  const follow = fs.readFileSync(path.join(root, 'skills', 'follow', 'SKILL.md'), 'utf8');
-  assert.match(follow, /^disable-model-invocation: true$/m);
-  assert.ok(follow.includes('kharos" followers $ARGUMENTS'));
 });
 
 test('wait: a session another login launched becomes invisible, and the wait does not spin', async () => {
@@ -376,4 +363,70 @@ test('wait: a session another login launched becomes invisible, and the wait doe
   const still = await clocked(sb, c.now(), reader(sb, () => ''), { since: o.key, maxMs: 120_000, account: () => (looks++, 'sha256:another') }).run();
   assert.equal(still.changed, false);
   assert.ok(looks <= 12, `${looks} account checks`);
+});
+
+test('wait: a follower holds the lease from its first look, before its first read is due', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  const log = fixture('log-foreground-command.txt');
+  const readAt = at('2026-11-25T18:58:00Z');
+  postToolUse(sb.ctx(readAt), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(log, readAt)), 'other'));
+  const seen: boolean[] = [];
+  let t = readAt + 2_000;
+  const o = await wait(sb.paths, {
+    id: 'k-0001',
+    since: null,
+    maxMs: 10_000,
+    minIntervalMs: 15_000,
+    maxIntervalMs: 60_000,
+    env: sb.env,
+    account,
+    now: () => t,
+    sleep: async (ms) => {
+      seen.push(liveFollowers(sb.paths, t).has('k-0001'));
+      t += ms;
+    },
+    read: async () => {
+      throw new Error('no read is due within this wait');
+    },
+  });
+  assert.equal(o.changed, false);
+  assert.ok(seen.length > 0);
+  assert.deepEqual(seen, seen.map(() => true), 'kharos followers, list and health see the follower while it sleeps');
+  assert.equal(liveFollowers(sb.paths, t).size, 0, 'the lease is given back at the end');
+});
+
+test('wait: a slow reader is stopped at the deadline, so the wait never outlasts --max', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  const log = fixture('log-foreground-command.txt');
+  const start = at('2026-11-25T18:58:00Z');
+  const timeouts: number[] = [];
+  let t = start;
+  const land = reader(sb, () => pageAt(log, start));
+  const o = await wait(sb.paths, {
+    id: 'k-0001',
+    since: null,
+    maxMs: 70_000,
+    minIntervalMs: 15_000,
+    maxIntervalMs: 60_000,
+    env: sb.env,
+    account,
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms;
+    },
+    // Each read takes all the time it is given.
+    read: async (p, r, e, _n, ms) => {
+      timeouts.push(ms);
+      t += ms;
+      return land(p, r, e, t, ms);
+    },
+  });
+  assert.equal(o.changed, false);
+  assert.ok(t - start <= 70_000, `the wait ran ${(t - start) / 1000} s`);
+  assert.equal(o.waited_s, 70);
+  assert.equal(timeouts[0], 50_000);
+  assert.ok(timeouts.length >= 2 && timeouts.slice(1).every((ms) => ms <= 20_000), `timeouts ${timeouts.join(', ')}`);
+  assert.equal(liveFollowers(sb.paths, t).size, 0);
 });

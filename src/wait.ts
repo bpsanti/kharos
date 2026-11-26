@@ -24,8 +24,9 @@ export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.u
 export const WAIT_DEFAULTS = { maxS: 540, minIntervalS: 15, maxIntervalS: 60 } as const;
 
 /**
- * A reader that takes longer than this is stopped. Together with the longest wait it stays inside the
- * ten minutes a foreground Bash command may run.
+ * A reader that takes longer than this, or than the time left before the wait's deadline, is stopped,
+ * so a wait ends by its deadline and the default one stays inside the ten minutes a foreground Bash
+ * command may run.
  */
 const READ_TIMEOUT_MS = 50_000;
 /** How often a wait looks at the registry between its own reads, to see what another process recorded. */
@@ -63,7 +64,7 @@ export interface ReaderRun {
   error: string | null;
 }
 
-export type Reader = (paths: Paths, read: Read, env: NodeJS.ProcessEnv, now: number) => Promise<ReaderRun>;
+export type Reader = (paths: Paths, read: Read, env: NodeJS.ProcessEnv, now: number, timeoutMs: number) => Promise<ReaderRun>;
 
 export interface WaitOptions {
   id: string;
@@ -180,7 +181,7 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
 }
 
 /** One read through a minimal headless `claude -p` that may make only that RemoteTrigger call. */
-export const headlessRead: Reader = async (paths, read, env, now) => {
+export const headlessRead: Reader = async (paths, read, env, now, timeoutMs) => {
   const reader = crypto.randomUUID();
   // Registered as a watcher, the reader session may only read: the hook denies it a launch or a fire.
   updateWatch(paths, (w) => {
@@ -217,7 +218,7 @@ export const headlessRead: Reader = async (paths, read, env, now) => {
         'json',
         `Call RemoteTrigger with action "${read.action}" and ${params}.`,
       ],
-      { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: READ_TIMEOUT_MS },
+      { cwd: paths.state, env: childEnv, encoding: 'utf8', input: '', timeout: timeoutMs },
     );
     if (r.error) return { ok: false, cost_usd: null, error: `claude -p: ${r.error.message}` };
     let cost: number | null = null;
@@ -279,23 +280,28 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       if (key !== opts.since && key !== 'ok') return done(key, true);
       if (settled(key) || now() - start >= opts.maxMs) return done(key, false);
       const t = now();
+      // The lease says this wait follows the session from its first look, not only from its first read.
+      const holds = takeLease(paths, id, t);
+      leased ||= holds;
       const lastRead = s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
       const dueAt = fresh ? nextOwnRead : Math.max(lastRead + interval, nextOwnRead);
-      if (t >= dueAt && takeLease(paths, id, t)) {
-        leased = true;
+      if (holds && t >= dueAt) {
         const lastEvent = s.last_event_at;
         let landed = false;
         if (!switchedAccount(paths, s, t, opts)) {
-          for (const r of readsFor(s)) {
-            const run = await read(paths, r, opts.env, now());
+          const planned = readsFor(s);
+          for (const r of planned) {
+            const left = opts.maxMs - (now() - start);
+            if (left <= 0) break;
+            const run = await read(paths, r, opts.env, now(), Math.min(READ_TIMEOUT_MS, left));
             reads++;
             cost += run.cost_usd ?? 0;
             if (!run.ok) lastError = run.error ?? 'the reader failed';
           }
           const after = find();
           // A read that never reached the hook leaves last_read_at as it was.
-          if (after.last_read_at === s.last_read_at && readsFor(s).length > 0) {
+          if (after.last_read_at === s.last_read_at && planned.length > 0) {
             failures++;
             if (failures >= MAX_READER_FAILURES) {
               s = after;
@@ -311,8 +317,6 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
         nextOwnRead = now() + (landed ? 0 : interval);
         continue;
       }
-      // The holder keeps its lease fresh while it sleeps; any other wait looks again in a slice.
-      if (leased) takeLease(paths, id, t);
       const left = opts.maxMs - (now() - start);
       await sleep(Math.max(0, Math.min(t >= dueAt ? SLICE_MS : dueAt - t, SLICE_MS, left)));
     }
