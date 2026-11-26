@@ -11,7 +11,7 @@ import { accountKey, resolvePaths, sharedPaths } from '../src/paths.ts';
 import { updateRegistry } from '../src/registry.ts';
 import { result as showResult } from '../src/commands.ts';
 import { saveEnvironments } from '../src/state.ts';
-import { diffAccountMode, writeAccountMode } from '../src/account-mode.ts';
+import { applyUnblockAll, preview } from '../src/unblock-all.ts';
 import { formatSetup, parseScheduleView, readGitHub, runSetup, SetupError, type SetupInput } from '../src/setup.ts';
 import { HEADS_EMPTY, HEADS_OK, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -93,10 +93,12 @@ test('setup: one list up front, then each step in order, and the profile only on
   r = runSetup(sb.paths, input(sb, { environment: 'Demo' }), deps());
   assert.equal(r.next.kind, 'ask-permissions');
   if (r.next.kind === 'ask-permissions') {
-    assert.deepEqual(r.next.options.map((o) => o.id), ['as-is', 'standard', 'hook', 'standard+hook', 'mirror', 'broad', 'auto-preflight', 'unblock', 'auto-unblock', 'account-auto']);
+    assert.deepEqual(r.next.options.map((o) => o.id), ['as-is', 'standard', 'hook', 'standard+hook', 'mirror', 'broad', 'auto-preflight', 'unblock', 'unblock-all']);
     assert.match(r.next.options.find((o) => o.id === 'mirror')?.unavailable ?? '', /no copy of the organization's managed settings/);
     assert.match(r.next.options.find((o) => o.id === 'unblock')?.unavailable ?? '', /no copy/);
     assert.equal(r.next.offer[0], 'standard', 'the recommended mode comes first');
+    assert.equal(r.next.offer[1], 'unblock-all', 'the one step that frees everything is always offered');
+    assert.match(r.next.options.find((o) => o.id === 'unblock-all')?.note ?? '', /here it leaves out: the unblock preset, .*no copy/);
     assert.ok(r.next.offer.length <= 4);
   }
   assert.match(formatSetup(r), /trade-off: /);
@@ -176,7 +178,8 @@ test('setup: modes the organization rules out are listed with the reason, and ca
   assert.equal(r.next.kind, 'ask-permissions');
   if (r.next.kind === 'ask-permissions') {
     assert.match(r.next.options.find((o) => o.id === 'mirror')?.unavailable ?? '', /disableBypassPermissionsMode/);
-    assert.match(r.next.options.find((o) => o.id === 'auto-unblock')?.unavailable ?? '', /disableBypassPermissionsMode/);
+    assert.equal(r.next.options.find((o) => o.id === 'unblock-all')?.unavailable, null, 'auto mode for the account is still possible');
+    assert.match(r.next.options.find((o) => o.id === 'unblock-all')?.note ?? '', /automatic unblock: .*disableBypassPermissionsMode/);
     assert.equal(r.next.options.find((o) => o.id === 'hook')?.unavailable, null);
     assert.ok(!r.next.offer.includes('unblock'));
   }
@@ -186,7 +189,7 @@ test('setup: modes the organization rules out are listed with the reason, and ca
   const h = runSetup(sb.paths, input(sb, { environment: 'demo' }), deps({ managedPolicy: () => hooksOnly }));
   if (h.next.kind === 'ask-permissions') {
     for (const id of ['hook', 'standard+hook', 'auto-preflight', 'broad']) assert.match(h.next.options.find((o) => o.id === id)?.unavailable ?? '', /allowManagedHooksOnly/, id);
-    assert.deepEqual(h.next.offer, ['standard', 'as-is']);
+    assert.deepEqual(h.next.offer, ['standard', 'unblock-all', 'as-is']);
   } else assert.fail(`expected the permission question, got ${h.next.kind}`);
 });
 
@@ -362,54 +365,82 @@ test('setup: a repository with a setup script asks once whether the environment 
   if (n.next.kind === 'env-assist') assert.match(n.next.action, /kharos env-guide --repo example\/demo --copy --open/);
 });
 
-test('setup: asks once whether this account starts in auto mode, writes it only with the approved diff, and the same command undoes it', () => {
+test('setup: unblock all is one option with one confirmation; it frees all three parts, and its own undo takes them back', () => {
   const sb = sandbox();
   const conf = path.join(sb.dir, 'claude-config');
   fs.mkdirSync(conf);
   const settingsFile = path.join(conf, 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify({ model: 'opus', permissions: { defaultMode: 'acceptEdits', allow: ['Read'] } }, null, 2) + '\n');
   const env = { ...sb.env, CLAUDE_CONFIG_DIR: conf };
+  const policy: ManagedPolicy = { status: 'found', file: path.join(conf, 'remote-settings.json'), ask: ['Bash(psql:*)'], deny: ['Bash(rm:*)'], bypassDisabled: false, managedHooksOnly: false };
   const unanswered = (s: Sandbox): SetupInput => {
     const { accountMode: _, ...rest } = input(s);
     return rest;
   };
-  const ask = (over: Partial<SetupInput> = {}) => runSetup(sb.paths, { ...unanswered(sb), env, environment: 'demo', permissions: 'as-is', ...over }, deps());
+  const ask = (over: Partial<SetupInput> = {}) => runSetup(sb.paths, { ...unanswered(sb), env, environment: 'demo', ...over }, deps({ managedPolicy: () => policy }));
 
+  // No separate question about the account's mode: it is part of unblock all, offered with what it frees.
   const r = ask();
-  assert.equal(r.next.kind, 'ask-permissions');
-  if (r.next.kind !== 'ask-permissions' || !r.next.account) return assert.fail('the account question is asked');
-  assert.deepEqual(r.next.offer, [], 'the repository mode is chosen already');
-  assert.match(r.next.account.diff, /-\s+"defaultMode": "acceptEdits"/);
-  assert.match(r.next.account.diff, /\+\s+"defaultMode": "auto"/);
-  assert.match(formatSetup(r), /every session of this Claude account starts in auto mode/);
-  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits', 'nothing is written before the answer');
+  if (r.next.kind !== 'ask-permissions' || !r.next.unblockAll) return assert.fail('the permission question carries what unblock all frees');
+  assert.ok(r.next.offer.includes('unblock-all'));
+  assert.doesNotMatch(formatSetup(r), /Ask too: start this account's sessions in auto mode/);
+  const shown = r.next.unblockAll.text;
+  for (const part of [/1\. the unblock preset, confirmed for the organization's managed settings/, /2\. automatic unblock/, /3\. this account's sessions start in auto mode/, /Bash\(psql:\*\)/, /every session of this Claude account starts in auto mode/, /\+\s+"defaultMode": "auto"/]) {
+    assert.match(shown, part);
+  }
+  assert.match(formatSetup(r), new RegExp(`token ${r.next.unblockAll.token}`));
 
-  assert.throws(() => ask({ accountMode: 'auto', accountExpect: '000000000000' }), /not what that diff was made from/);
-  assert.deepEqual(loadConfig(sb.paths).config.profiles, {}, 'a refused account change writes no profile either');
-  const done = ask({ accountMode: 'auto', accountExpect: r.next.account.token });
-  assert.equal(done.next.kind, 'ready');
-  if (done.next.kind === 'ready') assert.match(done.next.summary.join('\n'), /launches need no approval prompt/);
-  const after = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  assert.deepEqual(after, { model: 'opus', permissions: { defaultMode: 'auto', allow: ['Read'] } }, 'only defaultMode changes');
-  assert.equal(loadConfig(sb.paths).config.account_mode, 'auto');
-  assert.equal(ask().next.kind, 'ready', 'asked once');
-  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps())), /ok {4}launch approval: this account starts its sessions in auto mode/);
-
-  // The same command undoes it, back to what the file had.
-  const off = diffAccountMode(sb.paths, env, 'off', NO_POLICY);
-  const token = /change ([0-9a-f]{12}):/.exec(off)?.[1];
-  writeAccountMode(sb.paths, env, 'off', token, NO_POLICY);
+  // Picked without the token: asked again, with nothing written; a stale token writes nothing either.
+  const picked = ask({ permissions: 'unblock-all' });
+  assert.equal(picked.next.kind, 'ask-permissions');
+  if (picked.next.kind === 'ask-permissions') assert.deepEqual(picked.next.offer, [], 'the mode is chosen; only its confirmation is open');
+  assert.throws(() => ask({ permissions: 'unblock-all', unblockExpect: '000000000000' }), /nothing was changed/);
+  assert.deepEqual(loadConfig(sb.paths).config.profiles, {}, 'a refused confirmation writes no profile either');
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits');
-  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps())), /launch approval: this account's sessions start in acceptEdits mode, so each launch asks for your approval, and a headless one needs `claude -p --permission-mode auto`/);
 
-  // An organization that turns auto mode off rules the option out, with why, and it is not asked.
-  const noAuto: ManagedPolicy = { status: 'found', file: 'f', ask: [], deny: [], bypassDisabled: false, managedHooksOnly: false, autoModeDisabled: true };
+  const done = ask({ permissions: 'unblock-all', unblockExpect: r.next.unblockAll.token });
+  assert.equal(done.next.kind, 'ready');
+  if (done.next.kind === 'ready') {
+    assert.match(done.next.summary.join('\n'), /Permissions: unblock all: .*\(now on: all three parts/);
+    assert.match(done.next.summary.join('\n'), /launches need no approval prompt/);
+    assert.doesNotMatch(done.next.summary.join('\n'), /Next: \/kharos:permissions unblock-all/, 'what setup just turned on is not the next step');
+  }
+  const cfg = loadConfig(sb.paths).config;
+  assert.deepEqual([cfg.permission_hook, cfg.preflight_auto, cfg.permission_unblock], [true, true, true]);
+  assert.equal(cfg.profiles.demo?.permissions, 'unblock-all');
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), { model: 'opus', permissions: { defaultMode: 'auto', allow: ['Read'] } }, 'only defaultMode changes');
+  assert.equal(ask().next.kind, 'ready', 'asked once');
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps({ managedPolicy: () => policy }))), /warn  unblock all: on: all three parts/);
+
+  // Its own undo takes every part back, to what the account and the configuration had.
+  const off = preview(sb.paths, env, 'off', policy);
+  applyUnblockAll(sb.paths, env, 'off', off.token ?? undefined, T0, policy);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits');
+  const back = loadConfig(sb.paths).config;
+  assert.deepEqual([back.permission_hook, back.preflight_auto, back.permission_unblock], [false, false, false]);
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps({ managedPolicy: () => policy }))), /ok {4}unblock all: off: none of the three parts is on; `\/kharos:permissions unblock-all` frees/);
+
+  // auto-unblock, the older name, is unblock-all: the same confirmation and token, and a stored profile reads as it.
+  const alias = sandbox();
+  const aliasAsk = (over: Partial<SetupInput> = {}) => runSetup(alias.paths, { ...unanswered(alias), env, environment: 'demo', ...over }, deps({ managedPolicy: () => policy }));
+  const asked = aliasAsk({ permissions: 'auto-unblock' });
+  if (asked.next.kind !== 'ask-permissions' || !asked.next.unblockAll) return assert.fail('auto-unblock asks for the confirmation of unblock all');
+  assert.deepEqual(asked.next.offer, []);
+  assert.ok(!asked.next.options.some((o) => o.id === ('auto-unblock' as string)), 'the older name is not offered');
+  assert.equal(aliasAsk({ permissions: 'auto-unblock', unblockExpect: asked.next.unblockAll.token }).next.kind, 'ready');
+  assert.equal(loadConfig(alias.paths).config.profiles.demo?.permissions, 'unblock-all');
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'auto');
+  writeConfig(alias, { profiles: { demo: { repo: 'https://github.com/example/demo', environment: 'env_01TESTENVIRONMENT', permissions: 'auto-unblock' } } });
+  assert.equal(loadConfig(alias.paths).config.profiles.demo?.permissions, 'unblock-all', 'a stored auto-unblock reads as unblock-all');
+  fs.writeFileSync(settingsFile, JSON.stringify({ model: 'opus', permissions: { defaultMode: 'acceptEdits', allow: ['Read'] } }, null, 2) + '\n');
+
+  // An organization that turns auto mode off leaves that part out, and says why.
+  const noAuto: ManagedPolicy = { ...policy, autoModeDisabled: true };
   const fresh = sandbox();
   const r2 = runSetup(fresh.paths, { ...unanswered(fresh), env: { ...fresh.env, CLAUDE_CONFIG_DIR: conf }, environment: 'demo' }, deps({ managedPolicy: () => noAuto }));
   if (r2.next.kind !== 'ask-permissions') return assert.fail(`expected the permission question, got ${r2.next.kind}`);
-  assert.equal(r2.next.account, null);
-  assert.match(r2.next.options.find((o) => o.id === 'account-auto')?.unavailable ?? '', /disableAutoMode/);
-  assert.throws(() => diffAccountMode(fresh.paths, env, 'auto', noAuto), /disableAutoMode/);
+  assert.match(r2.next.options.find((o) => o.id === 'unblock-all')?.note ?? '', /this account's sessions start in auto mode \(.*disableAutoMode/);
+  assert.match(r2.next.unblockAll?.text ?? '', /3\. this account's sessions start in auto mode .*not available here: .*disableAutoMode/);
 });
 
 test('setup: asks once per account how many sessions may be open at once, with the next question asked anyway', () => {

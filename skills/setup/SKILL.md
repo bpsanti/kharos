@@ -38,13 +38,14 @@ The person wants this done once, with as few questions as possible: never ask wh
      Never type a value of an environment variable or a secret for them, and never ask for one.
      When they say it is done, go back to step 2, and run step 3 with `--environment "<its name>" --confirmed`.
    - `next: ask-permissions`: ask one AskUserQuestion with the modes the output offers (when it offers any), the recommended one first, each with its one-line "does" and "trade-off" in the description, and say in the question that any other available mode in the list can be named instead.
-     When the output says "Ask too: start this account's sessions in auto mode?", add a second question to the same call: yes (with the diff it prints as the preview of the yes option, and its effect on every session of the account in the description) or no.
-     Then run step 3 again with `--permissions <mode>`, and with `--account-mode auto --account-expect <the token it printed>` on yes, or `--account-mode as-is` on no; setup writes the account's settings only on that yes.
+     The `unblock-all` option carries, as its preview, the whole text the output prints after "Unblock all, everything it frees", exactly as printed, never a summary of it; its description says that picking it confirms all of that at once, auto mode for every session of the account included.
+     When the output offers no mode (unblock-all is picked already), the question is only whether to confirm what unblock all frees, with that whole text, exactly as printed, as the preview of the yes option.
+     Then run step 3 again with `--permissions <mode>`, and, for `unblock-all`, with `--unblock-expect <the token it printed>`; setup then turns all of it on itself, and only with that token.
      When the output still has another question open (the environment, or its setup script), ask them in the same AskUserQuestion call.
    - `next: ask-max-open`: ask one AskUserQuestion with the numbers the output offers, the recommended one first, and its trade-off in the description; then run step 3 again with `--max-open <n>`.
    - Whenever the output has a line that starts with `Ask too: open sessions:`, add that question to the AskUserQuestion call of this step, with the numbers it offers, and pass `--max-open <n>` from then on.
    - `next: ready`: the summary is the end of the setup.
-     When its `Next:` line starts with `/kharos:permissions` and this folder is a checkout of the repository, carry it out now: run `kharos action permissions --session ${CLAUDE_SESSION_ID}` and follow the instructions it prints exactly, with the mode as their request.
+     When its `Next:` line starts with `/kharos:permissions` and this folder is a checkout of the repository (or it is `/kharos:permissions unblock-all`, which needs none), carry it out now: run `kharos action permissions --session ${CLAUDE_SESSION_ID}` and follow the instructions it prints exactly, with the mode as their request.
      A command in it marked "yours to run" is the person's: show it, prefixed with `! ` so they can run it here, and never run it yourself.
      Otherwise stop.
    - `next: not-ready`: show the fix it names, say whose step it is, and stop.
