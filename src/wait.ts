@@ -42,7 +42,8 @@ const READER_PROMPT =
 /**
  * What a follower compares to know whether something changed. It is the open notice, not the state:
  * /kharos:send moves the state to running at once while the notice stays open until the next read
- * closes it, and that is no news for the follower. A question answered that way is no news either.
+ * closes it, and that is no news for the follower. A question answered that way is no news either, nor
+ * the notice that a follower stopped, which the follower reading the session now has no reason to report.
  */
 export function stopKey(s: Session): string {
   if (s.step === 'closed' || s.step === 'refused') return `end:${s.step}`;
@@ -50,6 +51,7 @@ export function stopKey(s: Session): string {
   if (s.step === 'prepared' || s.step === 'routine_created') return `launch:${s.step}`;
   if (!s.notice) return 'ok';
   if (s.notice.event === 'session.waiting_answer' && s.state !== 'waiting_answer') return 'ok';
+  if (s.notice.event === 'session.unfollowed') return 'ok';
   return `${s.notice.event}|${s.notice.at}`;
 }
 

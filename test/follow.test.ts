@@ -8,7 +8,7 @@ import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { LEASE_STALE_MS, liveFollowers, takeLease } from '../src/lease.ts';
 import { loadRegistry, type Session } from '../src/registry.ts';
-import type { WaitOutcome } from '../src/wait.ts';
+import { stopKey, type WaitOutcome } from '../src/wait.ts';
 import { HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
@@ -151,9 +151,11 @@ test('follow: a failed wait is tried again with a growing delay, and only then t
   assert.equal(events[0]?.event.session, id);
   assert.match(events[0]?.event.reason ?? '', new RegExp(`kharos follow ${id} --detach`));
 
-  // The notice stays open, so the next follower that reads the session running again reports it back.
+  // The notice stays open, so the next follower that reads the session running again reports it back,
+  // and a follower started again does not wake on it before its first read.
   const s = loadRegistry(sb.paths).sessions[id];
   assert.equal(s?.notice?.event, 'session.unfollowed');
+  assert.equal(stopKey(s as Session), 'ok');
   const back = transition(s as Session, { state: 'running', notice: null, reason: 'running' }, Date.now(), 30, false);
   assert.deepEqual(back.map((e) => e.event), ['session.back']);
 });
