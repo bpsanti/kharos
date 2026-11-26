@@ -2,6 +2,7 @@
 // credential; the skills drive RemoteTrigger, and the hooks (`kharos hook <event>`) read its answers.
 
 import fs from 'node:fs';
+import { action } from './actions.ts';
 import { appendLine, StateError } from './fsutil.ts';
 import * as cmd from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo, type OutputConfig } from './config.ts';
@@ -100,6 +101,7 @@ const USAGE = `usage: kharos <command>
   doctor [--profile p] [--no-remote-tool] | environments --session id
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
   repo-init <owner/name>
+  action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
   permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
@@ -137,6 +139,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min.\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
         return 0;
       }
+      case 'action':
+        out(action(args.positional[0], flag(args, 'session'), env.CLAUDE_PLUGIN_ROOT));
+        return 0;
       case 'resume':
         out(cmd.resume(paths, need(args, 0, 'session id')));
         return 0;

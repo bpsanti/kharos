@@ -78,6 +78,8 @@ npm install -g kharos
 
 Commands that spend plan usage or change state can only be started by you, not by the model.
 
+Both forms work: `/kharos:log k-0001` and `/kharos log k-0001`; `/kharos` alone lists the actions (for `/loop`, use `/kharos:watch`).
+
 ## How a launch works
 
 1. `kharos prepare` checks the profile, the login, the repository and the number of open sessions, and writes the routine body to disk.

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { actionNames } from '../src/actions.ts';
 import { main, runHook } from '../src/cli.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import { recordAccess } from '../src/repo.ts';
@@ -147,6 +148,34 @@ function frontmatter(text: string): Record<string, string> {
   return out;
 }
 
+test('plugin: /kharos is the short form of every action, with the same instructions and permissions', async () => {
+  const skill = (dir: string) => fs.readFileSync(path.join(ROOT, 'skills', dir, 'SKILL.md'), 'utf8');
+  const rules = (dir: string) => (frontmatter(skill(dir))['allowed-tools'] ?? '').split(', ').filter(Boolean);
+  const short = frontmatter(skill('dispatch'));
+  assert.equal(short.name, 'kharos', 'the name that gives the bare /kharos');
+  assert.equal(short['disable-model-invocation'], 'true');
+  assert.ok(!fs.existsSync(path.join(ROOT, 'skills', 'kharos')), 'no other skill takes the name by its folder');
+
+  const own = 'Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" action:*)';
+  const wanted = new Set([own, ...actionNames(ROOT).flatMap(rules)]);
+  assert.deepEqual(rules('dispatch').sort(), [...wanted].sort(), 'pre-approves what the actions pre-approve, and nothing else');
+
+  const sb = sandbox();
+  const env = { ...sb.env, CLAUDE_PLUGIN_ROOT: ROOT };
+  const run = (argv: string[]) => captured(() => main(['action', ...argv], env, () => ''));
+  const log = (await run(['log', '--session', 'sess-1'])).stdout;
+  assert.ok(log.includes(`/bin/sh "${ROOT}/scripts/kharos" log $ARGUMENTS --session sess-1`), 'the command of /kharos:log, with the arguments left open');
+  assert.doesNotMatch(log, /\$\{CLAUDE_|^---/);
+
+  for (const argv of [[], ['nope']]) {
+    const r = await run(argv);
+    assert.equal(r.value, 0);
+    for (const name of actionNames(ROOT)) assert.ok(r.stdout.includes(`  ${name}: ${frontmatter(skill(name)).description}`), `lists ${name}`);
+    assert.doesNotMatch(r.stdout, / (dispatch|kharos-guide): /);
+  }
+  assert.match((await run(['nope'])).stdout, /there is no action "nope"/);
+});
+
 test('plugin: skills call commands the CLI knows, and the manifest matches the package', async () => {
   const sb = sandbox();
   for (const name of fs.readdirSync(path.join(ROOT, 'skills'))) {
@@ -158,7 +187,7 @@ test('plugin: skills call commands the CLI knows, and the manifest matches the p
       const r = await captured(() => main([command], sb.env, () => ''));
       assert.ok(!(r.value === 2 && /unknown command/.test(r.stderr)), `${name} calls kharos ${command}, which the CLI knows`);
     }
-    if (name !== 'kharos' && name !== 'watch') assert.equal(fm['disable-model-invocation'], 'true', `${name} is for the person only`);
+    if (name !== 'kharos-guide' && name !== 'watch') assert.equal(fm['disable-model-invocation'], 'true', `${name} is for the person only`);
   }
   assert.equal((await captured(() => main(['not-a-command'], sb.env, () => ''))).value, 2);
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin/plugin.json'), 'utf8'));
