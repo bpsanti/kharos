@@ -10,7 +10,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('package: the packed tarball installs a working `kharos` command', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kharos-pack-'));
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: dir, KHAROS_HOME: path.join(dir, 'kharos'), KHAROS_NODE: process.execPath, npm_config_cache: path.join(dir, 'cache') };
+  // `npm publish --dry-run` runs this test with dry-run in the environment, which the npm calls here must not inherit.
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: dir, KHAROS_HOME: path.join(dir, 'kharos'), KHAROS_NODE: process.execPath, npm_config_cache: path.join(dir, 'cache'), npm_config_dry_run: 'false' };
   const run = (command: string, args: string[]) => execFileSync(command, args, { cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     run('npm', ['pack', '--pack-destination', dir]);
