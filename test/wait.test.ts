@@ -284,7 +284,7 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
     ].join('\n'),
     { mode: 0o755 },
   );
-  const run = await headlessRead(sb.paths, { session: 'k-0001', action: 'get_run_log', params: { session_id: SID } }, { ...sb.env, KHAROS_CLAUDE_BIN: bin, ANTHROPIC_API_KEY: 'sk-test' }, T0);
+  const run = await headlessRead(sb.paths, { session: 'k-0001', action: 'get_run_log', params: { session_id: SID } }, { ...sb.env, KHAROS_CLAUDE_BIN: bin, ANTHROPIC_API_KEY: 'sk-test' }, T0, 50_000);
   assert.deepEqual(run, { ok: true, cost_usd: 0.00019, error: null });
   const argv = fs.readFileSync(path.join(sb.dir, 'argv.txt'), 'utf8').split('\n');
   const after = (name: string) => argv[argv.indexOf(name) + 1];
@@ -304,7 +304,7 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
   assert.equal(fs.realpathSync(fs.readFileSync(path.join(sb.dir, 'cwd.txt'), 'utf8').trim()), fs.realpathSync(sb.paths.state));
 
   fs.writeFileSync(bin, '#!/bin/sh\necho \'{"type":"result","is_error":true,"result":"Not logged in"}\'\nexit 1\n', { mode: 0o755 });
-  const bad = await headlessRead(sb.paths, { session: 'k-0001', action: 'list_runs', params: { trigger_id: TRIG } }, { ...sb.env, KHAROS_CLAUDE_BIN: bin }, T0);
+  const bad = await headlessRead(sb.paths, { session: 'k-0001', action: 'list_runs', params: { trigger_id: TRIG } }, { ...sb.env, KHAROS_CLAUDE_BIN: bin }, T0, 50_000);
   assert.equal(bad.ok, false);
   assert.match(bad.error ?? '', /Not logged in/);
 });
