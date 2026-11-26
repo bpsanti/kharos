@@ -111,19 +111,17 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
   }
   const out: KharosEvent[] = [];
   const open = s.notice;
-  // The deadline passes once: a session that a message reopened after it does not raise it again.
-  const notice = verdict.notice === 'overdue' && open?.event !== 'session.overdue' && typeof s.overdue_at === 'string' ? null : verdict.notice;
-  if (notice) {
-    const name = `session.${notice}` as EventName;
-    const repeat = (open?.event === name && !newPrompt) || (isTerminalNotice(notice) && s.last_notice?.event === name);
-    const due = repeat && open !== null && !isTerminalNotice(notice) && now - Date.parse(open.at) >= renotifyMin * 60_000;
+  if (verdict.notice) {
+    const name = `session.${verdict.notice}` as EventName;
+    const repeat = (open?.event === name && !newPrompt) || (isTerminalNotice(verdict.notice) && s.last_notice?.event === name);
+    const due = repeat && open !== null && !isTerminalNotice(verdict.notice) && now - Date.parse(open.at) >= renotifyMin * 60_000;
     if (!repeat || due) {
       out.push(buildEvent(s, name, previous, verdict.reason, now));
-      s.notice = isTerminalNotice(notice) ? null : { event: name, at: iso };
+      s.notice = isTerminalNotice(verdict.notice) ? null : { event: name, at: iso };
       s.last_notice = { event: name, at: iso };
-      if (notice === 'overdue') s.overdue_at ??= iso;
+      if (verdict.notice === 'overdue') s.overdue_at ??= iso;
     }
-    if (isTerminalNotice(notice)) s.notice = null;
+    if (isTerminalNotice(verdict.notice)) s.notice = null;
   } else if (open) {
     out.push(buildEvent(s, 'session.back', previous, 'back to normal after a notice', now));
     s.notice = null;

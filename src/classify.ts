@@ -42,6 +42,8 @@ export interface ClassifyInput {
   /** When the session started: the deadline and the slow-provisioning notice count from it. */
   startedAt: number;
   deadlineMin: number;
+  /** The deadline notice was raised already and is no longer open: the deadline passes once, so later checks apply. */
+  overdueRaised?: boolean;
   now: number;
   watch: WatchConfig;
   /** The ask rules an open permission prompt is compared with, to tell why it asks; read only when one is open. */
@@ -123,14 +125,17 @@ export function sameErrorRun(events: readonly LogEvent[]): number {
   return run;
 }
 
+const BACKGROUND_TOOLS: ReadonlySet<string> = new Set(['Monitor', 'Agent', 'Task', 'Workflow']);
+
 /**
  * Whether the turn started work that goes on after it closes and can wake it: a command run or moved to
- * the background, a Monitor, or a background agent.
+ * the background, a Monitor, or an agent or workflow (these can run in the background with no flag in
+ * their input).
  */
 export function startedBackground(turn: readonly LogEvent[]): boolean {
   return turn.some(
     (e) =>
-      (e.kind === 'tool_use' && (e.tool === 'Monitor' || /"run_in_background":\s*true/.test(e.text))) ||
+      (e.kind === 'tool_use' && (BACKGROUND_TOOLS.has(e.tool ?? '') || /"run_in_background":\s*true/.test(e.text))) ||
       (e.kind === 'tool_result' && /^Command (?:is )?running in (?:the )?background|\bmoved to the background\b/i.test(e.text)),
   );
 }
@@ -197,7 +202,7 @@ export function classify(input: ClassifyInput): Verdict {
 
   // past the deadline
   const ageMin = (now - input.startedAt) / MIN;
-  if (ageMin > input.deadlineMin) return { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
+  if (!input.overdueRaised && ageMin > input.deadlineMin) return { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
 
   // the same failure over and over
   const run = sameErrorRun(turn);

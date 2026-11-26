@@ -77,6 +77,8 @@ test('classify: a turn that closed on a background task it started warns only af
   for (const started of [
     [150, 'tool_use', 'Bash', '{"command":"cargo build","run_in_background":true}'],
     [150, 'tool_use', 'Monitor', '{"command":"tail -f build.log"}'],
+    [150, 'tool_use', 'Agent', '{"description":"Run the benchmark","prompt":"..."}'],
+    [150, 'tool_use', 'Workflow', '{"script":"..."}'],
     [150, 'tool_result', null, 'Command running in background with ID: b01. Output is being written to: /tmp/b01.output'],
   ] as [number, string, string | null, string][]) {
     const events = log([...START, started, [200, 'assistant', null, 'The server is still compiling'], [201, 'result', null, 'success is_error=false']]);
@@ -299,21 +301,17 @@ test('sinceLastUser: hook feedback and task notifications are not a message from
   assert.equal(latestMarks(person).question, null);
 });
 
-test('events: the deadline passes once, so a session reopened past it raises no second overdue', () => {
+test('classify: once the deadline notice was raised and closed, a session reopened past it is read as usual', () => {
+  const events = log([...START, [130, 'tool_use', 'Bash', '{}']]);
   const s = session();
-  const overdue: Verdict = { state: 'overdue', notice: 'overdue', reason: 'running for 181 min, past the deadline of 180 min' };
-  const running: Verdict = { state: 'running', notice: null, reason: 'running' };
-  assert.deepEqual(transition(s, overdue, BASE + 181 * 60_000, 60, false).map((e) => e.event), ['session.overdue']);
+  assert.deepEqual(transition(s, at(events, 181 * 60), BASE + 181 * 60_000, 60, false).map((e) => e.event), ['session.overdue']);
   assert.equal(s.overdue_at, new Date(BASE + 181 * 60_000).toISOString());
-  // It finished, then a message woke it: still past the deadline, and nobody is told again.
-  transition(s, { state: 'finished', notice: 'finished', reason: 'KHAROS-DONE ok' }, BASE + 190 * 60_000, 60, false);
-  transition(s, running, BASE + 200 * 60_000, 60, false);
-  assert.deepEqual(transition(s, overdue, BASE + 201 * 60_000, 60, false), []);
-  assert.equal(s.state, 'overdue');
-  assert.equal(s.notice, null);
-  // A notice that was open when the deadline came back is closed as usual.
-  s.notice = { event: 'session.silent', at: new Date(BASE + 202 * 60_000).toISOString() };
-  assert.deepEqual(transition(s, overdue, BASE + 203 * 60_000, 60, false).map((e) => e.event), ['session.back']);
+  // The overdue notice is still open: the deadline still counts, so it is repeated every renotify_min.
+  assert.equal(at(events, 181 * 60, { overdueRaised: false }).state, 'overdue');
+  // It was raised, then closed (the session finished and a message woke it): the later checks apply.
+  assert.deepEqual(at(events, 181 * 60, { overdueRaised: true }), { state: 'silent', notice: 'silent_severe', reason: 'no new event for 179 min in an open turn' });
+  const closed = log([...START, [200, 'assistant', null, 'done'], [201, 'result', null, 'success is_error=false']]);
+  assert.equal(at(closed, 201 + 6 * 60 + 181 * 60, { overdueRaised: true }).notice, 'quiet_unmarked');
 });
 
 test('classify: the deadline counts from the start it is given', () => {

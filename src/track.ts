@@ -164,7 +164,7 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
   const decided = recordHookDecisions(ctx.paths, s, merged.added, events);
 
   const watch = watchConfig(ctx.paths);
-  const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
+  const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, overdueRaised: typeof s.overdue_at === 'string' && s.notice?.event !== 'session.overdue', now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
   // An older page says nothing new about an open prompt, so it is not the next read that confirms one.
   const emitted = fromCursor && hookMayAnswer(s, verdict) ? [] : settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';

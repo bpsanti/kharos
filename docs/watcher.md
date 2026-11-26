@@ -56,11 +56,11 @@ The rules are checked in this order, and the first that matches wins.
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
 | `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
 | `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
-| `overdue` | running for longer than the launch's deadline (`--deadline`, or the profile's `deadline_min`), counted from the open of the cloud session; raised once per session, not again when a message reopens it | yes |
+| `overdue` | running for longer than the launch's deadline (`--deadline`, or the profile's `deadline_min`), counted from the open of the cloud session; raised once per session and repeated while it stays open; once it closes, a session a message reopens past its deadline is read by the checks below it (looping, silent, `quiet_unmarked`) | yes |
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
 | `silent` | an open turn with no new event for `silence_min` | at `silence_min`, again at `silence_severe_min` |
-| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `unmarked_end_min` (5), or after `quiet_end_min` (40) when the turn started a background task (a command run or moved to the background, a `Monitor`, a background agent) that may wake it |
+| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `unmarked_end_min` (5), or after `quiet_end_min` (40) when the turn started a background task (a command run or moved to the background, a `Monitor`, an `Agent`, `Task` or `Workflow` call, which can run in the background with no flag) that may wake it |
 | `running` | anything else | no |
 
 A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal.

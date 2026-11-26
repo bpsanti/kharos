@@ -168,6 +168,25 @@ test('follow: a failed wait is tried again with a growing delay, and only then t
   assert.deepEqual(back.map((e) => e.event), ['session.back']);
 });
 
+test('follow: a closed session that still runs raises no alert when its reads keep failing', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  close(sb.paths, id, T0 + MIN);
+  assert.ok(loadRegistry(sb.paths).sessions[id]?.closing_at);
+  const failure: WaitOutcome = { kharos: 'wait', id, state: 'running', notice: null, url: null, waited_s: 1, reads: 1, reader_cost_usd: 0, report: '', changed: false, key: 'ok', error: 'reads failed' };
+  const code = await followLoop(sb.paths, {
+    id,
+    env: sb.env,
+    write: () => {},
+    wait: async () => failure,
+    sleep: async () => {},
+    deliver: async () => ({ sent: 0, failed: 0, gaveUp: [], skipped: false, configError: null }),
+  });
+  assert.equal(code, 1);
+  assert.equal(readOutbox(sb.paths).filter((i) => i.event.event === 'session.unfollowed').length, 0);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.notice ?? null, null);
+});
+
 test('follow: a detached follower runs on its own and writes to its log', async () => {
   const sb = sandbox();
   const id = openOne(sb);

@@ -52,7 +52,7 @@ async function reportStopped(paths: Paths, opts: FollowLoopOptions): Promise<voi
   const now = Date.now();
   const ev = updateRegistry(paths, (reg) => {
     const s = findSession(reg, opts.id);
-    if (!s) return null;
+    if (!s || s.closing_at) return null;
     const ev = buildEvent(s, 'session.unfollowed', s.state, `its follower stopped because reads kept failing; kharos follow ${s.id} --detach starts it again`, now);
     s.notice = { event: ev.event, at: ev.at };
     s.last_notice = { event: ev.event, at: ev.at };
