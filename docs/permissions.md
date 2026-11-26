@@ -150,6 +150,7 @@ Members of an organization that has not disabled bypass mode can run past its as
 - The diff carries a warning to check with the organization's administrator first, and the write needs `--org-confirmed` besides the token.
 - Deny rules are never copied, converted or changed.
 - A mirrored rule allows only a single simple command, like an allow pattern, and never one whose program is a shell, an interpreter or a wrapper, unless the rule itself is broad and was mirrored with `--broad`.
+- With `--broad`, a bare `Bash` ask rule of the organization becomes an allow for every command in this repository's cloud sessions, still one single simple command per call.
 - `--mirror` again refreshes the list from the current copy (without `--broad`, broad rules go back to prompts), and `--unmirror` removes it.
 
 ### The log of the hook's decisions
