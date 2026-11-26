@@ -51,6 +51,18 @@ export interface Config {
    * permission prompts in cloud sessions, and attributes the hook's decisions in the logs it reads.
    */
   permission_hook: boolean;
+  /**
+   * Opt-in, off by default, and only while permission_hook is on: at each launch kharos writes the narrow
+   * allow patterns the permission preflight suggests to a side branch of its own, kharos/<id>, and the
+   * session starts there; the branch it launches from is never changed. Off, the preflight only suggests.
+   */
+  preflight_auto: boolean;
+  /**
+   * Opt-in, off by default, and only with preflight_auto and a remembered confirmation that matches the
+   * organization's managed settings: the side branch of each launch gets the unblock preset, which
+   * allows every permission prompt in the cloud session.
+   */
+  permission_unblock: boolean;
 }
 
 export const DEFAULT_WATCH: WatchConfig = {
@@ -84,6 +96,8 @@ export function defaultConfig(): Config {
       { type: 'file', path: '{state}/events.jsonl', events: ['*'] },
     ],
     permission_hook: false,
+    preflight_auto: false,
+    permission_unblock: false,
   };
 }
 
@@ -208,7 +222,18 @@ export function parseConfig(v: unknown): Config {
     return o.outputs.map((x, i) => parseOutput(x, `outputs[${i}]`));
   })();
   if (o.permission_hook !== undefined && typeof o.permission_hook !== 'boolean') throw new ConfigError('config.permission_hook must be true or false');
-  return { version: 1, default_profile: defaultProfile, profiles, watch, outputs, permission_hook: o.permission_hook === true };
+  if (o.preflight_auto !== undefined && typeof o.preflight_auto !== 'boolean') throw new ConfigError('config.preflight_auto must be true or false');
+  if (o.permission_unblock !== undefined && typeof o.permission_unblock !== 'boolean') throw new ConfigError('config.permission_unblock must be true or false');
+  return {
+    version: 1,
+    default_profile: defaultProfile,
+    profiles,
+    watch,
+    outputs,
+    permission_hook: o.permission_hook === true,
+    preflight_auto: o.preflight_auto === true,
+    permission_unblock: o.permission_unblock === true,
+  };
 }
 
 /** The configuration, or the defaults when there is no file yet. */

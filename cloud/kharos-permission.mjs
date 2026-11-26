@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kharos permission hook, version 2. `kharos permissions hook` copies this file into a repository as
+// kharos permission hook, version 3. `kharos permissions hook` copies this file into a repository as
 // .claude/hooks/kharos-permission.mjs and rewrites it on every change: edit the rules in
 // .claude/kharos-permissions.json instead.
 //
@@ -16,6 +16,8 @@
 //   kharos writes only when the person asked for broad rules with --broad.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
 //   right command or goes on without it instead of waiting.
+// - With the unblock preset (`"unblock": true`, which kharos writes only after the person confirmed
+//   what it opens), every prompt is allowed instead, of any tool, so no cloud session waits on a person.
 // A deny rule is never reached: Claude Code blocks those calls before any prompt.
 //
 // No dependency, Node.js 18 or newer. The functions are exported so kharos tests them and reads the
@@ -25,7 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HOOK_VERSION = 2;
+export const HOOK_VERSION = 3;
 
 /** The rules file, next to the hooks folder this script is in. */
 export const RULES_FILE = 'kharos-permissions.json';
@@ -33,14 +35,17 @@ export const RULES_FILE = 'kharos-permissions.json';
 /** Longest command the hook allows, so the whole command fits in the session log kharos reads. */
 export const MAX_ALLOWED_LENGTH = 600;
 
+/** The rule an approval of the unblock preset names when no allow pattern or mirrored rule matched. */
+export const UNBLOCK_RULE = 'unblock';
+
 /** The start of every refusal, so a reader of the session log can tell the hook's refusals apart. */
 export const REFUSAL_PREFIX = 'Refused by the kharos permission hook';
 
 /**
- * @typedef {{ allow: string[], mirror: string[], broad?: boolean }} HookRules
+ * @typedef {{ allow: string[], mirror: string[], broad?: boolean, unblock?: boolean }} HookRules
  * @typedef {{ ok: true, words: string[] } | { ok: false, why: string }} Split
  * @typedef {{ ok: true, words: (string | null)[] } | { ok: false, why: string }} Pattern
- * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror', broad: boolean }} Allow
+ * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror' | 'unblock', broad: boolean }} Allow
  * @typedef {{ behavior: 'deny', message: string, program: string | null }} Deny
  * @typedef {Allow | Deny} Decision
  */
@@ -268,6 +273,7 @@ export function readHookRules(value) {
     return /** @type {string[]} */ (v);
   };
   if (o.broad !== undefined && typeof o.broad !== 'boolean') throw new Error('"broad" must be true or false');
+  if (o.unblock !== undefined && typeof o.unblock !== 'boolean') throw new Error('"unblock" must be true or false');
   const broad = o.broad === true;
   const allow = list(o.allow, 'allow');
   for (const p of allow) {
@@ -280,7 +286,10 @@ export function readHookRules(value) {
     const why = broad ? null : broadRuleWhy(r);
     if (why) throw new Error(`mirrored rule "${r}" is broad (${why}), and the rules file does not say "broad": true`);
   }
-  return broad ? { allow, mirror, broad } : { allow, mirror };
+  /** @type {HookRules} */
+  const out = broad ? { allow, mirror, broad } : { allow, mirror };
+  if (o.unblock === true) out.unblock = true;
+  return out;
 }
 
 /** @param {string} tool */
@@ -315,6 +324,11 @@ export function decide(input, rules) {
   }
   const ti = typeof input.tool_input === 'object' && input.tool_input !== null ? /** @type {Record<string, unknown>} */ (input.tool_input) : {};
   const command = typeof ti.command === 'string' ? ti.command : null;
+  if (rules.unblock === true) {
+    // Every prompt is allowed; a rule that matches still names itself, so the log shows which.
+    const d = tool === 'Bash' && command !== null ? decide(input, { ...rules, unblock: false }) : null;
+    return d !== null && d.behavior === 'allow' ? d : { behavior: 'allow', rule: UNBLOCK_RULE, source: 'unblock', broad: true };
+  }
   if (tool !== 'Bash' || command === null) return { behavior: 'deny', program: null, message: generic(tool) };
 
   const broad = rules.broad === true;
@@ -367,7 +381,10 @@ export function hookOutput(d) {
   if (d.behavior === 'allow') {
     return {
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
-      systemMessage: `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : 'rule'} ${d.rule}`,
+      systemMessage:
+        d.source === 'unblock'
+          ? 'kharos permission hook allowed this call by its unblock preset, which allows every prompt in cloud sessions on this repository'
+          : `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : 'rule'} ${d.rule}`,
     };
   }
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: d.message } } };

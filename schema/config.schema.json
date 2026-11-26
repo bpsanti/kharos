@@ -39,6 +39,16 @@
       "type": "boolean",
       "default": false,
       "description": "Opt-in: kharos may install a PermissionRequest hook in a repository, which answers permission prompts in its cloud sessions, and the watcher logs the hook's decisions. See docs/permissions.md."
+    },
+    "preflight_auto": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in automatic permission preflight, effective only while permission_hook is on: at each launch kharos writes the narrow allow patterns the preflight suggests to a side branch kharos/<id> and starts the session there; the branch a profile launches from is never changed, and the side branch is deleted when the session is closed. See docs/permissions.md."
+    },
+    "permission_unblock": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in, with preflight_auto and a remembered confirmation that matches the organization's managed settings: the side branch of each launch gets the unblock preset, which allows every permission prompt in its cloud session. Refused when the organization disabled bypass mode; deny rules are never touched. See docs/permissions.md."
     }
   },
   "$defs": {

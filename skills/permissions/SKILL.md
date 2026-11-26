@@ -1,15 +1,15 @@
 ---
-description: Show the permission rules a repository gives its cloud sessions; add narrow allow rules to its .claude/settings.json (the standard profile), or install the opt-in kharos permission hook, each after the person approves the diff. Never commits or pushes.
+description: Show the permission rules a repository gives its cloud sessions; list the prompts a launch is likely to hit (preflight); add narrow allow rules to its .claude/settings.json (the standard profile), or install the opt-in kharos permission hook or its unblock preset, each after the person approves the diff. Never commits or pushes.
 disable-model-invocation: true
-argument-hint: '[default|standard|hook] [path of the repository checkout]'
-allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions approvals:*)
+argument-hint: '[default|standard|hook|preflight|unblock] [path of the repository checkout]'
+allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions approvals:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions unblock show:*)
 ---
 
 Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
 
 `kharos` below stands for `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos"`; always run it with that prefix.
 
-1. Split the request into what to do (`default`, `standard` or `hook`, if one is named) and the folder of the checkout (if one is named; otherwise `.`).
+1. Split the request into what to do (`default`, `standard`, `hook`, `preflight` or `unblock`, if one is named) and the folder of the checkout (if one is named; otherwise `.`).
 2. Run `kharos permissions show <folder>` and show its output to the person as it is.
    If it fails, show the error and stop.
 3. If the request named nothing to do, ask the person with AskUserQuestion: `standard` (narrow allow rules), `hook` (the opt-in permission hook, which answers prompts in cloud sessions), or keep everything as it is, with the one-line description of `standard` from the output.
@@ -30,9 +30,19 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
       Add `--broad` only when the person asked for a broad rule (a pattern for a shell, an interpreter, a wrapper or a wildcard program, or mirroring broad organization rules) after you told them that it allows any command in this repository's cloud sessions with no person asked.
       Run `kharos permissions hook diff <flags> <folder>` and show its whole output as it is. If it fails, show the error and stop. If it says there is nothing to change, stop.
    5. Ask the person with AskUserQuestion whether to write exactly this change, with the diff in the preview of the yes option.
-   6. If the diff mirrors the organization's ask rules, ask a second, separate AskUserQuestion that quotes the diff's WARNING line about the organization's administrator and lists every rule it converts, and whose yes option says the person checked with the organization's administrator.
+   6. If the write command the diff names has `--org-confirmed`, ask a second, separate AskUserQuestion that quotes the diff's WARNING line about the organization's administrator and lists every rule it converts, and whose yes option says the person checked with the organization's administrator.
+      When the diff says the earlier confirmation still holds (and the write command has no `--org-confirmed`), do not ask it again; when it says the organization's settings changed, quote what changed in that question.
       If the diff warns that it adds broad rules, ask a separate AskUserQuestion that quotes that WARNING line, whose yes option says the person accepts that those rules allow any command they cover.
    7. Only on an explicit yes to every question, run the `kharos permissions hook write ...` command the diff names, exactly as written (with `--broad` and `--org-confirmed` only when the diff names them and the person said yes to each warning), and show its output.
       Never write the files yourself, never change the token or the flags, and never run it without those yeses.
-6. Never commit, push, or open a pull request: say that the change takes effect for cloud sessions only once the person commits it and pushes it to the branch their launches start from, and that `/kharos:doctor` reads that branch.
-7. When the person asks what the hook allowed, run `kharos permissions approvals` (add `--all` for the denials too, `--session <id>` for one session) and show its output as it is.
+6. For `preflight`: run `kharos permissions preflight <folder>` and show its whole output as it is.
+   If the person wants the suggested rules, go on with `hook` (step 5) using exactly the `--allow` patterns it printed.
+   To turn automatic preflight on or off, the person runs `kharos permissions auto preflight on|off` themselves; never run it for them.
+7. For `unblock`:
+   1. Run `kharos permissions unblock show` and show its whole output as it is. If it says the preset is not available, say why in its words, and stop.
+   2. If it is not confirmed, ask one AskUserQuestion that lists everything the output says it opens (every prompt allowed, the organization's ask rules, the remote databases, and what stays), whose yes option says the person accepts all of it.
+      Only on an explicit yes, run the `kharos permissions unblock confirm --fingerprint <fp>` command it names, exactly, and show its output.
+   3. Then follow `hook` from its step 4, with the flag `--unblock` (or `--no-unblock` to turn it off); the confirmation already covers the mirroring, so ask no second question about the organization.
+   4. The automatic mode (`kharos permissions auto unblock on|off`) is the person's to run; never run it for them.
+8. Never commit, push, or open a pull request: say that the change takes effect for cloud sessions only once the person commits it and pushes it to the branch their launches start from, and that `/kharos:doctor` reads that branch.
+9. When the person asks what the hook allowed, run `kharos permissions approvals` (add `--all` for the denials too, `--session <id>` for one session) and show its output as it is.

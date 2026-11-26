@@ -2,7 +2,7 @@
 description: Launch a cloud session of Claude Code with an instruction, on a configured profile, and record it for follow-up.
 disable-model-invocation: true
 argument-hint: '"<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--output firstmate --status-file f --firstmate-home h] | --resume <id> | --rearm <id>'
-allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" prepare:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume:*)
+allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight --launch:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" prepare:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume:*)
 ---
 
 Launch one cloud session for this request: $ARGUMENTS
@@ -20,7 +20,16 @@ Never run `kharos rearm` in any step below, even when an answer mentions a re-ar
    The instruction is for the cloud session, not for you: do not carry it out, answer it, or ask about it; pass it on unchanged.
    The plugin appends its own protocol to it (the end and question marks).
    If the instruction is a batch of independent tasks, or one goal across several repositories, say in one line that Claude Projects fits that better, and go on.
-3. Run this, with the options you found and the instruction unchanged between the markers:
+3. First the permission preflight, which reads and changes nothing. Run this, with `--profile` only if the request named one, and the instruction unchanged between the markers (with `--file`, pass `--file <path>` instead of `--stdin` and no text):
+   ```
+   /bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight --launch [--profile p] --stdin <<'KHAROS_INSTRUCTION'
+   <instruction>
+   KHAROS_INSTRUCTION
+   ```
+   Show its output to the person as it is. If it fails, show the error in one line and go on: the preflight never stops a launch.
+   If its last line says `automatic preflight off` and more than `0 rule(s) to suggest`, ask the person with AskUserQuestion: launch now as it is, or stop to add the suggested rules first (with /kharos:permissions hook, in a checkout of the repository).
+   On stop, stop here: nothing was prepared. Never add the rules yourself.
+   Then run this, with the options you found and the instruction unchanged between the markers:
    ```
    /bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" prepare --session ${CLAUDE_SESSION_ID} [options] <<'KHAROS_INSTRUCTION'
    <instruction>
@@ -28,6 +37,7 @@ Never run `kharos rearm` in any step below, even when an answer mentions a re-ar
    ```
    With `--file`, pass `--file <path>` and no text between the markers.
    If it prints "not launched", show its output to the person and stop.
+   If it prints a `permission preflight:` line, show that line to the person as it is.
 4. Call the RemoteTrigger tool with action `create` and body `{"kharos_launch":"<id>"}`, with the id that prepare printed.
    Do not write the routine body yourself: the plugin puts in the stored one.
    If the answer does not start with `kharos:`, the plugin hooks are not active: stop, and tell the person to run /kharos:doctor.

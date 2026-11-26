@@ -35,6 +35,17 @@ export function footer(extraLines: readonly string[] = []): string {
   ].join('\n');
 }
 
+/**
+ * What a session that starts on a per-launch side branch must know: the branch is the base plus one
+ * commit that only adds the permission hook, it goes away at close, and nothing pushed may carry it.
+ */
+export function sideBranchLines(branch: string, base: string, commit: string): string[] {
+  return [
+    `- This session starts on branch ${branch}: ${base} plus one commit, ${commit}, that only adds the kharos permission hook for this session. kharos deletes ${branch} when the session is closed, so never push to it.`,
+    `- Do the work on a branch of your own. Before you open a pull request, take that commit out of your branch: run \`git fetch origin ${base}\` and then \`git rebase --onto FETCH_HEAD ${commit}\`, push the branch again with --force-with-lease, and open the pull request against ${base}.`,
+  ];
+}
+
 export interface BodyInput {
   id: string;
   title: string;

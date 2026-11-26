@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { claudeBin } from './account.ts';
 import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError } from './config.ts';
+import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { liveFollowers } from './lease.ts';
 import { findSession, isFollowed, loadRegistry, routineUrl, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
@@ -81,6 +82,11 @@ export function show(paths: Paths, ref: string): string {
     s.url ?? (s.trigger_id ? routineUrl(s.trigger_id) : 'no link yet'),
   ];
   if (s.error) lines.push(`error: ${s.error}`);
+  const p = s.preflight;
+  if (p?.status === 'applied') {
+    lines.push(`permission preflight: ${p.applied.length} narrow allow pattern(s)${p.unblock ? ' and the unblock preset' : p.mirrored?.length ? ` and ${p.mirrored.length} mirrored organization ask rule(s)` : ''} on the side branch ${p.branch} (from ${p.base}, commit ${p.commit.slice(0, 12)})${p.deleted_at ? `; the branch was deleted at ${p.deleted_at}` : ''}: ${p.applied.join(' | ')}`);
+  } else if (p?.status === 'skipped') lines.push(`permission preflight: ${p.reason}`);
+  else if (p?.status === 'creating') lines.push(`permission preflight: the side branch ${p.branch} was not finished`);
   return lines.join('\n');
 }
 
@@ -217,7 +223,33 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
   return lines.join('\n');
 }
 
-export function close(paths: Paths, ref: string, now: number): string {
+/** Deletes the side branch of a launch, only while its tip is still the commit kharos made. */
+function closeSideBranch(paths: Paths, s: Session, forge: Forge | null, now: number): string | null {
+  const p = s.preflight;
+  const slug = repoSlug(s.repo);
+  if (p?.status === 'creating') return `kharos may have created the side branch ${p.branch} of ${slug} before the launch stopped; if it exists, delete it: git push origin --delete ${p.branch}`;
+  if (p?.status !== 'applied' || p.deleted_at) return null;
+  const byHand = `delete it yourself once nothing on it is needed: git push origin --delete ${p.branch}`;
+  if (!forge) return `the side branch ${p.branch} of ${slug} stays; ${byHand}`;
+  const tip = forge.branchTip(s.repo, p.branch);
+  if (!tip.ok) return `the side branch ${p.branch} of ${slug} could not be checked with gh (${tip.error}); ${byHand}`;
+  const mark = () =>
+    updateRegistry(paths, (reg) => {
+      const cur = reg.sessions[s.id]?.preflight;
+      if (cur?.status === 'applied') cur.deleted_at = new Date(now).toISOString();
+    });
+  if (tip.tip === null) {
+    mark();
+    return `the side branch ${p.branch} of ${slug} is gone already`;
+  }
+  if (tip.tip !== p.commit) return `the side branch ${p.branch} of ${slug} was kept: it has commits kharos did not make; ${byHand}`;
+  const del = forge.deleteBranch(s.repo, p.branch);
+  if (!del.ok) return `the side branch ${p.branch} of ${slug} could not be deleted with gh (${del.error}); ${byHand}`;
+  mark();
+  return `deleted the side branch ${p.branch} of ${slug}, which held only the permission hook commit of this launch`;
+}
+
+export function close(paths: Paths, ref: string, now: number, forge: Forge | null = null): string {
   const s = need(paths, ref);
   updateRegistry(paths, (reg) => {
     const cur = reg.sessions[s.id];
@@ -231,6 +263,8 @@ export function close(paths: Paths, ref: string, now: number): string {
     lines.push(`The cloud session itself was not stopped (the tool has no stop action): ask it to stop with /kharos:send ${s.id}, or stop it at ${s.url}`);
   }
   if (s.trigger_id) lines.push(`Its disabled routine stays in your account; delete it at ${routineUrl(s.trigger_id)} (the tool cannot delete routines).`);
+  const side = closeSideBranch(paths, s, forge, now);
+  if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
   return lines.join('\n');
 }
 

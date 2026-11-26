@@ -18,6 +18,10 @@ export interface Paths {
   logs: string;
   /** The kharos permission hook's decisions, as the watcher read them from session logs. */
   approvals: string;
+  /** What automatic permission preflight applied at each launch. */
+  preflight: string;
+  /** The person's remembered confirmations about the organization's rules (mirror, unblock), each with the policy fingerprint it holds for. */
+  confirmations: string;
   /** One lease file per session a follower (`kharos wait`) reads, so only one process reads it at a time. */
   followers: string;
 }
@@ -46,6 +50,8 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): Paths {
     bodies: path.join(state, 'bodies'),
     logs: path.join(state, 'logs'),
     approvals: path.join(state, 'approvals.jsonl'),
+    preflight: path.join(state, 'preflight.jsonl'),
+    confirmations: path.join(state, 'org-confirmations.json'),
     followers: path.join(state, 'followers'),
   };
 }

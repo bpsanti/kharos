@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A permission preflight before each launch (`kharos permissions preflight`, and a step of `/kharos:run`): the prompts a session is likely to hit, from the organization's ask rules, the repository's own commands that such a rule covers, and earlier sessions on the same repository, each with a narrow rule of the permission hook, why, and the command that adds them.
+- Automatic preflight (`kharos permissions auto preflight on`, off by default): each launch gets a side branch `kharos/<id>` with those narrow rules and starts there; the launch branch is never changed, and `/kharos:close` deletes the side branch while it holds only that commit.
+- The confirmation to mirror the organization's ask rules is remembered with a fingerprint of its managed settings, and asked again, with what changed, only when they change.
+- The unblock preset (`kharos permissions unblock`, off by default): after one confirmation of what it opens, the permission hook allows every prompt in cloud sessions and mirrors every organization ask rule; refused when the organization disabled bypass mode, deny rules untouched, every allow logged. Hook script version 3.
+
 ## 0.1.0
 
 The first version published to npm.

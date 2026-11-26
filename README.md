@@ -66,7 +66,7 @@ npm install -g kharos
 |---|---|
 | `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
 | `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment, permission rules and limits, with the fix for each gap |
-| `/kharos:permissions [default\|standard\|hook] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; never commits or pushes |
+| `/kharos:permissions [default\|standard\|hook\|preflight\|unblock] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session, records it, and starts its follower in the background |
 | `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
@@ -149,7 +149,10 @@ Cloud sessions have no bypass mode, auto mode drops broad allow rules such as `B
 The routine's `allowed_tools` neither allows nor restricts anything there.
 `/kharos:permissions` shows a repository's rules, and adds narrow allow rules for its own commands (the `standard` profile).
 The opt-in permission hook (off by default) answers prompts in cloud sessions with your own allow patterns (narrow ones, unless you ask for broad ones with `--broad`), and denies the rest with a message that names the allowed form, so the session sends the right command instead of waiting.
-When the organization has not disabled bypass mode, it can also mirror the organization's ask rules as a cloud-only allow, after you confirm the list; deny rules are never touched.
+When the organization has not disabled bypass mode, it can also mirror the organization's ask rules as a cloud-only allow, after you confirm the list once (kharos asks again only when the organization's rules change); deny rules are never touched.
+Before each launch, `/kharos:run` runs a permission preflight: the prompts the session is likely to hit (the organization's ask rules, commands of the repository that such a rule covers, and prompts of earlier sessions on the same repository), each with the narrow rule that answers it, why, and the exact command that adds them.
+With automatic preflight (opt-in, off by default), kharos writes those narrow rules itself to a side branch `kharos/<id>` of each launch and starts the session there, so the branch your team shares is never changed; `/kharos:close` deletes the side branch.
+The unblock preset (opt-in, off by default, refused when the organization disabled bypass mode) goes further: confirmed once, it makes the hook allow every prompt in cloud sessions, so none waits on a person.
 The watcher logs each of the hook's decisions, and `kharos permissions approvals` lists them.
 `/kharos:doctor` warns when a launch branch would likely stall, about managed ask rules that would stop a session, about broad rules or modes that cloud sessions ignore, and while the hook is on: see [docs/permissions.md](docs/permissions.md).
 
@@ -168,6 +171,8 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 | `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id and a heartbeat |
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |
+| `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
+| `~/.local/state/kharos/org-confirmations.json` | Your confirmations to mirror the organization's ask rules and of the unblock preset, each with the fingerprint of the managed settings it holds for |
 
 `KHAROS_HOME` moves both under one folder, which is how one machine serves several accounts.
 
