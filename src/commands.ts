@@ -229,9 +229,9 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
 function closeSideBranch(paths: Paths, s: Session, forge: Forge | null, now: number): string | null {
   const p = s.preflight;
   const slug = repoSlug(s.repo);
-  if (p?.status === 'creating') return `kharos may have created the side branch ${p.branch} of ${slug} before the launch stopped; if it exists, delete it: git push origin --delete ${p.branch}`;
+  if (p?.status === 'creating') return `kharos may have created the side branch ${p.branch} of ${slug} before the launch stopped; if it exists, delete it: git push https://github.com/${slug}.git --delete '${p.branch}'`;
   if (p?.status !== 'applied' || p.deleted_at) return null;
-  const byHand = `delete it yourself once nothing on it is needed: git push origin --delete ${p.branch}`;
+  const byHand = `delete it yourself once nothing on it is needed: git push https://github.com/${slug}.git --delete '${p.branch}'`;
   if (!forge) return `the side branch ${p.branch} of ${slug} stays; ${byHand}`;
   const tip = forge.branchTip(s.repo, p.branch);
   if (!tip.ok) return `the side branch ${p.branch} of ${slug} could not be checked with gh (${tip.error}); ${byHand}`;

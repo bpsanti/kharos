@@ -522,7 +522,7 @@ test('automatic preflight: a side branch with commits kharos did not make is kep
   const forge = fakeForge({ 'package.json': PACKAGE });
   autoPrepare(sb, forge);
   forge.tips.set('kharos/k-0001', 'f'.repeat(40));
-  assert.match(close(sb.paths, 'k-0001', T0, forge), /was kept: it has commits kharos did not make; delete it yourself .*git push origin --delete kharos\/k-0001/);
+  assert.match(close(sb.paths, 'k-0001', T0, forge), /was kept: it has commits kharos did not make; delete it yourself .*git push https:\/\/github\.com\/example\/demo\.git --delete 'kharos\/k-0001'/);
   assert.deepEqual(forge.deleted, []);
 });
 

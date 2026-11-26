@@ -34,12 +34,20 @@ export interface ScheduleView {
 
 const ENV_LINE = /^-\s+(.+?)\s+\(id:\s*(env_\w+),\s*kind:\s*([\w-]+)\)$/;
 
-/** Reads the "Available environments" list and the GitHub notes from the text the /schedule skill showed. */
-export function parseScheduleView(text: string): ScheduleView {
+/**
+ * Reads the "Available environments" list and the GitHub notes from the text the /schedule skill showed;
+ * null when the text holds no such list, so an empty paste reads as "not listed", not as "no environments".
+ */
+export function parseScheduleView(text: string): ScheduleView | null {
   const environments: Environment[] = [];
   const notes: string[] = [];
+  let listed = false;
   for (const raw of text.split('\n')) {
     const line = raw.trim();
+    if (/^Available environments:?$/i.test(line)) {
+      listed = true;
+      continue;
+    }
     const m = ENV_LINE.exec(line);
     if (m) {
       if (!environments.some((e) => e.id === m[2])) environments.push({ name: clean(m[1] as string, 100), id: m[2] as string, kind: m[3] as string });
@@ -47,7 +55,7 @@ export function parseScheduleView(text: string): ScheduleView {
     }
     if (/github/i.test(line)) notes.push(clean(line.replace(/^[-*\s⚠]+/u, ''), 400));
   }
-  return { environments, notes };
+  return listed || environments.length > 0 ? { environments, notes } : null;
 }
 
 export type GitHub =

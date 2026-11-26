@@ -42,7 +42,7 @@ function input(sb: Sandbox, over: Partial<SetupInput> = {}): SetupInput {
 }
 
 test('setup: reads the environments and the GitHub heads-up the /schedule skill shows', () => {
-  const v = parseScheduleView(NOT_CONNECTED);
+  const v = parseScheduleView(NOT_CONNECTED)!;
   assert.deepEqual(v.environments, [
     { name: 'demo', id: 'env_01DEMO', kind: 'anthropic_cloud' },
     { name: 'Default', id: 'env_01DEFAULT', kind: 'anthropic_cloud' },
@@ -133,6 +133,21 @@ test('setup: a single environment is picked without a question, and an empty rep
   const e = runSetup(empty.paths, input(empty, { view: one, permissions: 'as-is' }), deps({ heads: () => HEADS_EMPTY }));
   assert.equal(e.next.kind, 'ask-initial-commit');
   assert.equal(loadConfig(empty.paths).exists, false);
+});
+
+test('setup: an empty --from-schedule paste reads as not listed, so an existing environment or an env_ id is kept', () => {
+  assert.equal(parseScheduleView(''), null);
+  assert.deepEqual(parseScheduleView('Available environments:'), { environments: [], notes: [] }, 'a list with no entry is an account with no environment');
+
+  const sb = sandbox();
+  const byId = runSetup(sb.paths, input(sb, { view: parseScheduleView(''), environment: 'env_01PASTED', permissions: 'as-is' }), deps());
+  assert.equal(byId.steps[3]?.state, 'ok');
+  assert.equal(byId.next.kind, 'ready');
+  assert.equal(loadConfig(sb.paths).config.profiles.demo?.environment, 'env_01PASTED');
+
+  const again = runSetup(sb.paths, input(sb, { view: parseScheduleView(''), permissions: 'as-is' }), deps());
+  assert.equal(again.steps[3]?.state, 'check');
+  assert.doesNotMatch(again.steps[3]?.detail ?? '', /listed no environment/);
 });
 
 test('setup: a repository other than this folder keeps GitHub unconfirmed, and the summary says the first launch checks it', () => {
