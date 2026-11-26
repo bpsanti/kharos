@@ -72,23 +72,38 @@ test('preflight: a prompt of an earlier session becomes a prefix rule of its pro
       bash('kubectl get pods -n prod'),
       bash('gh pr view 12'),
       bash('git --no-pager log'),
+      bash('git -C dir status'),
+      bash('kubectl -n prod get pods'),
+      bash('npm --prefix web test'),
+      bash('docker compose -f x.yml exec db psql'),
+      bash('git --unknown-option status'),
     ],
   });
   assert.deepEqual(r.suggestions.map((s) => [s.kind, s.pattern]).sort(), [
     ['prefix', 'Bash(docker compose exec:*)'],
     ['prefix', 'Bash(gh pr view:*)'],
+    ['prefix', 'Bash(git log:*)'],
     ['prefix', 'Bash(git push:*)'],
+    ['prefix', 'Bash(git status:*)'],
     ['prefix', 'Bash(git:*)'],
     ['prefix', 'Bash(kubectl get pods:*)'],
+    ['prefix', 'Bash(npm test:*)'],
     ['prefix', 'Bash(psql:*)'],
     ['prefix', 'Bash(redis-cli:*)'],
   ]);
+  // A program built on subcommands with an option it does not know in front: the bare program, shown for review only.
+  const bare = r.suggestions.find((s) => s.pattern === 'Bash(git:*)');
+  assert.equal(bare?.status, 'review');
+  assert.equal(applicable(r).prefix.includes('Bash(git:*)'), false);
+  assert.equal(r.suggestions.filter((s) => s.status === 'review').length, 1);
   assert.deepEqual(r.suggestions.find((s) => s.pattern === 'Bash(git push:*)')?.sources, [{ kind: 'history', session: 'k-0001' }], 'the same prefix from two prompts is one rule');
   assert.deepEqual(applicable(r).allow, []);
   const text = formatPreflight(r, { addCommand: 'kharos permissions hook diff {flags} /work/demo', after: [], hookOn: true, auto: false });
   assert.match(text, /\d\. psql <any arguments>\n {5}-> Bash\(psql:\*\)\n {5}-> the organization's ask rule Bash\(psql:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows psql with any arguments/);
   assert.match(text, /kharos permissions hook diff .*--allow-prefix 'Bash\(psql:\*\)'.* \/work\/demo/);
-  for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin', 'feature-x', '-n prod', 'view 12', '--no-pager']) assert.equal(text.includes(word), false, word);
+  assert.match(text, /review before adding: Bash\(git:\*\) \(the subcommand of git could not be told apart from its options/);
+  assert.doesNotMatch(text, /--allow-prefix 'Bash\(git:\*\)'/);
+  for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin', 'feature-x', '-n prod', 'view 12', '--no-pager', 'x.yml', '--unknown-option']) assert.equal(text.includes(word), false, word);
 });
 
 test('preflight: a prefix rule that a deny rule covers, or whose program runs other code, is never suggested', () => {
@@ -223,6 +238,16 @@ test('preflight: what the hook on the branch allows already is not suggested aga
   assert.equal(r.asks.find((a) => a.rule === 'Bash(pg_dump:*)')?.state, 'hook');
   assert.equal(r.asks.find((a) => a.rule === 'Bash(psql:*)')?.state, 'hook');
   assert.deepEqual(applicable(r), { allow: [], prefix: [] });
+});
+
+test('preflight: an ask rule counts as answered by a prefix rule on the branch only when the prefix covers it', () => {
+  const settings = JSON.stringify({ hooks: { PermissionRequest: [{ matcher: '*', hooks: [{ type: 'command', command: 'node .claude/hooks/kharos-permission.mjs' }] }] } });
+  const rules = JSON.stringify({ version: 1, allow: [], prefix: ['Bash(docker compose exec:*)', 'Bash(redis-cli:*)'], mirror: [] });
+  const policy = parseManagedPolicy(JSON.stringify({ permissions: { ask: ['Bash(docker:*)', 'Bash(redis-cli:*)'] } }), 'f');
+  const r = report({ '.claude/settings.json': settings, [HOOK_SCRIPT_PATH]: shippedScript(), [HOOK_RULES_PATH]: rules }, { policy });
+  // `docker ps` still prompts and the hook denies it, so Bash(docker:*) stays open.
+  assert.equal(r.asks.find((a) => a.rule === 'Bash(docker:*)')?.state, 'open');
+  assert.equal(r.asks.find((a) => a.rule === 'Bash(redis-cli:*)')?.state, 'hook');
 });
 
 test('preflight: the repository ask rules count too, and with no managed settings nothing is guessed', () => {

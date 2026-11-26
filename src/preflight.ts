@@ -208,26 +208,61 @@ export function toCandidate(command: string): Candidate | null {
 
 /** Programs built on subcommands, with how many leading words name the action. */
 const SUBCOMMAND_WORDS: Record<string, number> = {
-  ...Object.fromEntries(['git', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go', 'make', 'terraform', 'helm', 'brew', 'pip', 'poetry', 'uv'].map((p) => [p, 1])),
+  ...Object.fromEntries(['git', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go', 'make', 'terraform', 'helm', 'brew', 'pip', 'poetry', 'uv', 'docker', 'podman'].map((p) => [p, 1])),
   ...Object.fromEntries(['kubectl', 'gh', 'aws', 'gcloud'].map((p) => [p, 2])),
 };
 const SUBCOMMAND_RE = /^[a-z0-9][a-z0-9-]*$/;
 
+const NPM_VALUE_OPTIONS = ['--prefix', '-C', '--dir', '-w', '--workspace', '--filter'];
+const NPM_FLAG_OPTIONS = ['--silent', '-s'];
+const DOCKER_VALUE_OPTIONS = ['-H', '--host', '--context', '--config', '-f', '--file', '-p', '--project-name', '--project-directory', '--env-file', '--profile'];
+/** The global options that may come before the subcommand: those that take a value, and those that take none. */
+const GLOBAL_OPTIONS: Record<string, { value: string[]; flag: string[] }> = {
+  git: { value: ['-C', '-c', '--git-dir', '--work-tree', '--namespace'], flag: ['--no-pager', '--paginate', '-p', '--bare', '--no-replace-objects'] },
+  kubectl: { value: ['-n', '--namespace', '--context', '--cluster', '--kubeconfig', '--user', '-s', '--server'], flag: [] },
+  npm: { value: NPM_VALUE_OPTIONS, flag: NPM_FLAG_OPTIONS },
+  pnpm: { value: NPM_VALUE_OPTIONS, flag: NPM_FLAG_OPTIONS },
+  yarn: { value: NPM_VALUE_OPTIONS, flag: NPM_FLAG_OPTIONS },
+  docker: { value: DOCKER_VALUE_OPTIONS, flag: [] },
+  podman: { value: DOCKER_VALUE_OPTIONS, flag: [] },
+  gh: { value: ['-R', '--repo'], flag: [] },
+  aws: { value: ['--profile', '--region', '--output', '--endpoint-url'], flag: [] },
+  gcloud: { value: ['--project', '--account', '--configuration'], flag: [] },
+};
+
 /**
  * A command recorded in an earlier session as a prefix rule: its program and the subcommand words that
  * name the action (`Bash(git push:*)`, `Bash(docker compose exec:*)`, `Bash(kubectl get pods:*)`), and
- * nothing else of it, so no value, flag or path it was run with reaches a rule.
+ * nothing else of it, so no value, flag or path it was run with reaches a rule. The program's known
+ * global options before the subcommand are skipped. `review` is set when a program built on subcommands
+ * shows none that can be told apart from its options: the rule is then the bare program, for a person
+ * to review, never applied on its own.
  */
-export function prefixRule(c: Candidate): string {
+export function prefixRule(c: Candidate): { rule: string; review: boolean } {
   const program = c.words[0] as string;
   const name = path.posix.basename(program);
-  const count = (name === 'docker' || name === 'podman') && c.words[1] === 'compose' ? 2 : (SUBCOMMAND_WORDS[name] ?? 0);
+  let need = SUBCOMMAND_WORDS[name] ?? 0;
+  const options = GLOBAL_OPTIONS[name] ?? { value: [], flag: [] };
   const words = [program];
-  for (const w of c.words.slice(1, 1 + count)) {
-    if (w === null || !SUBCOMMAND_RE.test(w)) break;
+  for (let i = 1; i < c.words.length && words.length <= need; i++) {
+    const w = c.words[i];
+    if (w === null || w === undefined) break;
+    const seeking = words.length === 1 || (words.length === 2 && words[1] === 'compose' && (name === 'docker' || name === 'podman'));
+    if (w.startsWith('-')) {
+      if (!seeking) break;
+      if (/^--[^=]+=/.test(w) || options.flag.includes(w)) continue;
+      if (options.value.includes(w)) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    if (!SUBCOMMAND_RE.test(w)) break;
     words.push(w);
+    if ((name === 'docker' || name === 'podman') && words.length === 2 && w === 'compose') need++;
   }
-  return `Bash(${words.join(' ')}:*)`;
+  const compose = (name === 'docker' || name === 'podman') && words[1] === 'compose';
+  return { rule: `Bash(${words.join(' ')}:*)`, review: need > 0 && words.length < (compose ? 3 : 2) };
 }
 
 /** The command lines a file of the repository holds, by what kind of file it is. */
@@ -294,7 +329,8 @@ export interface Suggestion {
   sources: Source[];
   /** The instruction names the program. */
   mentioned: boolean;
-  status: 'suggested' | 'covered' | 'refused';
+  /** review: a prefix rule whose subcommand could not be told apart from its options, shown for a person to review and never added on its own. */
+  status: 'suggested' | 'covered' | 'refused' | 'review';
   /** For status covered: the suggested prefix rule that covers it; null when the hook on the branch does. */
   coveredBy: string | null;
   /** Why kharos does not suggest it, for status refused. */
@@ -427,6 +463,8 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     words: (string | null)[] | null;
     /** The prefix rule, or null for a pattern. */
     rule: string | null;
+    /** A prefix rule to review only: see prefixRule. */
+    review: boolean;
     texts: Set<string>;
     sources: Source[];
   }
@@ -442,12 +480,12 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     return g;
   };
   const add = (c: Candidate, source: Source) => {
-    const g = join(groupKey(c.words), { words: [...c.words], rule: null, texts: new Set([c.text]), sources: [source] }, c.text, source);
+    const g = join(groupKey(c.words), { words: [...c.words], rule: null, review: false, texts: new Set([c.text]), sources: [source] }, c.text, source);
     if (g?.words) g.words = merge(g.words, c.words);
   };
   const addPrefix = (c: Candidate, source: Source) => {
-    const rule = prefixRule(c);
-    join(`prefix\u0000${rule}`, { words: null, rule, texts: new Set([c.text]), sources: [source] }, c.text, source);
+    const { rule, review } = prefixRule(c);
+    join(`prefix\u0000${rule}`, { words: null, rule, review, texts: new Set([c.text]), sources: [source] }, c.text, source);
   };
 
   // 2. Commands the repository runs, when an ask rule covers them.
@@ -499,7 +537,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
       asks: matched,
       sources: g.sources,
       mentioned: mentions(instruction, program),
-      status: refusal ? 'refused' : covered ? 'covered' : 'suggested',
+      status: refusal ? 'refused' : covered ? 'covered' : g.review ? 'review' : 'suggested',
       coveredBy: null,
       refusal,
     });
@@ -529,7 +567,10 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     const byHook =
       current !== null &&
       (current.mirror.includes(a.rule) ||
-        (current.prefix ?? []).some((r) => bashRuleMatches(a.rule, prefixOf(r))) ||
+        (current.prefix ?? []).some((r) => {
+          const head = programOf(a.rule) === null ? null : a.rule.replace(/^Bash\(/, '').replace(/(?::\*| \*)?\)$/, '');
+          return head !== null && !head.includes('*') && bashRuleMatches(r, head) && bashRuleMatches(r, `${head} x`);
+        }) ||
         current.allow.some((p) => {
           const w = parsePattern(p, true);
           return w.ok && bashRuleMatches(a.rule, sample(w.words));
@@ -628,6 +669,7 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
   const byHook = r.asks.filter((a) => a.state === 'hook');
   if (covered.length || byHook.length) lines.push(`already answered by the kharos permission hook on this branch: ${some([...covered.map((s) => s.pattern), ...byHook.map((a) => a.rule)], 6)}`);
   for (const s of r.suggestions.filter((x) => x.status === 'refused')) lines.push(`not suggested: ${s.refusal}`);
+  for (const s of r.suggestions.filter((x) => x.status === 'review')) lines.push(`review before adding: ${s.pattern} (the subcommand of ${s.program} could not be told apart from its options; it would allow ${s.program} with any arguments, so it is not in the command below and never applied on its own)`);
   const every = r.asks.filter((a) => a.state === 'every-command');
   if (every.length) lines.push(`${some(every.map((a) => a.rule))}: an ask rule for every command makes every Bash call prompt; only commands found above are suggested`);
   const notBash = r.asks.filter((a) => a.state === 'not-bash');
