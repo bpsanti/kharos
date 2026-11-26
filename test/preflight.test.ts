@@ -69,10 +69,28 @@ test('preflight: a word that holds a credential is never kept as written', () =>
     ['tool --password=S3cr3t run', ['tool', null, 'run']],
     ['tool --password S3cr3t run', ['tool', '--password', null, 'run']],
     ['tool api_token=S3cr3t run', ['tool', null, 'run']],
+    ['curl -u admin:S3cr3t https://api.example/health', ['curl', '-u', null, 'https://api.example/health']],
+    ['sshpass -p S3cr3t ssh host.example', ['sshpass', '-p', null, 'ssh', 'host.example']],
+    ['tool --api-key S3cr3t run', ['tool', '--api-key', null, 'run']],
+    ['tool --apikey S3cr3t run', ['tool', '--apikey', null, 'run']],
+    ['tool --access-key S3cr3t run', ['tool', '--access-key', null, 'run']],
+    ['tool --secret-access-key S3cr3t run', ['tool', '--secret-access-key', null, 'run']],
+    ['tool --client-secret S3cr3t run', ['tool', '--client-secret', null, 'run']],
+    ['tool --auth S3cr3t run', ['tool', '--auth', null, 'run']],
+    ['tool --api-key=S3cr3t run', ['tool', null, 'run']],
+    ['env AWS_SECRET_ACCESS_KEY=S3cr3t aws s3 ls', ['env', null, 'aws', 's3', 'ls']],
+    ['env API_KEY=S3cr3t tool', ['env', null, 'tool']],
+    ['aws configure set aws_secret_access_key S3cr3t', ['aws', 'configure', 'set', 'aws_secret_access_key', null]],
+    ['git clone https://bot:S3cr3t@git.example/org/repo', ['git', 'clone', null]],
+    // A token by its shape alone: long, letters and digits mixed, no path or host name.
+    ['tool run ghp1A2b3C4d5E6f7G8h9I0jKlMn', ['tool', 'run', null]],
   ];
   for (const [command, words] of cases) assert.deepEqual(toCandidate(command)?.words, words, command);
-  // A URL with no password and a port flag stay as written.
+  // A URL with no password, a port flag, an ssh remote, a long host name and a long path stay as written.
   assert.deepEqual(toCandidate('psql postgresql://app@db.example/app -p 5432')?.words, ['psql', 'postgresql://app@db.example/app', '-p', '5432']);
+  assert.deepEqual(toCandidate('git clone git@github.com:org/repo.git')?.words, ['git', 'clone', 'git@github.com:org/repo.git']);
+  assert.deepEqual(toCandidate('redis-cli -h cache01.prod2.example.internal ping')?.words, ['redis-cli', '-h', 'cache01.prod2.example.internal', 'ping']);
+  assert.deepEqual(toCandidate('cat logs/2026/session01/output2.txt')?.words, ['cat', 'logs/2026/session01/output2.txt']);
 });
 
 test('automatic preflight: a credential typed in an earlier session never reaches the side branch', () => {
