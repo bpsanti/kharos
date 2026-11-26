@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 import { close, list, logRequest, rearm, sendMessage, result, resume, show, writeProfile } from '../src/commands.ts';
 import { main, runHook } from '../src/cli.ts';
-import { postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
+import { permissionDenied, postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
 import { loadRegistry, updateRegistry } from '../src/registry.ts';
 import { loadRepos, recordAccess } from '../src/repo.ts';
@@ -567,4 +567,43 @@ test('result: a result line cut after a whole last message does not read as a cu
   ].join('\n');
   postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
   assert.doesNotMatch(result(sb.paths, id, sb.env), /is cut/);
+});
+
+test('launch: a run the auto mode classifier refused goes back to routine created, and resume fires it once', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  const trig = fired(sb, id);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'firing');
+  const denied = permissionDenied(sb.ctx(T0 + 2000), {
+    hook_event_name: 'PermissionDenied',
+    session_id: CLAUDE,
+    tool_name: 'RemoteTrigger',
+    tool_input: { action: 'run', trigger_id: trig },
+    reason: 'Running a paid task needs approval',
+  });
+  assert.match(String(denied?.systemMessage), /k-0001 was not fired: the auto mode classifier refused the run, so nothing started.*\/kharos:run --resume k-0001 fires it once/);
+  let s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'routine_created');
+  assert.equal(s.fired_at, null);
+  assert.match(show(sb.paths, id), /error: the auto mode classifier refused the run \(Running a paid task needs approval\)/);
+  // No re-arm: resume names the run, and the guard lets exactly one through.
+  assert.match(resume(sb.paths, id), /action "run" and trigger_id "trig_01TESTROUTINEAAAAAAAAAAA", once/);
+  assert.equal(preToolUse(sb.ctx(T0 + 3000), hook({ action: 'run', trigger_id: trig })), null);
+  assert.equal((preToolUse(sb.ctx(T0 + 4000), hook({ action: 'run', trigger_id: trig }))?.hookSpecificOutput as any).permissionDecision, 'deny');
+  postToolUse(sb.ctx(T0 + 5000), hook({ action: 'run', trigger_id: trig }, response(200, { session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' })));
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'open');
+  assert.equal(s.error, null);
+
+  // Through the CLI as Claude Code calls it, and never for a call that is not a kharos run.
+  const other = sandbox();
+  const id2 = prepared(other);
+  const trig2 = fired(other, id2);
+  const stdin = JSON.stringify({ hook_event_name: 'PermissionDenied', session_id: CLAUDE, tool_name: 'RemoteTrigger', tool_input: { action: 'list_runs', trigger_id: trig2 }, reason: 'x' });
+  assert.equal((await captured(() => runHook('permission-denied', other.ctx(T0), () => stdin))).value, 0);
+  assert.equal(loadRegistry(other.paths).sessions[id2]?.step, 'firing');
+  const run = JSON.stringify({ hook_event_name: 'PermissionDenied', session_id: CLAUDE, tool_name: 'RemoteTrigger', tool_input: { action: 'run', trigger_id: trig2 }, reason: 'x' });
+  const out = await captured(() => runHook('permission-denied', other.ctx(T0), () => run));
+  assert.match(out.stdout, /was not fired/);
+  assert.equal(loadRegistry(other.paths).sessions[id2]?.step, 'routine_created');
 });

@@ -100,6 +100,7 @@ When the answer to `run` is lost, `/kharos:run --resume <id>` asks `list_runs` f
 If `list_runs` shows no session, kharos never fires again by itself, because a `run` still waiting at a permission prompt would start a second session once approved.
 The person checks the routine page, and when it shows no run and no Claude Code window is still asking to approve the run, `/kharos:run --rearm <id>` re-arms the launch.
 The re-arm is accepted only within 10 minutes of an empty `list_runs`, asks for its own approval, and fires nothing; `/kharos:run --resume <id>` then fires it once.
+A run that the auto mode classifier refused needs no re-arm: Claude Code tells kharos about that refusal, so the launch goes back to "routine created" and `/kharos:run --resume <id>` fires it once; a refusal in a permission dialog, or in a headless session that is not in auto mode, reaches no hook, so it keeps the re-arm path.
 
 ### Queued launches
 

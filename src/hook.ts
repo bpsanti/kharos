@@ -35,6 +35,8 @@ export interface HookInput {
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   tool_response?: unknown;
+  /** PermissionDenied: why the auto mode classifier refused the call. */
+  reason?: string;
 }
 
 export interface Ctx {
@@ -353,11 +355,38 @@ export function postToolUseFailure(ctx: Ctx, input: HookInput): HookOutput {
   return null;
 }
 
+/**
+ * After the auto mode classifier refused a call: a refused `run` never reached the service, so the launch
+ * goes back to "routine created" and `/kharos:run --resume` fires it once, with no re-arm. Claude Code has
+ * no hook for a refusal in a permission dialog or in a headless session without auto mode, so those keep
+ * the fire, and the person re-arms it after list_runs shows no session.
+ */
+export function permissionDenied(ctx: Ctx, input: HookInput): HookOutput {
+  if (input.tool_name !== 'RemoteTrigger') return null;
+  const ti = input.tool_input ?? {};
+  const trig = str(ti.trigger_id);
+  if (ti.action !== 'run' || !trig) return null;
+  const why = clean(str(input.reason) ?? 'no reason given', 200);
+  const id = updateRegistry(ctx.paths, (reg) => {
+    const s = byTrigger(reg, trig);
+    if (!s || s.step !== 'firing') return null;
+    s.step = 'routine_created';
+    s.fired_at = null;
+    s.runs_seen_empty_at = null;
+    s.error = `the auto mode classifier refused the run (${why})`;
+    return s.id;
+  });
+  if (!id) return null;
+  return { systemMessage: `kharos: ${id} was not fired: the auto mode classifier refused the run, so nothing started and nothing was spent. /kharos:run --resume ${id} fires it once.` };
+}
+
 function openSession(s: Session, sessionId: string, url: string | null, now: number): void {
   s.session_id = sessionId;
   s.url = url ?? sessionUrlFromId(sessionId);
   s.step = 'open';
   s.opened_at = new Date(now).toISOString();
+  // A refused run before this one is no longer the news.
+  if (s.error?.startsWith('the auto mode classifier refused the run')) s.error = null;
   if (s.state === 'launching') {
     s.state = 'provisioning';
     s.state_since = new Date(now).toISOString();

@@ -19,7 +19,7 @@ import {
   openBrowser,
   waitForEnvironment,
 } from './environment.ts';
-import { kick, KICKS_QUEUE, postToolUse, postToolUseFailure, preToolUse, sessionStart, stop, type Ctx, type HookInput } from './hook.ts';
+import { kick, KICKS_QUEUE, permissionDenied, postToolUse, postToolUseFailure, preToolUse, sessionStart, stop, type Ctx, type HookInput } from './hook.ts';
 import { dispatchQueued, kickQueue } from './queue.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
@@ -465,6 +465,7 @@ const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unkno
   'pre-tool-use': preToolUse,
   'post-tool-use': postToolUse,
   'post-tool-use-failure': postToolUseFailure,
+  'permission-denied': permissionDenied,
   'session-start': sessionStart,
   stop,
 };

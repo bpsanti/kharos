@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A `run` that the auto mode classifier refused goes back to "routine created" (a `PermissionDenied` hook): nothing reached the service, so `/kharos:run --resume` fires it once with no re-arm, a queued launch is tried again, and `kharos show` names the refusal. A refusal in a permission dialog or in a headless session outside auto mode reaches no hook, and keeps the re-arm path.
 - `kharos log <id> [lines]` in a shell prints the events already stored for a session, with no model (`--cached` does the same anywhere), and `--full` prints each event's whole stored text instead of its start. `kharos show` names the session's last message and its time, which tells a turn closed on the session's own build from one that stopped.
 - `/kharos:result` says the last message is cut only when the message itself is, not when only the result line that repeats it is.
 - `/kharos:close <id> --ask-stop` sends the session a request to stop (start nothing new, commit and push what is worth keeping unless the launch was `--no-push`, end the turn) before it is released; when the request cannot be sent, the session stays followed. Without it, the output of `/kharos:close` on a running session says how to ask.
