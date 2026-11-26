@@ -108,7 +108,7 @@ kharos never sets that variable itself.
 
 - A change reaches you up to about a minute after it happens (the longest interval plus one read), and then only when your session takes its next turn.
 - kharos cannot stop a cloud session: the `RemoteTrigger` tool has no stop action.
-  `/kharos:close` stops the following, `/kharos:close --ask-stop` first asks the session to stop, and the session page stops it.
+  `/kharos:close` takes it out of your follow-up (a session that still runs keeps its slot, read with no alerts, until it ends, its deadline passes, or `--stopped`), `/kharos:close --ask-stop` first asks the session to stop, and the session page stops it.
 - Permission prompts are as before: kharos alerts with the tool and the link, and a person answers on the session page (unless the opt-in permission hook answers it, see [permissions.md](permissions.md)).
   Where the branch had the hook at launch, the alert waits for a second read to find the same prompt open, so a prompt the hook resolves between reads wakes nobody ([watcher.md](watcher.md#states)).
 - The work comes back as a branch or a pull request, as with any cloud session, not as files changed in your checkout.

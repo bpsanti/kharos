@@ -141,10 +141,10 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const autoOff = opts.queue ? autoModeRefusal(readManagedPolicy(env)) : null;
   const prepared = updateRegistry(paths, (reg) => {
     const ahead = queuedLaunches(Object.values(reg.sessions));
-    const full = activeCount(reg) + ahead.length >= config.watch.max_open;
+    const full = activeCount(reg, opts.now) + ahead.length >= config.watch.max_open;
     if (full && !opts.queue) {
       throw new LaunchError([
-        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.${ahead.length ? ` ${ahead.length} queued launch(es) wait for a slot before any new one: ${ahead.map((s) => s.id).join(', ')}.` : ''}`,
+        `There are ${activeCount(reg, opts.now)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.${ahead.length ? ` ${ahead.length} queued launch(es) wait for a slot before any new one: ${ahead.map((s) => s.id).join(', ')}.` : ''}`,
         `Close finished ones with /kharos:close, answer the ones that wait on you, or raise watch.max_open in ${paths.config}.`,
         `Raising it: ${MAX_OPEN_TRADEOFF}.`,
         'Or queue it with --queue: kharos fires it by itself when a slot frees, a paid action with nobody present.',
@@ -204,7 +204,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       preflight: auto === null ? null : 'skipped' in auto ? { status: 'skipped', reason: auto.skipped } : { status: 'creating', branch: `kharos/${id}`, base: profile.revision, applied: auto.patterns },
     };
     reg.sessions[id] = s;
-    if (full) enqueue(paths, [buildEvent(s, 'session.queued', 'launching', `every watch.max_open slot is taken (${activeCount(reg)} of ${config.watch.max_open}); it fires by itself when one frees`, opts.now)]);
+    if (full) enqueue(paths, [buildEvent(s, 'session.queued', 'launching', `every watch.max_open slot is taken (${activeCount(reg, opts.now)} of ${config.watch.max_open}); it fires by itself when one frees`, opts.now)]);
     return s;
   });
   if (auto === null || 'skipped' in auto) return prepared;

@@ -5,7 +5,7 @@ import { close, list, logRequest, rearm, sendMessage, result, resume, show, writ
 import { main, runHook } from '../src/cli.ts';
 import { permissionDenied, postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
-import { loadRegistry, updateRegistry } from '../src/registry.ts';
+import { activeCount, loadRegistry, updateRegistry } from '../src/registry.ts';
 import { loadRepos, recordAccess } from '../src/repo.ts';
 import { addIntent } from '../src/state.ts';
 import { captured, fixture, HEADS_EMPTY, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -399,7 +399,7 @@ test('commands: list, sendMessage, result and close', () => {
     reg.sessions[id]!.result.branch = 'work';
   });
   assert.match(result(sb.paths, id, sb.env), /claude --teleport cse_01TESTSESSIONAAAAAAAAAAA/);
-  const closed = close(sb.paths, id, T0 + 700_000);
+  const closed = close(sb.paths, id, T0 + 700_000, null, { stopped: true });
   assert.match(closed, /claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
   assert.match(list(sb.paths, { all: false, now: T0 }), /no open sessions/);
@@ -499,16 +499,21 @@ test('launch: the deadline counts from the open of the session, not from the lau
   assert.equal(s.overdue_at ?? null, null);
 });
 
-test('close: --ask-stop sends a stop request before releasing a running session, and keeps it followed when the send fails', async () => {
+test('close: --ask-stop sends a stop request before closing a running session, and changes nothing when the send fails', async () => {
   const sb = sandbox();
   const id = prepared(sb);
   launch(sb, id);
+  // The CLI reads the real clock: a session opened now is well inside its deadline.
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.opened_at = new Date().toISOString();
+  });
   const { stdout: closed, value } = await captured(() => main(['close', id, '--ask-stop'], sb.env));
   assert.equal(value, 0);
   assert.match(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), /^kharos: the person closed this session and asks you to stop now\. .*commit and push them first\. Then end your turn/);
-  assert.match(closed, /was asked to stop.*https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA/);
-  assert.match(closed, /delete it at https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
-  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
+  assert.match(closed, /was asked to stop, after it commits and pushes what it has worth keeping.*https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA/);
+  assert.match(closed, /delete it on its page, https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'open');
+  assert.equal(typeof loadRegistry(sb.paths).sessions[id]?.closing_at, 'string');
 
   // Without --ask-stop, the output says how to ask.
   const other = sandbox();
@@ -520,8 +525,9 @@ test('close: --ask-stop sends a stop request before releasing a running session,
   const failing = sandbox({ send: { ok: false, error: 'session not found' } });
   const id3 = prepared(failing);
   launch(failing, id3);
-  assert.throws(() => close(failing.paths, id3, T0 + 700_000, null, { askStop: true, env: failing.env }), /still followed: the request to stop could not be sent \(not sent: session not found\)/);
+  assert.throws(() => close(failing.paths, id3, T0 + 700_000, null, { askStop: true, env: failing.env }), /is unchanged: the request to stop could not be sent \(not sent: session not found\)/);
   assert.equal(loadRegistry(failing.paths).sessions[id3]?.step, 'open');
+  assert.equal(loadRegistry(failing.paths).sessions[id3]?.closing_at ?? null, null);
 });
 
 test('close: a --no-push launch is not asked to push before it stops', () => {
@@ -624,4 +630,50 @@ test('launch: --revision starts the session on another branch, checked every tim
     (e: unknown) => e instanceof LaunchError && /no branch or tag "nope"/.test(e.message) && /existing branch or tag in --revision/.test(e.message),
   );
   assert.throws(() => prepare(sb.paths, { instruction: 'x', revision: '--upload-pack=x', claude_session: null, now: T0, env: sb.env, heads: () => HEADS_OK }), /is not a branch or tag name/);
+});
+
+test('close: a running session is closing; it holds its slot, alerts nobody, and frees it at its end, its deadline, or --stopped', () => {
+  const read = (sb: Sandbox, at: number, page: string) =>
+    postToolUse(sb.ctx(at), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const out = close(sb.paths, id, T0 + 60_000);
+  // The deadline is 180 min from the open at T0 + 1 s: 21:57 UTC.
+  assert.match(out, /^k-0001 is closing: kharos goes on reading it, with no alerts, only to free its watch\.max_open slot when it ends or when its deadline passes at 21:57 UTC, whichever comes first\. kharos close k-0001 --stopped frees the slot now\.$/m);
+  assert.match(out, /^Freeing the slot never stops the session \(the tool has no stop action\)\. \/kharos:close k-0001 --ask-stop asks it to stop/m);
+  let reg = loadRegistry(sb.paths);
+  assert.equal(activeCount(reg, T0 + 60_000), 1);
+  assert.match(list(sb.paths, { all: false, now: T0 + 60_000 }), /^k-0001  closing, provisioning/m);
+  assert.match(list(sb.paths, { all: false, now: T0 + 60_000 }), /slots: 1 of watch\.max_open \d+ in use: k-0001 closing until it ends or 21:57 UTC/);
+  // A permission prompt alerts nobody while it is closing.
+  const before = fs.existsSync(sb.paths.events) ? fs.readFileSync(sb.paths.events, 'utf8') : '';
+  read(sb, T0 + 400_000, fixture('log-permission-prompt.txt'));
+  read(sb, T0 + 460_000, fixture('log-permission-prompt.txt'));
+  const after = fs.existsSync(sb.paths.events) ? fs.readFileSync(sb.paths.events, 'utf8') : '';
+  assert.equal(after, before);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.notice, null);
+  // Its deadline frees the slot even with no read, and the next read closes it.
+  reg = loadRegistry(sb.paths);
+  assert.equal(activeCount(reg, T0 + 181 * 60_000), 0);
+  read(sb, T0 + 181 * 60_000, fixture('log-permission-prompt.txt'));
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
+
+  // The end frees it as well.
+  const ended = sandbox();
+  const id2 = prepared(ended);
+  launch(ended, id2);
+  close(ended.paths, id2, T0 + 60_000);
+  read(ended, T0 + 400_000, fixture('log-question-background-done.txt'));
+  assert.equal(loadRegistry(ended.paths).sessions[id2]?.step, 'closed');
+
+  // --stopped frees it at once, and says the session itself was not stopped.
+  const now = sandbox();
+  const id3 = prepared(now);
+  launch(now, id3);
+  close(now.paths, id3, T0 + 60_000);
+  const freed = close(now.paths, id3, T0 + 120_000, null, { stopped: true });
+  assert.match(freed, new RegExp(`^${id3} is no longer followed, and its watch\\.max_open slot is free\\.$`, 'm'));
+  assert.match(freed, /The cloud session itself was not stopped by this/);
+  assert.equal(loadRegistry(now.paths).sessions[id3]?.step, 'closed');
 });

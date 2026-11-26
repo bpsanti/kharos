@@ -8,7 +8,7 @@ import { enqueue, transition, type KharosEvent } from './events.ts';
 import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
-import { startedAt, type Session } from './registry.ts';
+import { releaseClosing, startedAt, type Session } from './registry.ts';
 import { readManagedPolicy } from './managed-policy.ts';
 import type { AskRules } from './permission-request.ts';
 
@@ -87,6 +87,14 @@ function hookMayAnswer(s: Session, verdict: Verdict): boolean {
 
 /** Applies a verdict, queues its events for delivery, and returns them. */
 export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: WatchConfig = watchConfig(ctx.paths)): KharosEvent[] {
+  // A session the person closed is read only to free its slot: its state moves on, and nobody is alerted.
+  if (s.closing_at) {
+    const { permission: _prompt, ...quiet } = verdict;
+    transition(s, { ...quiet, notice: null }, ctx.now, watch.renotify_min, false);
+    s.notice = null;
+    releaseClosing(s, ctx.now);
+    return [];
+  }
   const confirm = CONFIRM_TWICE.has(verdict.state) || hookMayAnswer(s, verdict);
   const events = transition(s, verdict, ctx.now, watch.renotify_min, confirm);
   enqueue(ctx.paths, events);

@@ -7,7 +7,7 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
-import { activeCount, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { activeCount, deadlineAt, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, releaseClosing, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, shownText, storedLogView, type LogEvent } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
@@ -23,6 +23,7 @@ export function minutes(ms: number): string {
 
 function stateLabel(s: Session): string {
   if (s.step === 'closed') return 'closed';
+  if (s.closing_at) return `closing, ${s.state.replace(/_/g, ' ')}`;
   if (s.step === 'refused') return 'refused';
   if (s.step === 'queued') return 'queued';
   if (s.step === 'prepared' || s.step === 'routine_created' || s.step === 'firing') return `launch ${s.step}`;
@@ -113,7 +114,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
     .sort((a, b) => a.id.localeCompare(b.id));
   const lines = rows.map((s) => sessionLine(s, opts.now));
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
-  const used = activeCount(reg);
+  const used = activeCount(reg, opts.now);
   if (used) lines.push(`slots: ${used} of watch.max_open ${watchConfig(paths).max_open} in use: ${slotHolders(reg, opts.now)}`);
   lines.push(...queueLines(paths, opts.now));
   lines.push(...followerLines(paths, opts.now));
@@ -361,11 +362,23 @@ export function stopRequest(s: Pick<Session, 'no_push'>): string {
 }
 
 export interface CloseOptions {
-  /** Send the session a request to stop (`--ask-stop`) before releasing it; nothing is released if it cannot be sent. */
+  /** Send the session a request to stop (`--ask-stop`) first; nothing changes if it cannot be sent. */
   askStop?: boolean;
+  /** Free the session's slot now (`--stopped`): the person saw it stopped, or wants the slot anyway. */
+  stopped?: boolean;
   env?: NodeJS.ProcessEnv;
 }
 
+function hhmm(ms: number): string {
+  return new Date(ms).toISOString().slice(11, 16);
+}
+
+/**
+ * Takes a session out of the person's follow-up. One that still runs is closing first: kharos goes on
+ * reading it, with no alerts, and frees its watch.max_open slot when it ends or its deadline passes,
+ * whichever comes first, or at once with `stopped`. Freeing the slot never stops the session; only the
+ * session page does, or the session itself when `askStop` asked it to.
+ */
 export function close(paths: Paths, ref: string, now: number, forge: Forge | null = null, opts: CloseOptions = {}): string {
   const s = need(paths, ref);
   const running = s.step === 'open' && !TERMINAL_STATES.has(s.state);
@@ -376,15 +389,21 @@ export function close(paths: Paths, ref: string, now: number, forge: Forge | nul
       asked = true;
     } catch (err) {
       if (!(err instanceof CommandError)) throw err;
-      throw new CommandError(`${s.id} is still followed: the request to stop could not be sent (${err.message}). Try again, or close it without --ask-stop and stop it at ${s.url}`);
+      throw new CommandError(`${s.id} is unchanged: the request to stop could not be sent (${err.message}). Try again, or close it without --ask-stop and stop it at ${s.url}`);
     }
   }
-  updateRegistry(paths, (reg) => {
+  const outcome = updateRegistry(paths, (reg) => {
     const cur = reg.sessions[s.id];
-    if (!cur || cur.step === 'closed') return;
+    if (!cur || cur.step === 'closed') return 'closed' as const;
+    cur.notice = null;
+    if (running && !opts.stopped) {
+      cur.closing_at ??= new Date(now).toISOString();
+      if (!releaseClosing(cur, now)) return 'closing' as const;
+      return 'closed' as const;
+    }
     cur.step = 'closed';
     cur.closed_at = new Date(now).toISOString();
-    cur.notice = null;
+    return 'closed' as const;
   });
   if (s.step === 'queued') {
     const lines = [`${s.id} was queued, and is cancelled: no routine was created and nothing was spent.`];
@@ -392,15 +411,21 @@ export function close(paths: Paths, ref: string, now: number, forge: Forge | nul
     if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
     return lines.join('\n');
   }
-  const lines = [`${s.id} is no longer followed.`];
-  if (asked) {
-    lines.push(`It was asked to stop, and stops at the end of its current step; nobody reads it now, so check that it did at ${s.url} (the tool has no stop action).`);
-  } else if (running) {
-    lines.push(`The cloud session itself was not stopped (the tool has no stop action): /kharos:close ${s.id} --ask-stop asks it to stop before it is released, /kharos:send ${s.id} sends it any message, and ${s.url} stops it.`);
-  } else if (opts.askStop) {
-    lines.push('There was nothing to ask to stop: no cloud session of it is running.');
+  const lines: string[] = [];
+  const stopHow = asked
+    ? `It was asked to stop${s.no_push ? '' : ', after it commits and pushes what it has worth keeping'}, and to end its turn; check that it did at ${s.url}.`
+    : `/kharos:close ${s.id} --ask-stop asks it to stop (it commits and pushes what it has first), and ${s.url} stops it.`;
+  if (outcome === 'closing') {
+    lines.push(
+      `${s.id} is closing: kharos goes on reading it, with no alerts, only to free its watch.max_open slot when it ends or when its deadline passes at ${hhmm(deadlineAt(s))} UTC, whichever comes first. kharos close ${s.id} --stopped frees the slot now.`,
+      `Freeing the slot never stops the session (the tool has no stop action). ${stopHow}`,
+    );
+  } else {
+    lines.push(`${s.id} is no longer followed${running ? ', and its watch.max_open slot is free' : ''}.`);
+    if (running) lines.push(`The cloud session itself was not stopped by this (the tool has no stop action). ${stopHow}`);
+    else if (opts.askStop) lines.push('There was nothing to ask to stop: no cloud session of it is running.');
   }
-  if (s.trigger_id) lines.push(`Its disabled routine stays in your account; delete it at ${routineUrl(s.trigger_id)} (the tool cannot delete routines).`);
+  if (s.trigger_id) lines.push(`Its disabled routine stays in your account: the tool cannot delete routines, so delete it on its page, ${routineUrl(s.trigger_id)}`);
   const side = closeSideBranch(paths, s, forge, now);
   if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
   return lines.join('\n');

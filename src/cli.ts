@@ -40,7 +40,7 @@ import { due, formatReads, health, passEnd } from './watch.ts';
 import { detachFollower, followLoop, startFollowers } from './follow.ts';
 import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'full', 'ask-stop', 'no-push', 'queue']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'full', 'ask-stop', 'stopped', 'no-push', 'queue']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -115,7 +115,7 @@ const USAGE = `usage: kharos <command>
   prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--no-push] [--queue] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] [--full] (stored events, from a shell) | log <id> [lines] --session id (a read, from Claude Code)
-  send <id>   (text on stdin) | result <id> | close <id> [--ask-stop]
+  send <id>   (text on stdin) | result <id> | close <id> [--ask-stop] [--stopped]
   doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
@@ -211,7 +211,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(cmd.result(paths, need(args, 0, 'session id'), env));
         return 0;
       case 'close':
-        out(cmd.close(paths, need(args, 0, 'session id'), now, ghForge(realGh(env)), { askStop: args.flags['ask-stop'] === true, env }));
+        out(cmd.close(paths, need(args, 0, 'session id'), now, ghForge(realGh(env)), { askStop: args.flags['ask-stop'] === true, stopped: args.flags.stopped === true, env }));
         // A slot may be free now for a queued launch.
         kickQueue(paths, now, env);
         return 0;

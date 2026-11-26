@@ -79,7 +79,7 @@ npm install -g kharos
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log; in a shell, `kharos log <id> [lines]` prints the events already stored, with no model, and `--full` prints each one's whole stored text |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
-| `/kharos:close <id> [--ask-stop]` | Stops following a session, and shows where to delete its routine; `--ask-stop` first sends the session a request to stop; cancels a queued launch |
+| `/kharos:close <id> [--ask-stop] [--stopped]` | Stops following a session, and shows where to delete its routine; `--ask-stop` first sends the session a request to stop; cancels a queued launch. A session that still runs is `closing` (below) |
 | `/kharos:watch` | One watcher pass, the advanced mode; run it as `/loop 10m /kharos:watch` in a session of its own |
 
 Commands that spend plan usage or change state can only be started by you, not by the model.
@@ -102,10 +102,16 @@ The person checks the routine page, and when it shows no run and no Claude Code 
 The re-arm is accepted only within 10 minutes of an empty `list_runs`, asks for its own approval, and fires nothing; `/kharos:run --resume <id>` then fires it once.
 A run that the auto mode classifier refused needs no re-arm: Claude Code tells kharos about that refusal, so the launch goes back to "routine created" and `/kharos:run --resume <id>` fires it once; a refusal in a permission dialog, or in a headless session that is not in auto mode, reaches no hook, so it keeps the re-arm path.
 
+### Closing a session
+
+A session closed while it still runs keeps its `watch.max_open` slot: it is `closing`, and kharos goes on reading it, with no alerts, only to free the slot when the session ends or when its deadline passes, whichever comes first.
+`kharos close <id> --stopped` frees the slot at once, for a session you saw stop.
+Freeing the slot never stops the session: only `--ask-stop` asks it to stop (it commits and pushes what it has first, unless the launch was `--no-push`), and only its page stops it.
+
 ### Queued launches
 
 A launch refused because every `watch.max_open` slot is taken can wait instead: `/kharos:run --queue "<instruction>"` runs every check and the permission preflight as usual, stores the routine body, and records the launch as `queued`, with nothing created.
-When a slot frees (a session ends, is closed or is refused), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
+When a slot frees (a session ends, is closed or is refused, or a closing one ends or reaches its deadline), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
 
 - The fire is a paid action with nobody present: a minimal headless Claude Code in auto mode makes the same RemoteTrigger calls `/kharos:run --resume` names, so Claude Code's classifier approves the `run`, and the hook allows one `run` per launch, as always.
 - Only the Claude account that queued a launch fires it; under another login it stays queued, and an event says so.

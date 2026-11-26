@@ -140,7 +140,7 @@ export function nextToFire(sessions: Session[], maxOpen: number, now: number): S
   if (retry) return retry;
   const oldest = queuedLaunches(sessions).find((s) => ready(s, now));
   if (!oldest) return null;
-  return activeCount({ sessions: Object.fromEntries(sessions.map((s) => [s.id, s])) }) < maxOpen ? oldest : null;
+  return activeCount({ sessions: Object.fromEntries(sessions.map((s) => [s.id, s])) }, now) < maxOpen ? oldest : null;
 }
 
 /**

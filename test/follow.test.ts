@@ -171,7 +171,7 @@ test('follow: a failed wait is tried again with a growing delay, and only then t
 test('follow: a detached follower runs on its own and writes to its log', async () => {
   const sb = sandbox();
   const id = openOne(sb);
-  close(sb.paths, id, T0 + MIN);
+  close(sb.paths, id, T0 + MIN, null, { stopped: true });
   // A closed session ends the loop at once, so the real process exits right after its first look.
   const pid = detachedSpawner(['follow', id], followerLog(sb.paths, id), sb.env);
   assert.ok(pid && pid > 0);
@@ -258,7 +258,7 @@ test('stop hook: a handover, the watcher, a closed or ended session, or no sessi
   assert.equal(stop(ctx(T0 + 40 * MIN), { hook_event_name: 'Stop', session_id: 'watcher-1' }), null);
   assert.equal(calls.length, 1);
 
-  close(sb.paths, id, T0 + 50 * MIN);
+  close(sb.paths, id, T0 + 50 * MIN, null, { stopped: true });
   assert.equal(stop(ctx(T0 + 50 * MIN), input), null);
   assert.equal(calls.length, 1);
 });

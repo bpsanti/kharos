@@ -221,7 +221,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   if (reg) {
     const hourAgo = opts.now - 3600_000;
     const fires = Object.values(reg.sessions).filter((s) => s.fired_at && Date.parse(s.fired_at) > hourAgo).length;
-    add('info', 'limits', `${activeCount(reg)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
+    add('info', 'limits', `${activeCount(reg, opts.now)} open of watch.max_open ${config.watch.max_open}; ${fires} fire(s) in the last hour (the service allows about 100 per account per hour, 30 per routine)`);
   }
   if (reg) {
     const problems = followerProblems(paths, opts.now);
