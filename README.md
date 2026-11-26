@@ -204,6 +204,7 @@ It lists, once, what it frees, and after your one confirmation it turns on all o
 
 kharos never changes a repository's own `.claude/settings.json`: what unblock all needs goes only to the side branch of each launch.
 `/kharos:setup` offers the same as its `unblock-all` permission mode: it shows the full list of what unblock all frees before it asks, and when you pick that mode it turns all of it on itself.
+When Claude Code keeps no copy of the organization's managed settings for the account (`remote-settings.json` in its config folder, which Claude Code does not write when the organization has none), unblock all says how to check, and then lets you state, in the same confirmation, that the account has no organization settings; kharos asks again if a copy appears later ([docs/permissions.md](docs/permissions.md#no-copy-of-the-organizations-settings)).
 `/kharos:permissions off` takes back what it turned on, leaving what was on before it as it was, and `/kharos:permissions state` and `/kharos:doctor` show in one line whether it is on, partly on (and what is missing), or off.
 kharos logs each of the hook's decisions as it reads the session, and `kharos permissions approvals` lists them.
 `/kharos:doctor` warns when a launch branch would likely stall, about managed ask rules that would stop a session, about broad rules or modes that cloud sessions ignore, and while unblock all is on: see [docs/permissions.md](docs/permissions.md).

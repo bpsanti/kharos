@@ -7,7 +7,8 @@ import { ConfigError, loadConfig, otherAccount, repoSlug, type Config, type Prof
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './settings.ts';
-import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
+import { hooksBlocked, noCopyText, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
+import { accountPolicy, loadConfirmation } from './org-confirmations.ts';
 import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH, HOOK_SCRIPT_PATH } from './permission-hook.ts';
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
@@ -15,7 +16,7 @@ import { followerProblems, queueLines } from './commands.ts';
 import { LEASE_STALE_MS } from './lease.ts';
 import { describePlan, loadMarker, planMigration } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
-import { describeUnblockAll, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, type Part } from './unblock-all.ts';
+import { describeUnblockAll, readUnblockAll, UNBLOCK_ALL_SHOW, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, type Part } from './unblock-all.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
@@ -174,11 +175,14 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   if (names.length === 0) add('fail', 'profile', 'the configuration has no profile', ['Run /kharos:setup.']);
   add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})${paths.account ? `, the files of Claude config folder ${paths.account}` : ''}`);
   pendingMigration(paths, opts.shared ?? null, auth?.account ?? null, add);
-  const policy = deps.managedPolicy();
-  if (policy.status === 'found') {
+  const policy = accountPolicy(paths, deps.managedPolicy());
+  if (policy.status === 'found' && policy.noCopy) {
+    const at = loadConfirmation(paths, 'no-org-settings')?.confirmed_at.slice(0, 10) ?? 'an earlier day';
+    add('info', 'managed policy', `no copy of organization managed settings at ${policy.file}; you confirmed on ${at} that this account has none, so kharos reads them as empty (0 ask rules, 0 deny rules), and asks again if a copy appears`);
+  } else if (policy.status === 'found') {
     add('info', 'managed policy', `${policy.file}: ${policy.ask.length} ask rule(s), ${policy.deny.length} deny rule(s); bypass mode ${policy.bypassDisabled ? 'disabled by the organization' : 'not disabled'}`);
   } else if (policy.status === 'absent') {
-    add('info', 'managed policy', `no copy of organization managed settings at ${policy.file} (none for this account, or not fetched on this machine yet)`);
+    add('info', 'managed policy', `${noCopyText(policy.file)}; open an interactive Claude Code session with this account to check, and if there is still no copy, \`${UNBLOCK_ALL_SHOW}\` lets you confirm that this account has none`);
   } else add('info', 'managed policy', `${policy.file} cannot be read (${policy.error}); its ask rules, if any, are not checked`);
   const blocked = hooksBlocked(policy);
   if (blocked) add('warn', 'managed hooks only', blocked, ['Cloud sessions wait at every prompt the organization or the repository asks about; ask the organization\'s administrator to narrow the rules instead.']);

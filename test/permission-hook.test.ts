@@ -189,7 +189,7 @@ test('permission hook: the unblock preset is refused when the organization disab
   const disabled = parseManagedPolicy(JSON.stringify({ permissions: { ...POLICY.permissions, disableBypassPermissionsMode: 'disable' } }), '/p');
   assert.throws(() => planHook(files, { ...NO_CHANGE, unblock: true }, disabled), /the unblock preset: refused: the organization's managed settings set disableBypassPermissionsMode/);
   assert.equal((parseManagedPolicy(JSON.stringify({ disableBypassPermissionsMode: 'disable' }), '/p') as { bypassDisabled: boolean }).bypassDisabled, true);
-  assert.throws(() => planHook(files, { ...NO_CHANGE, unblock: true }, { status: 'absent', file: '/p' }), /mirroring is unavailable: there is no copy .* kharos never guesses them/);
+  assert.throws(() => planHook(files, { ...NO_CHANGE, unblock: true }, { status: 'absent', file: '/p' }), /mirroring is unavailable: Claude Code keeps no copy .* kharos never guesses them/);
   assert.throws(() => planHook(files, { ...NO_CHANGE, unblock: true }, { status: 'unreadable', file: '/p', error: 'EACCES' }), /mirroring is unavailable: \/p cannot be read \(EACCES\)/);
   assert.equal(parseManagedPolicy('not json', '/p').status, 'unreadable');
   assert.equal(parseManagedPolicy(JSON.stringify({ permissions: { ask: 'Bash' } }), '/p').status, 'unreadable');
@@ -407,7 +407,7 @@ test('doctor: reads the managed-policy copy, warns about the ask rules that stop
   assert.equal(on.find((c) => c.name === 'managed hooks only'), undefined);
 
   const none = runDoctor(sb.paths, { now: T0, env: sb.env }, deps({ managedPolicy: () => ({ status: 'absent', file: '/home/person/.claude/remote-settings.json' }) }));
-  assert.match(none.find((c) => c.name === 'managed policy')?.detail ?? '', /no copy of organization managed settings/);
+  assert.match(none.find((c) => c.name === 'managed policy')?.detail ?? '', /Claude Code keeps no copy of the organization's settings for this account .*: either the account has none, or Claude Code has not downloaded them on this machine; open an interactive Claude Code session/);
   assert.equal(none.find((c) => c.name === 'demo: managed ask rules'), undefined);
   assert.match(none.find((c) => c.name === 'demo: permission hook')?.detail ?? '', /has no kharos permission hook, so its cloud sessions still wait/);
 });

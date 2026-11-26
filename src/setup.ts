@@ -9,7 +9,8 @@ import path from 'node:path';
 import { migrate } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, ACCOUNT_AUTO_EFFECT, readAccountMode } from './account-mode.ts';
 import { CommandError } from './commands.ts';
-import { applyUnblockAll, approveUnblockAll, describeUnblockAll, preview, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, type Part } from './unblock-all.ts';
+import { applyUnblockAll, approveUnblockAll, describeUnblockAll, preview, readUnblockAll, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, withNoOrgSettings, type Part } from './unblock-all.ts';
+import { accountPolicy } from './org-confirmations.ts';
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { findSetup, loadSetups, recordSetup } from './state.ts';
 import { clean } from './body.ts';
@@ -137,8 +138,8 @@ export type Next =
       options: PermissionOption[];
       /** The modes to offer for the repository; empty when that choice is made already. */
       offer: PermissionChoice[];
-      /** What unblock-all frees and its token, the preview of that option; null when it is not offered. */
-      unblockAll: { text: string; token: string } | null;
+      /** What unblock-all frees and its token, the preview of that option; null when it is not offered. `noOrgSettings` is the token of the same change with the statement that this account has no organization settings, offered while there is no copy of them. */
+      unblockAll: { text: string; token: string | null; noOrgSettings: string | null } | null;
     }
   /** How many cloud sessions may be open at once (watch.max_open), asked once per account. */
   | { kind: 'ask-max-open' }
@@ -174,6 +175,8 @@ export interface SetupInput {
   permissions?: string;
   /** With permissions unblock-all: the token of what it frees, which the person confirmed. */
   unblockExpect?: string;
+  /** With permissions unblock-all and no copy of the organization's settings: the person's statement that this account has none, part of the same confirmation. */
+  noOrgSettings?: boolean;
   /** The person said the picked environment is set up for the repository (it runs its setup script). */
   confirmed?: boolean;
   /** How many cloud sessions may be open at once, the person's answer to the watch.max_open question. */
@@ -213,7 +216,7 @@ export function rankEnvironments(envs: Environment[], slug: string, config: Conf
 }
 
 /** The permission modes, unblock all marked unavailable with the reason when this account or organization rules it out. */
-export function permissionOptions(unblockAll: readonly Part[] | null): PermissionOption[] {
+export function permissionOptions(unblockAll: readonly Part[] | null, noOrgSettings = false): PermissionOption[] {
   return [
     {
       id: 'as-is',
@@ -222,13 +225,17 @@ export function permissionOptions(unblockAll: readonly Part[] | null): Permissio
       tradeoff: 'a session stops at every ask rule and after repeated classifier blocks, until you answer on its page',
       unavailable: null,
     },
-    unblockAllOption(unblockAll),
+    unblockAllOption(unblockAll, noOrgSettings),
   ];
 }
 
-/** Everything kharos can free for this account, in one step: available while any of its parts is. */
-function unblockAllOption(parts: readonly Part[] | null): PermissionOption {
+/** Everything kharos can free for this account, in one step: available while any of its parts is, or while the statement that this account has no organization settings would make them available. */
+function unblockAllOption(parts: readonly Part[] | null, noOrgSettings: boolean): PermissionOption {
   const out = parts?.filter((p) => p.unavailable && !p.on) ?? [];
+  if (noOrgSettings) {
+    const option = unblockAllOption(parts, false);
+    return { ...option, unavailable: null, note: `${option.note ? `${option.note}; ` : ''}with the statement that this account has no organization settings, it frees all of it` };
+  }
   const option: PermissionOption = {
     id: 'unblock-all',
     title: 'Unblock all (opt-in, for the whole account)',
@@ -408,13 +415,22 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   );
 
   // 6. Permission prompts: every mode, asked once.
-  const policy = deps.managedPolicy();
+  let policy = accountPolicy(paths, deps.managedPolicy());
+  if (input.noOrgSettings) {
+    if (input.permissions !== 'unblock-all') throw new SetupError('--no-org-settings goes with --permissions unblock-all: it is a statement made in the confirmation of unblock all');
+    try {
+      policy = withNoOrgSettings(policy, true);
+    } catch (err) {
+      if (err instanceof CommandError) throw new SetupError(err.message);
+      throw err;
+    }
+  }
   // The account's own mode, which decides whether a launch stops for approval: part of unblock all, with the rest of what it frees.
   const acct = readAccountMode(input.env);
   const acctAuto = !('error' in acct) && acct.mode === 'auto';
   const ua = preview(paths, input.env, 'on', policy);
-  const options = permissionOptions(ua.parts);
-  const unblockAllOn = ua.token === null;
+  const options = permissionOptions(ua.parts, ua.noOrgSettings !== null);
+  const unblockAllOn = ua.token === null && ua.noOrgSettings === null;
   let choice: PermissionChoice | null = null;
   let permQuestion: Next | null = null;
   if (input.permissions !== undefined) {
@@ -441,7 +457,8 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   } else {
     const ask = choice ? 'whether to free all of what unblock all lists below, with one confirmation' : 'the mode for this repository';
     add('choose', `${options.filter((o) => o.unavailable === null).length} of ${options.length} modes available here`, `Pick ${ask}; it is asked once.`);
-    const unblockAll = ua.token && (choice === 'unblock-all' || options.some((o) => o.id === 'unblock-all' && o.unavailable === null)) ? { text: ua.text, token: ua.token } : null;
+    const unblockAll =
+      (ua.token || ua.noOrgSettings) && (choice === 'unblock-all' || options.some((o) => o.id === 'unblock-all' && o.unavailable === null)) ? { text: ua.text, token: ua.token, noOrgSettings: ua.noOrgSettings } : null;
     permQuestion = { kind: 'ask-permissions', options, offer: choice ? [] : offer(options), unblockAll };
   }
 
@@ -585,11 +602,18 @@ export function formatSetup(r: SetupResult): string {
     lines.push(`Launch approval: ${LAUNCH_APPROVAL}.`);
     if (n.offer.length) lines.push(`To offer in the question, recommended first: ${n.offer.join(', ')}.`);
     if (n.unblockAll) {
+      const { token, noOrgSettings } = n.unblockAll;
       lines.push(
         '',
-        `Unblock all, everything it frees, for the one confirmation (token ${n.unblockAll.token}); picking it confirms all of this, so it is the preview of that option${n.offer.length ? '' : ', and the question itself'}:`,
+        `Unblock all, everything it frees, for the one confirmation (${token ? `token ${token}` : 'nothing to change without the statement below'}); picking it confirms all of this, so it is the preview of that option${n.offer.length ? '' : ', and the question itself'}:`,
         n.unblockAll.text,
       );
+      if (noOrgSettings) {
+        lines.push(
+          '',
+          `Unblock all with the statement "this account has no organization settings" is an option of its own (token ${noOrgSettings}), with the same text as its preview: picking it confirms all of it, that statement included; then step 3 runs with --permissions unblock-all --no-org-settings --unblock-expect ${noOrgSettings}.`,
+        );
+      }
     }
   }
   // Asked in the same AskUserQuestion call as the question of this step, or alone once it is the last one.

@@ -9,7 +9,7 @@ import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
 import { releaseClosing, startedAt, type Session } from './registry.ts';
-import { readManagedPolicy } from './managed-policy.ts';
+import { readAccountPolicy } from './org-confirmations.ts';
 import type { AskRules } from './permission-request.ts';
 
 export interface TrackCtx {
@@ -131,7 +131,7 @@ export function failedRead(ctx: TrackCtx, s: Session, why: string): KharosEvent[
 
 /** The ask rules a prompt of this session is compared with: the organization's on this machine, the repository's from the launch. */
 export function askRulesOf(ctx: TrackCtx, s: Session): AskRules {
-  const policy = readManagedPolicy(ctx.env);
+  const policy = readAccountPolicy(ctx.paths, ctx.env);
   return { org: policy.status === 'found' ? policy.ask : null, repo: s.repo_ask ?? null };
 }
 

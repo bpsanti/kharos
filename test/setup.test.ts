@@ -397,7 +397,7 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   assert.deepEqual(loadConfig(sb.paths).config.profiles, {}, 'a refused confirmation writes no profile either');
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits');
 
-  const done = ask({ permissions: 'unblock-all', unblockExpect: r.next.unblockAll.token });
+  const done = ask({ permissions: 'unblock-all', unblockExpect: r.next.unblockAll.token as string });
   assert.equal(done.next.kind, 'ready');
   if (done.next.kind === 'ready') {
     assert.match(done.next.summary.join('\n'), /Permissions: unblock all: .*\(now on: all three parts/);
@@ -426,7 +426,7 @@ test('setup: unblock all is one option with one confirmation; it frees all three
   if (asked.next.kind !== 'ask-permissions' || !asked.next.unblockAll) return assert.fail('auto-unblock asks for the confirmation of unblock all');
   assert.deepEqual(asked.next.offer, []);
   assert.ok(!asked.next.options.some((o) => o.id === ('auto-unblock' as string)), 'the older name is not offered');
-  assert.equal(aliasAsk({ permissions: 'auto-unblock', unblockExpect: asked.next.unblockAll.token }).next.kind, 'ready');
+  assert.equal(aliasAsk({ permissions: 'auto-unblock', unblockExpect: asked.next.unblockAll.token as string }).next.kind, 'ready');
   assert.equal(loadConfig(alias.paths).config.profiles.demo?.permissions, 'unblock-all');
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'auto');
   writeConfig(alias, { profiles: { demo: { repo: 'https://github.com/example/demo', environment: 'env_01TESTENVIRONMENT', permissions: 'auto-unblock' } } });
@@ -511,4 +511,34 @@ test('setup: --permissions default, an older name, is as-is', () => {
   const r = runSetup(sb.paths, { ...input(sb), permissions: 'default', environment: 'demo' }, deps());
   assert.equal(loadConfig(sb.paths).config.profiles.demo?.permissions, 'as-is');
   assert.notEqual(r.next.kind, 'ask-permissions');
+});
+
+test('setup: with no copy of the managed settings, unblock all offers the statement that the account has none as an option of its own, with its own token', () => {
+  const sb = sandbox();
+  const conf = path.join(sb.dir, 'claude-config');
+  fs.mkdirSync(conf);
+  const settingsFile = path.join(conf, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ permissions: { defaultMode: 'acceptEdits' } }, null, 2) + '\n');
+  const env = { ...sb.env, CLAUDE_CONFIG_DIR: conf };
+  const absent: ManagedPolicy = { status: 'absent', file: path.join(conf, 'remote-settings.json') };
+  const unanswered = input(sb);
+  const ask = (over: Partial<SetupInput> = {}) => runSetup(sb.paths, { ...unanswered, env, environment: 'demo', ...over }, deps({ managedPolicy: () => absent }));
+
+  const r = ask();
+  if (r.next.kind !== 'ask-permissions' || !r.next.unblockAll?.noOrgSettings) return assert.fail('unblock all offers the statement while there is no copy');
+  const statement = r.next.unblockAll.noOrgSettings;
+  assert.match(formatSetup(r), new RegExp(`then step 3 runs with --permissions unblock-all --no-org-settings --unblock-expect ${statement}`));
+  assert.match(r.next.unblockAll.text, /Check first: open an interactive Claude Code session with this account/);
+  assert.throws(() => ask({ permissions: 'as-is', noOrgSettings: true }), /--no-org-settings goes with --permissions unblock-all/);
+
+  const done = ask({ permissions: 'unblock-all', noOrgSettings: true, unblockExpect: statement });
+  assert.equal(done.next.kind, 'ready', formatSetup(done));
+  const cfg = loadConfig(sb.paths).config;
+  assert.deepEqual([cfg.permission_hook, cfg.preflight_auto, cfg.permission_unblock], [true, true, true]);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'auto');
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps({ managedPolicy: () => absent }))), /warn  unblock all: on: all three parts/);
+
+  // A copy that appears on this machine later refuses the statement: kharos reads the copy instead.
+  const found: ManagedPolicy = { status: 'found', file: absent.file, ask: [], deny: [], bypassDisabled: false, managedHooksOnly: false };
+  assert.throws(() => runSetup(sb.paths, { ...unanswered, env, environment: 'demo', permissions: 'unblock-all', noOrgSettings: true }, deps({ managedPolicy: () => found })), /there is one at .*, which kharos reads instead/);
 });

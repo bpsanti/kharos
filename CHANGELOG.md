@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Unblock all with no copy of the organization's managed settings (`remote-settings.json`, which Claude Code does not write for an account whose organization has none) no longer stops at "kharos never guesses them": `show` says what the missing copy means and the one check to make, and offers a second token for the same change with the statement that the account has no organization settings (`--no-org-settings`, also in `/kharos:setup`).
+  With it the settings read as empty, with a fingerprint of their own, so a copy that appears later stops the preset until you confirm again; `unblock-all off` forgets the statement, and `/kharos:doctor` names it in its `managed policy` line.
+  kharos still never fetches the settings itself.
 - Fewer commands: the slash commands are `/kharos:setup`, `/kharos:doctor`, `/kharos:run`, `/kharos:list`, `/kharos:log`, `/kharos:send`, `/kharos:result`, `/kharos:close` and `/kharos:permissions`, and `/kharos` alone lists only those.
   `/kharos:permissions [on|off|state]` is unblock all, its undo, and where it stands.
   Removed, since nothing uses them today: the watcher (`/kharos:watch`, `kharos due`, `kharos pass-end`, and `watch.interval_min`), `/kharos:follow` (the Stop hook starts a follower process for each open session nobody follows, and `kharos follow <id> --detach` does it from a shell), `/kharos:list --refresh`, `kharos env-wait`, `kharos log --cached`, `kharos doctor --json`, the `kharos setup` flags `--model`, `--deadline`, `--tools`, `--connectors`, `--no-connectors`, `--default`, `--account-mode`, `--account-expect` and `--json`, the per-checkout and per-part `kharos permissions` subcommands (`show`, `diff`, `write`, `hook ...`, `unblock ...`, `auto ...`, `account-mode ...`, `preflight <folder>` and `preflight --launch`), and the setup permission modes `standard`, `hook`, `standard+hook`, `auto-preflight` and `unblock`.

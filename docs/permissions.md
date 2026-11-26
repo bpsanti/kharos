@@ -94,6 +94,17 @@ A part that was on before `on`, such as an account already in auto mode, is left
 `/kharos:permissions state` shows where it stands, and `/kharos:doctor` shows one `unblock all` line: on, partly on with what is missing, or off.
 `/kharos:setup` offers it as the `unblock-all` permission mode, with the same list and token.
 
+### No copy of the organization's settings
+
+Claude Code keeps a copy of the organization's managed settings in `remote-settings.json` in the account's Claude config folder, and writes none when the organization has no managed settings for the account.
+With no copy, kharos cannot tell an account that has none from one whose settings Claude Code has not downloaded on this machine yet, and kharos never fetches them itself (that would need the claude.ai login).
+So parts 1 and 2 are not available, and `show` says why and the one check to make: open an interactive Claude Code session with this account, which downloads the settings when there are any, then show the list again.
+If there is still no copy, `show` also offers a second token, for the same change with the statement "this account has no organization settings" (`kharos permissions unblock-all on --no-org-settings --expect <token>`; in setup, `--no-org-settings` with the `unblock-all` mode).
+With it, kharos reads the organization's settings as empty (0 ask rules, 0 deny rules), with a fingerprint of the absent copy, so all three parts are available.
+If a copy appears later, even an empty one, the fingerprint changes: kharos stops applying the preset and asks for the confirmation again, as for any change of the managed settings, and the statement ends once the confirmation is made for the copy.
+`unblock-all off` forgets the statement with the confirmation, and `/kharos:doctor` shows in its `managed policy` line whether there is a copy, no copy, or none by your statement.
+Make the statement only when you know it is true: kharos cannot check it, and if the account does have organization settings, their rules are not known here.
+
 ## The permission hook
 
 The permission hook is a documented `PermissionRequest` hook that runs inside the cloud session, from the files of the branch it starts on.
@@ -130,6 +141,7 @@ Only the unblock preset allows that much, and it says so before the person confi
 
 kharos reads only `permissions.ask`, `permissions.deny`, `disableBypassPermissionsMode` and `allowManagedHooksOnly` from the local copy of the organization's managed settings, `~/.claude/remote-settings.json` (under `CLAUDE_CONFIG_DIR` when that is set), which Claude Code writes when it fetches them; it never writes that file.
 With no copy, or one it cannot read, the unblock preset is unavailable and kharos says so: it never guesses the rules.
+Claude Code writes no copy for an account whose organization has no managed settings, so only the person can say that an absent copy means none: see [No copy of the organization's settings](#no-copy-of-the-organizations-settings).
 When the organization sets `disableBypassPermissionsMode` after a hook with mirrored rules or the preset reached a branch, `/kharos:doctor` warns until they are gone, and automatic preflight refuses to build on that branch.
 Deny rules are never copied, converted or changed.
 
