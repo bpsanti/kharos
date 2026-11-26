@@ -8,7 +8,7 @@ import path from 'node:path';
 import { CommandError } from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo, repoSlug, saveConfig, type Config } from './config.ts';
 import { writeTextAtomic } from './fsutil.ts';
-import { mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
+import { hooksBlocked, mirrorRefusal, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
 import {
   describeHook,
   hasHookEntry,
@@ -252,6 +252,10 @@ export function describePolicy(policy: ManagedPolicy, mirrored: readonly string[
   if (policy.status === 'absent') return [`organization managed settings: no copy at ${policy.file} (none for this account, or not fetched on this machine yet); mirroring is unavailable`];
   if (policy.status === 'unreadable') return [`organization managed settings: ${policy.file} cannot be read (${policy.error}); mirroring is unavailable`];
   const out = [`organization managed settings (${policy.file}): ${policy.ask.length} ask rule(s), ${policy.deny.length} deny rule(s), bypass mode ${policy.bypassDisabled ? 'disabled' : 'not disabled'}`];
+  const blocked = hooksBlocked(policy);
+  if (blocked) out.push(`warn: ${blocked}`);
+  const stale = staleMirror(policy, mirrored);
+  if (stale) out.push(`warn: ${stale}`);
   if (policy.ask.length) {
     const open = policy.ask.filter((r) => !mirrored.includes(r));
     out.push(`  ask rules prompt in every cloud session, which has no bypass mode, and no repository allow rule outranks them: ${policy.ask.join(', ')}`);
@@ -300,7 +304,7 @@ export function switchHook(paths: Paths, on: boolean): string {
     : `permission_hook is off in ${paths.config}. A repository that already has the hook keeps answering prompts in cloud sessions until you remove it: kharos permissions hook diff --uninstall.`;
 }
 
-export const EMPTY_CHANGE: HookChange = { allow: [], drop: [], unmatched: null, mirror: false, unmirror: false, uninstall: false };
+export const EMPTY_CHANGE: HookChange = { allow: [], drop: [], mirror: false, unmirror: false, uninstall: false };
 
 function shellQuote(s: string): string {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -311,7 +315,6 @@ export function changeFlags(c: HookChange): string[] {
   return [
     ...c.allow.flatMap((p) => ['--allow', shellQuote(p)]),
     ...c.drop.flatMap((p) => ['--drop', shellQuote(p)]),
-    ...(c.unmatched ? ['--unmatched', c.unmatched] : []),
     ...(c.mirror ? ['--mirror'] : []),
     ...(c.unmirror ? ['--unmirror'] : []),
     ...(c.uninstall ? ['--uninstall'] : []),

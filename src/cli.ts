@@ -101,7 +101,7 @@ const USAGE = `usage: kharos <command>
   repo-init <owner/name>
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
-  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--unmatched deny|prompt] [--mirror|--unmirror] [--uninstall] [dir]
+  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--mirror|--unmirror] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
   due [--watcher id] [--all] | pass-end [--watcher id] | health
@@ -266,12 +266,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
 
 /** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */
 export function hookChange(args: Args): HookChange {
-  const unmatched = flag(args, 'unmatched');
-  if (unmatched !== undefined && unmatched !== 'deny' && unmatched !== 'prompt') throw new cmd.CommandError('--unmatched is deny or prompt');
   return {
     allow: args.lists.allow ?? [],
     drop: args.lists.drop ?? [],
-    unmatched: unmatched ?? null,
     mirror: args.flags.mirror === true,
     unmirror: args.flags.unmirror === true,
     uninstall: args.flags.uninstall === true,

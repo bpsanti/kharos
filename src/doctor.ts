@@ -6,7 +6,7 @@ import { ConfigError, loadConfig, repoSlug, type Config, type Profile } from './
 import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
-import { readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
+import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
 import { hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
 import { readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
@@ -133,6 +133,8 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   } else if (policy.status === 'absent') {
     add('info', 'managed policy', `no copy of organization managed settings at ${policy.file} (none for this account, or not fetched on this machine yet)`);
   } else add('info', 'managed policy', `${policy.file} cannot be read (${policy.error}); its ask rules, if any, are not checked`);
+  const blocked = hooksBlocked(policy);
+  if (blocked) add('warn', 'managed hooks only', blocked, ['Cloud sessions wait at every prompt the organization or the repository asks about; ask the organization\'s administrator to narrow the rules instead.']);
   if (config.permission_hook) {
     add('warn', 'permission hook', `permission_hook is on: a repository that has the kharos permission hook answers permission prompts in its cloud sessions with no person asked; see what it allowed with \`kharos permissions approvals\``, [
       'Turn it off with `kharos permissions hook disable`, and remove the hook from a repository with `kharos permissions hook diff --uninstall`.',
@@ -238,12 +240,20 @@ function checkPermissions(
   const counts = `${rules.allow.length} allow, ${rules.ask.length} ask, ${rules.deny.length} deny`;
   const detail = [`${where} is on the ${identify(rules)} permission profile (${remote.status === 'absent' ? 'no settings file' : counts})`, ...findings.map((f) => f.text)].join('; ');
   add(findings.some((f) => f.level === 'warn') ? 'warn' : 'ok', label, detail, fix);
-  const mirrored = checkHook(name, p, settings, deps, add, hookOn);
+  const mirrored = checkHook(name, p, settings, deps, add, hookOn, policy);
   checkManagedAsk(name, policy, mirrored, hookOn, add);
 }
 
 /** Whether the branch has the kharos permission hook, and what it answers; returns the organization rules it mirrors. */
-function checkHook(name: string, p: Profile, settings: Record<string, unknown>, deps: DoctorDeps, add: (l: Level, n: string, d: string, f?: string[]) => void, hookOn: boolean): string[] {
+function checkHook(
+  name: string,
+  p: Profile,
+  settings: Record<string, unknown>,
+  deps: DoctorDeps,
+  add: (l: Level, n: string, d: string, f?: string[]) => void,
+  hookOn: boolean,
+  policy: ManagedPolicy,
+): string[] {
   const label = `${name}: permission hook`;
   const where = `${repoSlug(p.repo)}@${p.revision}`;
   let named = false;
@@ -271,9 +281,9 @@ function checkHook(name: string, p: Profile, settings: Record<string, unknown>, 
   else if ('error' in st.rules) problems.push(`${HOOK_RULES_PATH}: ${st.rules.error}, so the hook denies every prompt`);
   if (!hookOn) problems.push('permission_hook is off, yet the hook answers prompts in cloud sessions on this branch');
   const rules = st.rules && !('error' in st.rules) ? st.rules : null;
-  const what = rules
-    ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt ${rules.unmatched === 'deny' ? 'denied with the allowed forms' : 'left to the prompt'}`
-    : 'no usable rules';
+  const stale = rules ? staleMirror(policy, rules.mirror) : null;
+  if (stale) problems.push(stale);
+  const what = rules ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms` : 'no usable rules';
   add(problems.length ? 'warn' : 'info', label, [`${where} has the kharos permission hook: ${what}`, ...problems].join('; '), [
     `/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the hook and changes it (or removes it with --uninstall); then commit and push to ${p.revision}.`,
   ]);
@@ -283,7 +293,7 @@ function checkHook(name: string, p: Profile, settings: Record<string, unknown>, 
 /** The organization's ask rules that still stop this profile's cloud sessions at a prompt nobody answers. */
 function checkManagedAsk(name: string, policy: ManagedPolicy, mirrored: readonly string[], hookOn: boolean, add: (l: Level, n: string, d: string, f?: string[]) => void): void {
   if (policy.status !== 'found') return;
-  const open = policy.ask.filter((r) => !mirrored.includes(r));
+  const open = hooksBlocked(policy) ? policy.ask : policy.ask.filter((r) => !mirrored.includes(r));
   if (open.length === 0) return;
   const fix = ["Ask the organization's administrator to narrow them; a repository allow rule cannot outrank them."];
   fix.push(

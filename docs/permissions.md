@@ -110,7 +110,7 @@ The change touches three files:
 |---|---|
 | `.claude/settings.json` | one `PermissionRequest` entry, matcher `*`, that runs the script only when `CLAUDE_CODE_REMOTE` is `true`; every other key and hook stays |
 | `.claude/hooks/kharos-permission.mjs` | the script, a copy of [`cloud/kharos-permission.mjs`](../cloud/kharos-permission.mjs); Node.js only, no dependency |
-| `.claude/kharos-permissions.json` | the rules: `allow` patterns, `mirror` (mirrored organization ask rules) and `unmatched` |
+| `.claude/kharos-permissions.json` | the rules: `allow` patterns and `mirror` (mirrored organization ask rules) |
 
 The script decides only in a cloud session, where `CLAUDE_CODE_REMOTE` is `true`; on a person's machine it says nothing and the prompt shows as usual.
 In a cloud session it answers each prompt, in this order:
@@ -122,7 +122,6 @@ In a cloud session it answers each prompt, in this order:
    When an allow pattern names the program, the message names each allowed form, so the session sends the right command; in kharos tests the next call was the allowed form after every such denial.
    Otherwise it tells the session to go on without the call, or to stop and say what it needs.
    In a kharos test in a cloud session started by a routine, the hook answered each prompt within 0.2 s: the exact form ran, a chained call and a call with a variable in front were denied with the allowed form, and the next call was that form.
-   With `"unmatched": "prompt"`, the hook only allows, and everything else waits for a person as it does without the hook: a fit for sessions someone watches on claude.ai.
 
 An allow pattern is a command whose words must match exactly, where a `*` word stands for exactly one word of any content:
 
@@ -132,20 +131,21 @@ kharos permissions hook diff --allow "psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc
 
 This allows `psql -h 127.0.0.1 -p 5432 -U dev -d app -Atc 'select 1'` and nothing longer, shorter or chained.
 kharos refuses a pattern whose program is a wildcard, or a shell, an interpreter or a wrapper (`bash`, `python3`, `env`, `sudo`, `xargs` and the like), since it would allow anything, and a pattern that a deny rule of the managed settings or of the repository covers, since a hook cannot approve what a deny rule refuses.
-`--drop <pattern>` removes a pattern, `--unmatched deny|prompt` sets what happens to the rest, and `--uninstall` removes the three files' kharos parts.
+`--drop <pattern>` removes a pattern, and `--uninstall` removes the three files' kharos parts.
 
 ### Mirroring the organization's ask rules
 
 Members of an organization that has not disabled bypass mode can run past its ask rules on their own machines; in a cloud session the same rules stop the work.
 `--mirror` turns the organization's ask rules into a cloud-only allow:
 
-- kharos reads only `permissions.ask`, `permissions.deny` and `disableBypassPermissionsMode` from the local copy of the managed settings, `~/.claude/remote-settings.json` (under `CLAUDE_CONFIG_DIR` when that is set), which Claude Code writes when it fetches them; it never writes that file.
+- kharos reads only `permissions.ask`, `permissions.deny`, `disableBypassPermissionsMode` and `allowManagedHooksOnly` from the local copy of the managed settings, `~/.claude/remote-settings.json` (under `CLAUDE_CONFIG_DIR` when that is set), which Claude Code writes when it fetches them; it never writes that file.
 - With no copy, or one it cannot read, mirroring is unavailable and kharos says so: it never guesses the rules.
 - When the managed settings set `disableBypassPermissionsMode`, kharos refuses: the organization's ask rules then bind every session, on a person's machine too.
-- Otherwise the diff lists every ask rule it converts and every one it keeps as a prompt, with why: rules for other tools than Bash, a rule for every command, and rules for a shell, an interpreter or a wrapper stay prompts.
+- When the organization sets `disableBypassPermissionsMode` after rules were mirrored, kharos refuses every change to the hook but `--unmirror` and `--uninstall`, and `/kharos:doctor` and `kharos permissions hook show` warn until the mirrored rules are gone.
+- Otherwise the diff lists every ask rule it converts and every one it keeps as a prompt, with why: rules for other tools than Bash, a rule for every command, a rule whose program is a wildcard (such as `Bash(*.db.example.com*)`), and rules for a shell, an interpreter or a wrapper stay prompts.
 - The diff carries a warning to check with the organization's administrator first, and the write needs `--org-confirmed` besides the token.
 - Deny rules are never copied, converted or changed.
-- A mirrored rule allows only a single simple command, like an allow pattern.
+- A mirrored rule allows only a single simple command, like an allow pattern, and never one whose program is a shell, an interpreter or a wrapper.
 - `--mirror` again refreshes the list from the current copy, and `--unmirror` removes it.
 
 ### The log of the hook's decisions
@@ -161,6 +161,7 @@ The hook also returns a `systemMessage` with each approval, which Claude Code do
 Limits:
 
 - A managed setting `allowManagedHooksOnly` blocks repository hooks; then only a change of the managed settings helps.
+  When the local copy of the managed settings sets it, `/kharos:doctor` and `kharos permissions hook show` warn, and a launch stores no rules, so the watcher logs no decision the hook never made.
 - The hook allows what an organization chose to have a person approve; agree on it with whoever owns those rules.
 
 ## What the doctor says

@@ -24,9 +24,9 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
    1. Run `kharos permissions hook show <folder>` and show its output as it is.
    2. If it says `permission_hook` is off, explain in one or two sentences that the hook is opt-in and off by default, and that while it is on the hook answers permission prompts in cloud sessions of any repository that has it, with no person asked.
       Ask with AskUserQuestion whether to turn it on; only on an explicit yes run `kharos permissions hook enable` and show its output. On no, stop.
-   3. Ask the person what to change, in their own words: allow patterns to add (a command whose words must match exactly, where a `*` word stands for one argument, such as `psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc *`), patterns to drop, whether anything else is denied with a message (the default) or left to the prompt, mirroring the organization's ask rules, or removing the hook.
+   3. Ask the person what to change, in their own words: allow patterns to add (a command whose words must match exactly, where a `*` word stands for one argument, such as `psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc *`), patterns to drop, mirroring the organization's ask rules, or removing the hook.
       Offer mirroring only when the show output says it is available; when it says it is refused or unavailable, say why, in its words.
-   4. Build the flags: `--allow "<pattern>"` and `--drop "<pattern>"` once per pattern, `--unmatched deny|prompt`, `--mirror` or `--unmirror`, or `--uninstall` alone.
+   4. Build the flags: `--allow "<pattern>"` and `--drop "<pattern>"` once per pattern, `--mirror` or `--unmirror`, or `--uninstall` alone.
       Run `kharos permissions hook diff <flags> <folder>` and show its whole output as it is. If it fails, show the error and stop. If it says there is nothing to change, stop.
    5. Ask the person with AskUserQuestion whether to write exactly this change, with the diff in the preview of the yes option.
    6. If the diff mirrors the organization's ask rules, ask a second, separate AskUserQuestion that quotes the WARNING line of the diff and lists every rule it converts, and whose yes option says the person checked with the organization's administrator.

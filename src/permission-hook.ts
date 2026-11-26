@@ -1,15 +1,15 @@
 // The kharos permission hook in a repository: three files, changed only as one approved diff.
 //   .claude/settings.json            a PermissionRequest entry that runs the script in cloud sessions
 //   .claude/hooks/kharos-permission.mjs  the script, copied from cloud/kharos-permission.mjs of the plugin
-//   .claude/kharos-permissions.json  the rules: the person's own narrow allow patterns, the organization
-//                                    ask rules the person chose to mirror, and what happens to the rest
+//   .claude/kharos-permissions.json  the rules: the person's own narrow allow patterns and the organization
+//                                    ask rules the person chose to mirror; every other prompt is denied
 // A repository allow rule cannot outrank an ask rule, least of all a managed one, and a cloud session
 // has no bypass mode; a PermissionRequest hook answers the prompt on the person's behalf instead.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { bashRuleMatches, HOOK_VERSION, parsePattern, readHookRules, type HookRules } from '../cloud/kharos-permission.mjs';
-import { mirrorRefusal, planMirror, type ManagedPolicy, type MirrorPlan } from './managed-policy.ts';
+import { mirrorRefusal, planMirror, staleMirror, type ManagedPolicy, type MirrorPlan } from './managed-policy.ts';
 import { parseSettings, readRules, renderSettings, SETTINGS_PATH, SettingsError, unifiedDiff } from './permission-profiles.ts';
 
 export const HOOK_SCRIPT_PATH = '.claude/hooks/kharos-permission.mjs';
@@ -125,7 +125,7 @@ export function describeHook(st: HookState): string[] {
     const r = st.rules;
     out.push(`  allow patterns (${r.allow.length}): ${r.allow.length ? r.allow.join(' | ') : 'none'}`);
     out.push(`  mirrored organization ask rules (${r.mirror.length}): ${r.mirror.length ? r.mirror.join(', ') : 'none'}`);
-    out.push(`  any other prompt in a cloud session: ${r.unmatched === 'deny' ? 'denied, with a message that names the allowed forms' : 'left to the prompt'}`);
+    out.push('  any other prompt in a cloud session: denied, with a message that names the allowed forms');
   }
   return out;
 }
@@ -133,7 +133,6 @@ export function describeHook(st: HookState): string[] {
 export interface HookChange {
   allow: string[];
   drop: string[];
-  unmatched: 'deny' | 'prompt' | null;
   mirror: boolean;
   unmirror: boolean;
   uninstall: boolean;
@@ -154,7 +153,7 @@ export interface HookPlan {
 }
 
 function renderRules(r: HookRules): string {
-  return JSON.stringify({ version: 1, unmatched: r.unmatched, allow: r.allow, mirror: r.mirror }, null, 2) + '\n';
+  return JSON.stringify({ version: 1, allow: r.allow, mirror: r.mirror }, null, 2) + '\n';
 }
 
 /** A deny rule that would cover calls an allow pattern names: the hook could never approve them. */
@@ -177,14 +176,16 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
   let mirror: MirrorPlan | null = null;
 
   if (change.uninstall) {
-    if (change.allow.length || change.drop.length || change.unmatched || change.mirror || change.unmirror) throw new HookError('--uninstall takes no other change');
+    if (change.allow.length || change.drop.length || change.mirror || change.unmirror) throw new HookError('--uninstall takes no other change');
     next = { settings: withoutHookEntry(settings), script: null, rules: null };
     lines.push('removes the kharos permission hook: its settings entry, the script and the rules file; every other key of the settings stays');
   } else {
     if (change.mirror && change.unmirror) throw new HookError('--mirror and --unmirror cannot go together');
     const current = files.rules === null ? null : parseRulesText(files.rules);
     if (current && 'error' in current) throw new HookError(`${HOOK_RULES_PATH}: ${current.error}; fix it by hand, or remove the hook with --uninstall`);
-    const base: HookRules = current ?? { allow: [], mirror: [], unmatched: 'deny' };
+    const base: HookRules = current ?? { allow: [], mirror: [] };
+    const stale = change.unmirror ? null : staleMirror(policy, base.mirror);
+    if (stale) throw new HookError(`refused: ${stale}`);
     for (const p of change.allow) {
       const r = parsePattern(p);
       if (!r.ok) throw new HookError(`allow pattern "${p}" is refused: ${r.why}`);
@@ -202,12 +203,11 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
     const rules: HookRules = {
       allow: [...base.allow.filter((p) => !change.drop.includes(p)), ...change.allow.filter((p, i, a) => a.indexOf(p) === i && !base.allow.includes(p))],
       mirror: mirrored,
-      unmatched: change.unmatched ?? base.unmatched,
     };
     next = { settings: withHookEntry(settings), script: shippedScript(), rules: renderRules(rules) };
     lines.push(`${hasHookEntry(settings) ? 'updates' : 'installs'} the kharos permission hook; it decides only in cloud sessions (CLAUDE_CODE_REMOTE=true), and says nothing on a person's machine`);
     lines.push(`allow patterns (${rules.allow.length}): ${rules.allow.length ? rules.allow.join(' | ') : 'none'}`);
-    lines.push(`any other prompt in a cloud session: ${rules.unmatched === 'deny' ? 'denied, with a message that names the allowed forms' : 'left to the prompt'}`);
+    lines.push('any other prompt in a cloud session: denied, with a message that names the allowed forms');
     if (mirror) {
       lines.push(
         `WARNING: check with your organization's administrator before approving this. The organization's managed settings ask a person before these commands; in cloud sessions on this repository the hook will allow them, as single simple commands, with no person asked.`,

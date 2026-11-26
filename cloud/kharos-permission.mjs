@@ -10,10 +10,9 @@
 // - A Bash call that is one simple command (no chaining, pipe, substitution, redirection, variable or
 //   glob) and matches one of the rules file's allow patterns word by word is allowed.
 // - The same for a mirrored rule: an ask rule of the organization's managed settings that the person
-//   chose to turn into a cloud-only allow.
+//   chose to turn into a cloud-only allow, never for a program that runs other commands.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
-//   right command or goes on without it instead of waiting; with "unmatched": "prompt" in the rules
-//   file, it is left to the prompt.
+//   right command or goes on without it instead of waiting.
 // A deny rule is never reached: Claude Code blocks those calls before any prompt.
 //
 // No dependency, Node.js 18 or newer. The functions are exported so kharos tests them and reads the
@@ -35,7 +34,7 @@ export const MAX_ALLOWED_LENGTH = 600;
 export const REFUSAL_PREFIX = 'Refused by the kharos permission hook';
 
 /**
- * @typedef {{ allow: string[], mirror: string[], unmatched: 'deny' | 'prompt' }} HookRules
+ * @typedef {{ allow: string[], mirror: string[] }} HookRules
  * @typedef {{ ok: true, words: string[] } | { ok: false, why: string }} Split
  * @typedef {{ ok: true, words: (string | null)[] } | { ok: false, why: string }} Pattern
  * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror' }} Allow
@@ -240,9 +239,7 @@ export function readHookRules(value) {
   }
   const mirror = list(o.mirror, 'mirror');
   for (const r of mirror) if (!/^Bash\(.+\)$/s.test(r)) throw new Error(`mirrored rule "${r}" is not a Bash rule`);
-  const unmatched = o.unmatched === undefined ? 'deny' : o.unmatched;
-  if (unmatched !== 'deny' && unmatched !== 'prompt') throw new Error('"unmatched" must be "deny" or "prompt"');
-  return { allow, mirror, unmatched };
+  return { allow, mirror };
 }
 
 /** @param {string} tool */
@@ -264,20 +261,19 @@ function namedPrograms(command, patterns) {
 }
 
 /**
- * What the hook answers to one permission request, or null to leave it to the prompt.
+ * What the hook answers to one permission request.
  * @param {{ tool_name?: unknown, tool_input?: unknown }} input
  * @param {HookRules | { error: string }} rules
- * @returns {Decision | null}
+ * @returns {Decision}
  */
 export function decide(input, rules) {
   const tool = typeof input.tool_name === 'string' && input.tool_name !== '' ? input.tool_name : 'tool';
   if ('error' in rules) {
     return { behavior: 'deny', program: null, message: `${REFUSAL_PREFIX}: its rules file cannot be used (${rules.error}), so it allows nothing. Go on without this call, or stop and say what you need.` };
   }
-  const leave = rules.unmatched === 'prompt';
   const ti = typeof input.tool_input === 'object' && input.tool_input !== null ? /** @type {Record<string, unknown>} */ (input.tool_input) : {};
   const command = typeof ti.command === 'string' ? ti.command : null;
-  if (tool !== 'Bash' || command === null) return leave ? null : { behavior: 'deny', program: null, message: generic(tool) };
+  if (tool !== 'Bash' || command === null) return { behavior: 'deny', program: null, message: generic(tool) };
 
   /** @type {{ text: string, words: (string | null)[] }[]} */
   const patterns = rules.allow.flatMap((text) => {
@@ -290,10 +286,9 @@ export function decide(input, rules) {
   if (split.ok && why === null) {
     const hit = patterns.find((p) => matchesPattern(split.words, p.words));
     if (hit !== undefined) return { behavior: 'allow', rule: hit.text, source: 'allow' };
-    const mirrored = rules.mirror.find((r) => bashRuleMatches(r, command));
+    const mirrored = runsOtherCommands(/** @type {string} */ (split.words[0])) ? undefined : rules.mirror.find((r) => bashRuleMatches(r, command));
     if (mirrored !== undefined) return { behavior: 'allow', rule: mirrored, source: 'mirror' };
   }
-  if (leave) return null;
 
   const first = split.ok ? split.words[0] : undefined;
   const programs = namedPrograms(command, patterns.map((p) => p.words)).sort((a, b) => Number(b === first) - Number(a === first));
@@ -366,7 +361,7 @@ async function main() {
   if (typeof input !== 'object' || input === null) return;
   const here = path.dirname(fileURLToPath(import.meta.url));
   const d = decide(/** @type {Record<string, unknown>} */ (input), loadHookRules(path.join(here, '..', RULES_FILE)));
-  if (d) process.stdout.write(JSON.stringify(hookOutput(d)) + '\n');
+  process.stdout.write(JSON.stringify(hookOutput(d)) + '\n');
 }
 
 /** Whether Node.js runs this file itself (not an import); the main module's URL has its links resolved. */

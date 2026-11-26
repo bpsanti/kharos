@@ -8,6 +8,7 @@ import { ConfigError, loadConfig, pickProfile, repoSlug, type Config, type Outpu
 import { writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { activeCount, bodyPath, formatId, updateRegistry, type Session } from './registry.ts';
+import { hooksBlocked, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { hookSnapshot } from './permission-hook.ts';
 import { readRemoteHookFiles, type RemoteHookFiles } from './permissions.ts';
 import { loadRepos, readRemoteHeads, type RemoteHeads } from './repo.ts';
@@ -29,6 +30,8 @@ export interface PrepareOptions {
   heads?: (url: string, revision: string) => RemoteHeads;
   /** Test seam: the kharos permission hook's files on the branch. */
   hookFiles?: (repo: string, revision: string) => RemoteHookFiles;
+  /** Test seam: the local copy of the organization's managed settings. */
+  managedPolicy?: () => ManagedPolicy;
 }
 
 export class LaunchError extends Error {
@@ -97,9 +100,10 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const title = (opts.title?.trim() || defaultTitle(instruction)).slice(0, 120);
   const createdAt = new Date(opts.now).toISOString();
   // With the opt-in permission hook, the rules on the branch now are the ones the session's hook uses,
-  // so the watcher can attribute its decisions. An unreadable branch gives no rules, and no attribution.
+  // so the watcher can attribute its decisions. An unreadable branch gives no rules, and no attribution;
+  // nor does a managed policy that runs no repository hook.
   let hookRules = null;
-  if (config.permission_hook) {
+  if (config.permission_hook && !hooksBlocked((opts.managedPolicy ?? (() => readManagedPolicy(env)))())) {
     const found = (opts.hookFiles ?? ((r, rev) => readRemoteHookFiles(r, rev, env)))(profile.repo, profile.revision);
     hookRules = found.status === 'found' ? hookSnapshot(found.files) : null;
   }

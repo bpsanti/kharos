@@ -53,7 +53,6 @@ export function recordHookDecisions(paths: Paths, s: Session, added: readonly Lo
     // A Bash line too cut to show its command cannot be attributed; the hook allows no command that long.
     if (tool === 'Bash' && input.command === null) continue;
     const d = decide({ tool_name: tool, tool_input: input }, rules);
-    if (!d) continue;
     out.push({
       at: e.ts,
       kharos: s.id,

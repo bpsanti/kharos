@@ -1,8 +1,8 @@
 // The organization's server-managed settings, as Claude Code caches them on this machine. Claude Code
 // fetches them at startup and keeps a copy in ~/.claude/remote-settings.json (server-managed settings
 // docs); a cloud session gets the same settings from Anthropic's servers when it starts.
-// kharos reads only the permission rules and whether bypass mode is disabled, never any other key, and
-// never writes the file. With no readable copy, nothing is guessed: what depends on it is unavailable.
+// kharos reads only the permission rules, whether bypass mode is disabled and whether only managed hooks
+// run, never any other key, and never writes the file. With no readable copy, nothing is guessed: what depends on it is unavailable.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,7 +10,7 @@ import path from 'node:path';
 import { runsOtherCommands } from '../cloud/kharos-permission.mjs';
 
 export type ManagedPolicy =
-  | { status: 'found'; file: string; ask: string[]; deny: string[]; bypassDisabled: boolean }
+  | { status: 'found'; file: string; ask: string[]; deny: string[]; bypassDisabled: boolean; managedHooksOnly: boolean }
   | { status: 'absent'; file: string }
   | { status: 'unreadable'; file: string; error: string };
 
@@ -24,7 +24,7 @@ function rules(v: unknown): string[] | null {
   return Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
 }
 
-/** Bypass mode counts as disabled for any value but an absent or false one, so a value kharos does not know never reads as allowed. */
+/** A restricting key counts as set for any value but an absent or false one, so a value kharos does not know never reads as permissive. */
 function disabled(v: unknown): boolean {
   return v !== undefined && v !== null && v !== false;
 }
@@ -44,7 +44,14 @@ export function parseManagedPolicy(text: string, file: string): ManagedPolicy {
   const ask = rules(perms.ask);
   const deny = rules(perms.deny);
   if (ask === null || deny === null) return { status: 'unreadable', file, error: 'permissions.ask or permissions.deny is not a list of strings' };
-  return { status: 'found', file, ask, deny, bypassDisabled: disabled(perms.disableBypassPermissionsMode) || disabled(o.disableBypassPermissionsMode) };
+  return {
+    status: 'found',
+    file,
+    ask,
+    deny,
+    bypassDisabled: disabled(perms.disableBypassPermissionsMode) || disabled(o.disableBypassPermissionsMode),
+    managedHooksOnly: disabled(o.allowManagedHooksOnly),
+  };
 }
 
 export function readManagedPolicy(env: NodeJS.ProcessEnv): ManagedPolicy {
@@ -75,6 +82,21 @@ export function mirrorRefusal(policy: ManagedPolicy): string | null {
   return null;
 }
 
+/** Why mirrored rules must go: the organization disabled bypass mode after they were mirrored. Null while they may stay. */
+export function staleMirror(policy: ManagedPolicy, mirror: readonly string[]): string | null {
+  if (policy.status !== 'found' || !policy.bypassDisabled || mirror.length === 0) return null;
+  return (
+    `the hook mirrors ${mirror.length} organization ask rule(s), but the organization's managed settings now set disableBypassPermissionsMode, so those rules bind every session; ` +
+    'remove them with `kharos permissions hook diff --unmirror` (or remove the hook with --uninstall)'
+  );
+}
+
+/** Why no repository hook runs under this policy, or null when repository hooks run. */
+export function hooksBlocked(policy: ManagedPolicy): string | null {
+  if (policy.status !== 'found' || !policy.managedHooksOnly) return null;
+  return "the organization's managed settings set allowManagedHooksOnly, so Claude Code runs no repository hook and the kharos permission hook never answers a prompt";
+}
+
 export interface MirrorPlan {
   /** Ask rules that become a cloud-only allow. */
   converted: string[];
@@ -83,9 +105,9 @@ export interface MirrorPlan {
 }
 
 /**
- * Which managed ask rules can become a cloud-only allow: Bash rules that name what they cover. A rule
- * for every command, or for a shell, an interpreter or a wrapper, would allow anything, so it stays a
- * prompt; so does any rule for another tool. Deny rules are not part of this at all.
+ * Which managed ask rules can become a cloud-only allow: Bash rules that name their program. A rule
+ * for every command, for a program it does not name, or for a shell, an interpreter or a wrapper, would
+ * allow anything, so it stays a prompt; so does any rule for another tool. Deny rules are not part of this at all.
  */
 export function planMirror(ask: readonly string[]): MirrorPlan {
   const converted: string[] = [];
@@ -102,7 +124,11 @@ export function planMirror(ask: readonly string[]): MirrorPlan {
       continue;
     }
     const program = body.split(/[\s:]/)[0] as string;
-    if (!program.includes('*') && runsOtherCommands(program)) {
+    if (program.includes('*')) {
+      kept.push({ rule, why: 'it does not name its program' });
+      continue;
+    }
+    if (runsOtherCommands(program)) {
       kept.push({ rule, why: `${program} runs other commands, so an allow would cover anything` });
       continue;
     }
