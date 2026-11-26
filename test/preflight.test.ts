@@ -101,7 +101,7 @@ test('preflight: a prompt of an earlier session becomes a prefix rule of its pro
   const text = formatPreflight(r, { addCommand: 'kharos permissions hook diff {flags} /work/demo', after: [], hookOn: true, auto: false });
   assert.match(text, /\d\. psql <any arguments>\n {5}-> Bash\(psql:\*\)\n {5}-> the organization's ask rule Bash\(psql:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows psql with any arguments/);
   assert.match(text, /kharos permissions hook diff .*--allow-prefix 'Bash\(psql:\*\)'.* \/work\/demo/);
-  assert.match(text, /review before adding: Bash\(git:\*\) \(the subcommand of git could not be told apart from its options/);
+  assert.match(text, /review before adding: Bash\(git:\*\) \(the subcommand of git could not be told apart from its options; it would allow git with any arguments; so it is not in the command below/);
   assert.doesNotMatch(text, /--allow-prefix 'Bash\(git:\*\)'/);
   for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin', 'feature-x', '-n prod', 'view 12', '--no-pager', 'x.yml', '--unknown-option']) assert.equal(text.includes(word), false, word);
 });
@@ -111,11 +111,11 @@ test('preflight: every rule it suggests allows, by the hook\'s own decision, eac
   const long = `git log --grep ${'x'.repeat(700)}`;
   const r = report({}, { history: [...sources, long, 'git -c core.pager=less log'].map((command) => ({ session: 'k-0001', tool: 'Bash', command })) });
   const rules = applicable(r);
-  assert.deepEqual([...rules.prefix].sort(), ['Bash(docker compose exec:*)', 'Bash(gh pr view:*)', 'Bash(git status:*)', 'Bash(kubectl get pods:*)', 'Bash(npm test:*)', 'Bash(psql:*)']);
+  assert.deepEqual([...rules.prefix].sort(), ['Bash(docker compose exec:*)', 'Bash(gh pr view:*)', 'Bash(git log:*)', 'Bash(git status:*)', 'Bash(kubectl get pods:*)', 'Bash(npm test:*)', 'Bash(psql:*)']);
   const hook = { allow: [], mirror: [], prefix: rules.prefix };
-  for (const command of sources.filter((c) => !c.startsWith('git --no-pager log'))) assert.equal(decide({ tool_name: 'Bash', tool_input: { command } }, hook).behavior, 'allow', command);
-  // Built to fail: the hook refuses a command over 600 characters whatever the rules, so Bash(git log:*), learned from one, is for review only.
-  assert.equal(r.suggestions.find((s) => s.pattern === 'Bash(git log:*)')?.status, 'review');
+  for (const command of sources) assert.equal(decide({ tool_name: 'Bash', tool_input: { command } }, hook).behavior, 'allow', command);
+  // The hook refuses a command over 600 characters whatever the rules, so a long source does not hold Bash(git log:*) back.
+  assert.equal(decide({ tool_name: 'Bash', tool_input: { command: long } }, hook).behavior, 'deny');
   // git -c can set a pager or an alias, so it is not skipped: the bare program, for review.
   assert.equal(r.suggestions.find((s) => s.pattern === 'Bash(git:*)')?.status, 'review');
 });

@@ -286,7 +286,7 @@ export interface Suggestion {
   status: 'suggested' | 'covered' | 'refused' | 'review';
   /** For status covered: the suggested prefix rule that covers it; null when the hook on the branch does. */
   coveredBy: string | null;
-  /** Why kharos does not suggest it, for status refused. */
+  /** Why kharos does not suggest it, for status refused, or why a person should review it first, for status review. */
   refusal: string | null;
 }
 
@@ -374,10 +374,10 @@ const sample = (words: readonly (string | null)[]) => words.map((w) => (w === nu
 
 /**
  * Whether a prefix rule allows the commands it was learned from, by the hook's own decision on it alone.
- * A command the hook could never allow by any rule (not a single simple command) is not counted.
+ * A command the hook could never allow by any rule (not a single simple command, or too long) is not counted.
  */
 function allowsSources(rule: string, texts: Iterable<string>): boolean {
-  return [...texts].every((t) => !splitCommand(t).ok || (t.length <= MAX_ALLOWED_LENGTH && decide({ tool_name: 'Bash', tool_input: { command: t } }, { allow: [], mirror: [], prefix: [rule] }).behavior === 'allow'));
+  return [...texts].every((t) => !splitCommand(t).ok || t.length > MAX_ALLOWED_LENGTH || decide({ tool_name: 'Bash', tool_input: { command: t } }, { allow: [], mirror: [], prefix: [rule] }).behavior === 'allow');
 }
 
 function groupKey(words: readonly (string | null)[]): string {
@@ -492,6 +492,13 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
       ? current !== null && ((current.prefix ?? []).some((r) => coversHead(r, shown, true)) || current.mirror.some((r) => coversHead(r, shown, false)))
       : current !== null && decide({ tool_name: 'Bash', tool_input: { command: shown } }, current).behavior === 'allow';
     const p = g.words ? parsePattern(pattern, true) : null;
+    const review = refusal || covered || g.rule === null
+      ? null
+      : g.review
+        ? `the subcommand of ${program} could not be told apart from its options; it would allow ${program} with any arguments`
+        : allowsSources(g.rule, g.texts)
+          ? null
+          : 'by the hook\'s own decision, it does not allow a command it was learned from';
     suggestions.push({
       kind: g.rule ? 'prefix' : 'pattern',
       pattern,
@@ -500,9 +507,9 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
       asks: matched,
       sources: g.sources,
       mentioned: mentions(instruction, program),
-      status: refusal ? 'refused' : covered ? 'covered' : g.review || (g.rule !== null && !allowsSources(g.rule, g.texts)) ? 'review' : 'suggested',
+      status: refusal ? 'refused' : covered ? 'covered' : review ? 'review' : 'suggested',
       coveredBy: null,
-      refusal,
+      refusal: refusal ?? review,
     });
   }
   // A pattern of the repository that a suggested prefix rule allows anyway is not suggested twice.
@@ -632,7 +639,7 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
   const byHook = r.asks.filter((a) => a.state === 'hook');
   if (covered.length || byHook.length) lines.push(`already answered by the kharos permission hook on this branch: ${some([...covered.map((s) => s.pattern), ...byHook.map((a) => a.rule)], 6)}`);
   for (const s of r.suggestions.filter((x) => x.status === 'refused')) lines.push(`not suggested: ${s.refusal}`);
-  for (const s of r.suggestions.filter((x) => x.status === 'review')) lines.push(`review before adding: ${s.pattern} (the subcommand of ${s.program} could not be told apart from its options; it would allow ${s.program} with any arguments, so it is not in the command below and never applied on its own)`);
+  for (const s of r.suggestions.filter((x) => x.status === 'review')) lines.push(`review before adding: ${s.pattern} (${s.refusal}; so it is not in the command below and never applied on its own)`);
   const every = r.asks.filter((a) => a.state === 'every-command');
   if (every.length) lines.push(`${some(every.map((a) => a.rule))}: an ask rule for every command makes every Bash call prompt; only commands found above are suggested`);
   const notBash = r.asks.filter((a) => a.state === 'not-bash');
