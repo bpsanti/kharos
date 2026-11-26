@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `/kharos:run --no-push` leaves out the footer line that asks the session to commit and push work in progress every 30 minutes; `kharos show` says so.
 - `kharos log <id> [lines] --cached` prints the events already stored for a session, from a shell and with no model.
 - `kharos list` keeps each session's title while a notice is open, with the link on the line under it.
 - `/kharos:result` offers `claude --teleport` only when the session left a branch or a pull request, and says when the service cut the session's last message.

@@ -103,6 +103,8 @@ export interface Session {
    * on; null when the hook would not answer there. The watcher attributes the hook's decisions with them.
    */
   permission_hook?: HookRules | null;
+  /** The launch left out the footer line that asks the session to push work in progress (`--no-push`). */
+  no_push?: boolean;
   /** What automatic permission preflight did at launch; absent or null when it was off. */
   preflight?: Preflight | null;
 }

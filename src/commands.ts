@@ -82,7 +82,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
 export function show(paths: Paths, ref: string): string {
   const s = need(paths, ref);
   const lines = [
-    `${s.id} ${stateLabel(s)}  ${s.profile} (${repoSlug(s.repo)}@${s.revision})  ${s.model}  deadline ${s.deadline_min} min`,
+    `${s.id} ${stateLabel(s)}  ${s.profile} (${repoSlug(s.repo)}@${s.revision})  ${s.model}  deadline ${s.deadline_min} min${s.no_push ? '  no push asked' : ''}`,
     s.url ?? (s.trigger_id ? routineUrl(s.trigger_id) : 'no link yet'),
   ];
   if (s.error) lines.push(`error: ${s.error}`);

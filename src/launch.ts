@@ -28,6 +28,8 @@ export interface PrepareOptions {
   extra_outputs?: OutputConfig[];
   /** Extra lines for the protocol footer, such as the session sheet a dedicated firstmate task needs. */
   footer_lines?: string[];
+  /** Leave out the footer line that asks the session to commit and push work in progress every 30 minutes. */
+  no_push?: boolean;
   claude_session: string | null;
   now: number;
   env?: NodeJS.ProcessEnv;
@@ -134,7 +136,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
     }
     const id = formatId(reg.next_seq);
     reg.next_seq++;
-    const body = buildCreateBody({ id, title, instruction, profile, model, footerLines: opts.footer_lines ?? [], now: opts.now });
+    const body = buildCreateBody({ id, title, instruction, profile, model, footerLines: opts.footer_lines ?? [], push: !opts.no_push, now: opts.now });
     writeJsonAtomic(bodyPath(paths, id), body);
     const s: Session = {
       id,
@@ -174,6 +176,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       closed_at: null,
       error: null,
       permission_hook: hookRules,
+      ...(opts.no_push ? { no_push: true } : {}),
       preflight: auto === null ? null : 'skipped' in auto ? { status: 'skipped', reason: auto.skipped } : { status: 'creating', branch: `kharos/${id}`, base: profile.revision, applied: auto.patterns },
     };
     reg.sessions[id] = s;
@@ -198,6 +201,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       profile: { ...profile, revision: branch },
       model,
       footerLines: [...(opts.footer_lines ?? []), ...sideBranchLines(branch, profile.revision, made.commit)],
+      push: !opts.no_push,
       now: opts.now,
     });
     writeJsonAtomic(bodyPath(paths, id), body);

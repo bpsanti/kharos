@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import { close, list, logRequest, rearm, sendMessage, result, resume, writeProfile } from '../src/commands.ts';
+import { close, list, logRequest, rearm, sendMessage, result, resume, show, writeProfile } from '../src/commands.ts';
 import { main, runHook } from '../src/cli.ts';
 import { postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
 import { loadRegistry, updateRegistry } from '../src/registry.ts';
-import { loadRepos } from '../src/repo.ts';
+import { loadRepos, recordAccess } from '../src/repo.ts';
 import { addIntent } from '../src/state.ts';
 import { captured, fixture, HEADS_EMPTY, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -55,6 +55,26 @@ test('launch: prepare, create with the stored body, run once, and the session is
   assert.equal(s.url, 'https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA');
   assert.equal(loadRepos(sb.paths)['example/demo']?.access, 'ok');
   assert.equal(fs.statSync(sb.paths.registry).mode & 0o777, 0o600);
+});
+
+test('launch: --no-push stores a body without the push line, and show says so', async () => {
+  const sb = sandbox();
+  writeConfig(sb);
+  // A repository known to work: prepare reads no remote heads.
+  recordAccess(sb.paths, 'https://github.com/example/demo', 'ok', null, T0);
+  const { value, stdout } = await captured(() => main(['prepare', '--no-push', '--session', CLAUDE], { ...sb.env }, () => 'Fix the typo.'));
+  assert.equal(value, 0);
+  assert.match(stdout, /^k-0001 prepared: demo, .*, no push asked\./m);
+  const pre = preToolUse(sb.ctx(T0), hook({ action: 'create', body: { kharos_launch: 'k-0001' } }));
+  const content: string = (pre?.hookSpecificOutput as any).updatedInput.body.job_config.ccr.events[0].data.message.content;
+  assert.match(content, /KHAROS-DONE/);
+  assert.doesNotMatch(content, /every 30 minutes/);
+  assert.equal(loadRegistry(sb.paths).sessions['k-0001']?.no_push, true);
+  assert.match(show(sb.paths, 'k-0001'), /no push asked/);
+
+  const other = prepared(sb);
+  assert.equal(loadRegistry(sb.paths).sessions[other]?.no_push, undefined);
+  assert.doesNotMatch(show(sb.paths, other), /no push asked/);
 });
 
 test('launch: a second run of the same routine is denied, before and after the answer', () => {

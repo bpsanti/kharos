@@ -39,7 +39,7 @@ import { due, formatReads, health, passEnd } from './watch.ts';
 import { detachFollower, followLoop, startFollowers } from './follow.ts';
 import { wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'no-push']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -111,7 +111,7 @@ function need(args: Args, i: number, what: string): string {
 }
 
 const USAGE = `usage: kharos <command>
-  prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--session id]   (instruction on stdin)
+  prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--no-push] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id | log <id> [lines] --cached
   send <id>   (text on stdin) | result <id> | close <id>
@@ -153,6 +153,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         const s = prepare(paths, {
           extra_outputs: extra.outputs,
           footer_lines: extra.footer,
+          ...(args.flags['no-push'] === true ? { no_push: true } : {}),
           instruction: readInstruction(flag(args, 'file'), stdin),
           ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
           ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
@@ -163,7 +164,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           env,
         });
         const pre = preflightLine(s);
-        out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min.${pre ? `\n${pre}` : ''}\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
+        out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min${s.no_push ? ', no push asked' : ''}.${pre ? `\n${pre}` : ''}\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
         return 0;
       }
       case 'action':

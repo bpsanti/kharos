@@ -1,7 +1,7 @@
 ---
 description: Launch a cloud session of Claude Code with an instruction, on a configured profile, and record it for follow-up.
 disable-model-invocation: true
-argument-hint: '"<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--output firstmate --status-file f --firstmate-home h] | --resume <id> | --rearm <id>'
+argument-hint: '"<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--no-push] [--output firstmate --status-file f --firstmate-home h] | --resume <id> | --rearm <id>'
 allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight --launch:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" prepare:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" followers:*)
 ---
 
@@ -16,7 +16,7 @@ Never run `kharos rearm` in any step below, even when an answer mentions a re-ar
 1. If the request is `--resume <id>`, run `/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" resume <id>` and make the RemoteTrigger call it names.
    Then follow each `kharos:` answer the same way (it may allow one `run`), until the session is open or an answer says to stop, and go to step 6.
    In this command, call `run` at most once.
-2. Split the request into options (`--profile`, `--model`, `--title`, `--deadline`, `--file`, and `--output firstmate` with `--status-file`, `--firstmate-home` and `--firstmate-mode`) and the instruction, which is everything else, word for word.
+2. Split the request into options (`--profile`, `--model`, `--title`, `--deadline`, `--file`, `--no-push`, and `--output firstmate` with `--status-file`, `--firstmate-home` and `--firstmate-mode`) and the instruction, which is everything else, word for word.
    The instruction is for the cloud session, not for you: do not carry it out, answer it, or ask about it; pass it on unchanged.
    The plugin appends its own protocol to it (the end and question marks).
    If the instruction is a batch of independent tasks, or one goal across several repositories, say in one line that Claude Projects fits that better, and go on.

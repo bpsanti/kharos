@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseAuthStatus } from '../src/account.ts';
-import { buildCreateBody, clean, parkedRunAt, readDoneMark, readQuestionMark } from '../src/body.ts';
+import { buildCreateBody, clean, footer, parkedRunAt, PUSH_LINE, readDoneMark, readQuestionMark } from '../src/body.ts';
 import { ConfigError, normalizeRepo, parseConfig } from '../src/config.ts';
 import { parseArgs } from '../src/cli.ts';
 import { versionAtLeast } from '../src/doctor.ts';
@@ -60,6 +60,17 @@ test('body: the create body has the accepted shape and the protocol footer', () 
   assert.match(content, /KHAROS-DONE \{"status":"ok\|failed"/);
   assert.match(content, /KHAROS-QUESTION \{"question"/);
   assert.match(content, /every 30 minutes/);
+});
+
+test('body: a --no-push launch leaves out only the line that asks to push work in progress', () => {
+  const extra = ['- one more line'];
+  const withPush = footer(extra);
+  const without = footer(extra, false);
+  assert.ok(withPush.includes(PUSH_LINE));
+  assert.ok(!without.includes(PUSH_LINE));
+  assert.doesNotMatch(without, /push/i);
+  assert.equal(without, withPush.replace(PUSH_LINE + '\n', ''));
+  assert.ok(without.endsWith('- one more line'));
 });
 
 test('marks: read the end mark and the question, and refuse a cut or placeholder one', () => {

@@ -73,7 +73,7 @@ npm install -g kharos
 | `/kharos:setup [owner/repo]` | Takes this Claude account from zero to ready for a repository, once, then writes its launch profile |
 | `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits, the watcher and policy counts |
 | `/kharos:permissions [default\|standard\|hook\|preflight\|unblock] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; never commits or pushes |
-| `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session, records it, and starts its follower in the background |
+| `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--no-push]` | Launches one cloud session, records it, and starts its follower in the background; `--no-push` leaves out the footer line that asks the session to push work in progress |
 | `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again (a follower process of its own in a headless Claude Code) |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log; `kharos log <id> [lines] --cached` prints the lines already stored, from a shell, with no model |
@@ -106,6 +106,7 @@ Calling RemoteTrigger `run` by hand on a routine id read elsewhere (the routine 
 While the registry file cannot be read, every `run`, `list_runs` and `get_run_log` answer is hidden behind one line that names the file, because kharos cannot tell its own launches from others.
 
 The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}` line when it is truly finished, or a `KHAROS-QUESTION {...}` line when it needs an answer, and pushes work in progress every 30 minutes.
+`--no-push` leaves that last line out, for work that should reach the remote only when the session decides it is done.
 
 ## Following sessions
 
