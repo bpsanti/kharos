@@ -15,7 +15,7 @@ It shows one list of everything a launch needs, in the order each step depends o
 5. Commit identity: how commits are authored (see below).
 6. Permission prompts: every mode kharos has, each with what it does and its trade-off, the ones this account or organization rules out marked with why; you pick one, once.
    One of them, unblock all, frees every prompt kharos can free for the account with one confirmation: the unblock preset on a side branch of each launch, and the account's sessions in auto mode (see [permissions.md](permissions.md#unblock-all)).
-   Picking it is that confirmation: setup shows everything it frees with the option, and turns it on when it writes the profile.
+   Picking it is that confirmation: setup shows the full list of what unblock all frees before it asks, and when you pick that mode it turns all of it on itself, with no separate command for you to run.
 7. Profile: written only when the steps above are settled, as the default profile when it is the first one.
 
 Once per account, it also asks how many cloud sessions may be open at once (`watch.max_open`), with the question it asks anyway, or alone before the profile is written.
@@ -53,7 +53,8 @@ So there are two ways past the prompt, and kharos never bypasses it:
 - For the whole account: unblock all (`/kharos:permissions unblock-all`, or the `unblock-all` mode in `/kharos:setup`) starts this Claude account's sessions in auto mode, with the diff of its user settings (`permissions.defaultMode: "auto"` in `CLAUDE_CONFIG_DIR/settings.json`, `~/.claude/settings.json` by default), together with the rest of what it frees, and writes it only after your one confirmation.
   Then launches need no approval prompt and headless ones need nothing extra; the side effect is that every session of that account starts in auto mode, not only launches.
   A folder whose `.claude/settings.json` or `.claude/settings.local.json` sets another `permissions.defaultMode` overrides the account's, so launches from that folder ask again.
-  `/kharos:permissions unblock-all off` takes it back, back to the mode the file had; that part is left out when the organization turns auto mode off (`permissions.disableAutoMode`).
+  `/kharos:permissions unblock-all off` takes back what `unblock-all on` turned on, back to the mode the file had; that part is left out when the organization turns auto mode off (`permissions.disableAutoMode`).
+  Auto mode set any other way (by hand, or by an earlier setup) is taken out with `kharos permissions account-mode diff off`, then `account-mode write off --expect <token>`.
 - For one launch: `claude -p --permission-mode auto`.
 
 `/kharos:doctor` says which applies to the account in use.
@@ -115,12 +116,12 @@ The last line says whether a launch is ready, and when Claude's access to a repo
 | `account files` | profiles or sessions of this account still sit in the files every account shared (warning) | `/kharos:setup` once on this account |
 | `profile <name>` | the profile was set up on another Claude account (information, or a failure when named with `--profile`) | `/kharos:setup` on this account |
 | `commits` | (information) how cloud commits are authored | see [Commit identity](#commit-identity) |
-| `launch approval` | whether this account starts its sessions in auto mode, so launches need no approval prompt; a warning when the settings ask for auto mode and the organization turns it off | `/kharos:permissions unblock-all`, and `unblock-all off` to take it back; see [Launch approval](#launch-approval) |
+| `launch approval` | whether this account starts its sessions in auto mode, so launches need no approval prompt; a warning when the settings ask for auto mode and the organization turns it off | `/kharos:permissions unblock-all`; `kharos permissions account-mode diff off` takes auto mode out, whoever set it; see [Launch approval](#launch-approval) |
 | `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees; information only when you chose to leave the rules as they are, or your GitHub login cannot change the repository's settings) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
 | `managed policy` | (information) the local copy of the organization's managed settings: how many ask and deny rules, and whether bypass mode is disabled | none |
 | `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or use the opt-in permission hook; see [permissions.md](permissions.md) |
 | `managed hooks only` | the managed settings set `allowManagedHooksOnly`, so no repository hook runs and the permission hook never answers a prompt (warning) | ask the organization's administrator to narrow the rules instead |
-| `unblock all` | one line for everything unblock all frees: on (warning), partly on with what is missing and why (warning), or off | `/kharos:permissions unblock-all` turns on the rest; `/kharos:permissions unblock-all off` takes it back |
+| `unblock all` | one line for everything unblock all frees: on (warning), partly on with what is missing and why (warning), or off | `/kharos:permissions unblock-all` turns on the rest, unless every part available here is on already; `/kharos:permissions unblock-all off` takes back what `unblock-all on` turned on |
 | `permission hook` | the opt-in permission hook is on (warning); per profile, what the branch's hook answers (broad rules marked), a missing or changed script or rules file, a hook on the branch while the setting is off, or mirrored organization ask rules while the organization disables bypass mode (warning) | `kharos permissions hook disable`; `/kharos:permissions hook` in a checkout |
 | `limits` | (information) open sessions against `watch.max_open`, and fires in the last hour | wait, or close finished sessions |
 

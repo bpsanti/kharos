@@ -323,8 +323,8 @@ export function preview(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTar
   const lines = target === 'on' ? onLines(p, paths) : offLines(p, paths);
   if (!p.token) {
     if (target === 'off') lines.push('nothing to take back.');
-    else if (describeUnblockAll(p.state.parts).overall === 'on') lines.push(`nothing to change: all of it is on. \`${UNBLOCK_ALL_UNDO}\` shows how to take it back.`);
-    else lines.push(`nothing to change: every part that is available here is on already. \`${UNBLOCK_ALL_UNDO}\` shows how to take it back.`);
+    else if (describeUnblockAll(p.state.parts).overall === 'on') lines.push(`nothing to change: all of it is on. \`${UNBLOCK_ALL_UNDO}\` shows how to take back what \`kharos permissions unblock-all on\` turned on.`);
+    else lines.push(`nothing to change: every part that is available here is on already. \`${UNBLOCK_ALL_UNDO}\` shows how to take back what \`kharos permissions unblock-all on\` turned on.`);
   } else {
     lines.push(
       target === 'on'

@@ -373,13 +373,17 @@ function checkPermissions(
  * On, even in part, it warns, since prompts are then answered with no person asked.
  */
 function checkUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy, config: Config, add: Add): void {
-  const { overall, text } = describeUnblockAll(readUnblockAll(paths, env, policy, config).parts);
+  const { parts } = readUnblockAll(paths, env, policy, config);
+  const { overall, text } = describeUnblockAll(parts);
   if (overall === 'on') {
     add('warn', 'unblock all', `${text}: every permission prompt in the cloud sessions kharos launches is allowed, of any tool, with no person asked, and every session of this account starts in auto mode`, [
       `Take back what it turned on with \`${UNBLOCK_ALL_UNDO}\`; \`kharos permissions approvals\` lists what the preset allowed.`,
     ]);
   } else if (overall === 'partly') {
-    add('warn', 'unblock all', text, [`\`${UNBLOCK_ALL_SKILL}\` turns on the rest after you confirm once, or \`${UNBLOCK_ALL_UNDO}\` shows how to take back what is on.`]);
+    const undo = `\`${UNBLOCK_ALL_UNDO}\` shows how to take back what \`kharos permissions unblock-all on\` turned on`;
+    add('warn', 'unblock all', text, [
+      parts.every((p) => p.on || p.unavailable) ? `Every part available here is on; ${undo}.` : `\`${UNBLOCK_ALL_SKILL}\` turns on the rest after you confirm once, or ${undo}.`,
+    ]);
   } else {
     add('ok', 'unblock all', `${text}; \`${UNBLOCK_ALL_SKILL}\` frees every prompt kharos can free for this account, in one step, after you confirm once`);
   }
@@ -395,7 +399,7 @@ function checkAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy, add: Ad
   const refusal = autoModeRefusal(policy);
   if (cur.mode === 'auto' && refusal) {
     add('warn', 'launch approval', `${cur.file} starts this account's sessions in auto mode, but ${refusal}, so each launch asks for approval and a headless one is denied`, [
-      `Ask the organization's administrator about auto mode, or take it out of your settings with \`${UNBLOCK_ALL_UNDO}\`.`,
+      `Ask the organization's administrator about auto mode, or take it out of your settings with \`kharos permissions account-mode diff off\`.`,
     ]);
   } else if (cur.mode === 'auto') {
     add('ok', 'launch approval', `this account starts its sessions in auto mode (${cur.file}): Claude Code's classifier reviews each launch, interactive or headless, with no approval prompt, ${ACCOUNT_AUTO_CAVEAT}`);

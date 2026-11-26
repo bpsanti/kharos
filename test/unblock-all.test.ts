@@ -193,7 +193,10 @@ test('unblock-all: each part keeps its own guards; what the organization rules o
   assert.deepEqual(switches(strict), [false, false, false]);
   assert.equal(mode(strict), 'auto');
   assert.match(on.out, /now partly on: on: auto mode for the account; missing: the confirmation of the unblock preset \(not available: .*disableBypassPermissionsMode/);
-  assert.match(formatChecks(runDoctor(strict.paths, { now: T0, env: strict.env }, doctorDeps(strict))), /warn  unblock all: partly on: on: auto mode for the account; missing: /);
+  const strictReport = formatChecks(runDoctor(strict.paths, { now: T0, env: strict.env }, doctorDeps(strict)));
+  assert.match(strictReport, /warn  unblock all: partly on: on: auto mode for the account; missing: /);
+  assert.match(strictReport, /Every part available here is on; `kharos permissions unblock-all show off` shows how to take back/);
+  assert.doesNotMatch(strictReport, /turns on the rest/, 'nothing available is left to turn on');
 
   // Auto mode turned off by the organization: only that part is left out.
   const noAuto = account({ permissions: { ...POLICY_JSON.permissions, disableAutoMode: 'disable' } });
@@ -203,6 +206,9 @@ test('unblock-all: each part keeps its own guards; what the organization rules o
   assert.equal((await kharos(noAuto, 'permissions', 'unblock-all', 'on', '--expect', tokenOf(s2.out))).code, 0);
   assert.deepEqual(switches(noAuto), [true, true, true]);
   assert.equal(mode(noAuto), 'acceptEdits');
+  const byHand = account({ permissions: { ...POLICY_JSON.permissions, disableAutoMode: 'disable' } }, { permissions: { defaultMode: 'auto' } });
+  writeConfig(byHand);
+  assert.match(formatChecks(runDoctor(byHand.paths, { now: T0, env: byHand.env }, doctorDeps(byHand))), /take it out of your settings with `kharos permissions account-mode diff off`/);
 
   // No copy of the managed settings: never guessed.
   const none = account(null);
