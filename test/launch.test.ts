@@ -677,3 +677,31 @@ test('close: a running session is closing; it holds its slot, alerts nobody, and
   assert.match(freed, /The cloud session itself was not stopped by this/);
   assert.equal(loadRegistry(now.paths).sessions[id3]?.step, 'closed');
 });
+
+test('events: session.pr_opened comes once per pull request the session creates, never for a URL it only quotes', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const page = (extra: string[]) =>
+    [
+      `[2026-11-25T19:00:00.000000Z] user: do it`,
+      `[2026-11-25T19:00:10.000000Z] tool_use Bash: ${JSON.stringify({ command: 'gh pr view 3' })}`,
+      `[2026-11-25T19:00:11.000000Z] tool_result: https://github.com/example/demo/pull/3 is open`,
+      `[2026-11-25T19:01:00.000000Z] tool_use Bash: ${JSON.stringify({ command: 'gh pr create --fill' })}`,
+      `[2026-11-25T19:01:05.000000Z] tool_result: https://github.com/example/demo/pull/9`,
+      ...extra,
+    ].join('\n');
+  const read = (at: number, extra: string[] = []) =>
+    postToolUse(sb.ctx(at), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page(extra))));
+  const opened = () =>
+    fs.readFileSync(sb.paths.events, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.event === 'session.pr_opened');
+  read(T0 + 400_000);
+  assert.deepEqual(opened().map((e) => [e.pr, e.class, e.reason]), [['https://github.com/example/demo/pull/9', 'progress', 'the session opened a pull request']]);
+  read(T0 + 460_000, [`[2026-11-25T19:02:00.000000Z] assistant: still on it`]);
+  assert.equal(opened().length, 1, 'the same pull request is told once');
+  read(T0 + 520_000, [
+    `[2026-11-25T19:03:00.000000Z] tool_use mcp__github__create_pull_request: {"title":"second"}`,
+    `[2026-11-25T19:03:02.000000Z] tool_result: {"html_url":"https://github.com/example/other/pull/2"}`,
+  ]);
+  assert.deepEqual(opened().map((e) => e.pr), ['https://github.com/example/demo/pull/9', 'https://github.com/example/other/pull/2']);
+});

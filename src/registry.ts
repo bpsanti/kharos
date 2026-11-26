@@ -73,6 +73,8 @@ export interface Session {
   fired_at: string | null;
   /** When the run that started the cloud session answered (or list_runs first showed it); absent in records written before it existed. */
   opened_at?: string | null;
+  /** The pull requests the log showed the session open, oldest first; each raised session.pr_opened once. */
+  prs_opened?: string[];
   /** When session.overdue was raised, once per session: a session a message reopens past its deadline does not raise it again. */
   overdue_at?: string | null;
   /** When list_runs last came back empty while the launch was firing; a person may re-arm it after that. */

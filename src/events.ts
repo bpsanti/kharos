@@ -15,7 +15,7 @@ export const MARK_SCHEMA = 'kharos.mark.v1';
 
 export type EventClass = 'progress' | 'needs_you' | 'terminal';
 
-export type EventName = `session.${NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired'}`;
+export type EventName = `session.${NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened'}`;
 
 export interface KharosEvent {
   schema: typeof EVENT_SCHEMA;
@@ -48,8 +48,8 @@ export interface KharosEvent {
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
 
 export function classOf(name: EventName): EventClass {
-  const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired';
-  if (kind === 'opened' || kind === 'back' || kind === 'queued') return 'progress';
+  const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened';
+  if (kind === 'opened' || kind === 'back' || kind === 'queued' || kind === 'pr_opened') return 'progress';
   if (kind === 'unfollowed' || kind === 'not_fired') return 'needs_you';
   return TERMINAL.has(kind) ? 'terminal' : 'needs_you';
 }
@@ -74,7 +74,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
     at,
     url: s.url,
     repo: repoSlug(s.repo),
-    pr: s.result.pr,
+    pr: s.result.pr ?? s.prs_opened?.at(-1) ?? null,
     branch: s.result.branch,
     reason,
     open_notice: s.notice?.event ?? null,

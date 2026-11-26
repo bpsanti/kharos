@@ -4,7 +4,7 @@ import { recordHookDecisions } from './approvals.ts';
 import { readDoneMark, readQuestionMark } from './body.ts';
 import { classify, CONFIRM_TWICE, type Verdict } from './classify.ts';
 import { ConfigError, DEFAULT_WATCH, loadConfig, type WatchConfig } from './config.ts';
-import { enqueue, transition, type KharosEvent } from './events.ts';
+import { buildEvent, enqueue, transition, type KharosEvent } from './events.ts';
 import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
@@ -101,6 +101,26 @@ export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: Watch
   return events;
 }
 
+const PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/;
+
+/**
+ * The pull requests that new events show the session open: the URL in the result of a call that creates
+ * one (`gh pr create`, or a GitHub tool that creates a pull request), never a URL the session only quotes.
+ */
+export function openedPullRequests(added: readonly LogEvent[], all: readonly LogEvent[]): string[] {
+  const out: string[] = [];
+  for (const e of added) {
+    if (e.kind !== 'tool_result') continue;
+    const at = all.findIndex((x) => x.key === e.key);
+    const call = all.slice(0, at < 0 ? 0 : at).findLast((x) => x.kind === 'tool_use');
+    if (!call) continue;
+    const creates = (call.tool === 'Bash' && /\bgh pr create\b/.test(call.text)) || (call.tool !== null && /create_pull_request/i.test(call.tool));
+    const url = creates ? PR_URL_RE.exec(e.text)?.[0] : undefined;
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
 /** A read that failed (HTTP error, tool failure, empty answer): two in a row make the session invisible. */
 export function failedRead(ctx: TrackCtx, s: Session, why: string): KharosEvent[] {
   s.read_failures++;
@@ -136,6 +156,11 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
     s.result = { ...s.result, status: null, pr: null, branch: null, summary: null, sheet: null };
   }
   s.result.question = marks.question;
+  for (const pr of openedPullRequests(merged.added, events)) {
+    if (s.prs_opened?.includes(pr)) continue;
+    s.prs_opened = [...(s.prs_opened ?? []), pr];
+    if (!s.closing_at) enqueue(ctx.paths, [{ ...buildEvent(s, 'session.pr_opened', s.state, 'the session opened a pull request', ctx.now), pr }]);
+  }
   const decided = recordHookDecisions(ctx.paths, s, merged.added, events);
 
   const watch = watchConfig(ctx.paths);
