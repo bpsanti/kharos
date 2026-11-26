@@ -8,6 +8,7 @@
   "homepage": "https://github.com/bpsanti/kharos#readme",
   "repository": "https://github.com/bpsanti/kharos",
   "license": "MIT",
+  "icon": "./assets/brand/png/icon-512.png",
   "keywords": [
     "cloud",
     "remote",
