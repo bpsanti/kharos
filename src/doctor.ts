@@ -376,7 +376,7 @@ function checkUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPo
   const { overall, text } = describeUnblockAll(readUnblockAll(paths, env, policy, config).parts);
   if (overall === 'on') {
     add('warn', 'unblock all', `${text}: every permission prompt in the cloud sessions kharos launches is allowed, of any tool, with no person asked, and every session of this account starts in auto mode`, [
-      `Take all of it back with \`${UNBLOCK_ALL_UNDO}\`; \`kharos permissions approvals\` lists what the preset allowed.`,
+      `Take back what it turned on with \`${UNBLOCK_ALL_UNDO}\`; \`kharos permissions approvals\` lists what the preset allowed.`,
     ]);
   } else if (overall === 'partly') {
     add('warn', 'unblock all', text, [`\`${UNBLOCK_ALL_SKILL}\` turns on the rest after you confirm once, or \`${UNBLOCK_ALL_UNDO}\` shows how to take back what is on.`]);

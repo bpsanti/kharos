@@ -84,18 +84,29 @@ function isSwitches(v: unknown): v is Switches {
   return isObject(v) && typeof v.permission_hook === 'boolean' && typeof v.preflight_auto === 'boolean' && typeof v.permission_unblock === 'boolean';
 }
 
+/** The record of the first builds of `unblock-all on`: the two switches it found, before it recorded the parts it turned on. */
+interface EarlierBefore {
+  permission_hook: boolean;
+  preflight_auto: boolean;
+}
+
+function isEarlier(v: unknown): v is EarlierBefore {
+  return isObject(v) && !('parts' in v) && typeof v.permission_hook === 'boolean' && typeof v.preflight_auto === 'boolean';
+}
+
 function readBefore(paths: Paths): Before | null {
-  return (
-    readState<Before>(
-      beforePath(paths),
-      (v) =>
-        isObject(v) &&
+  const v = readState<Before | EarlierBefore>(
+    beforePath(paths),
+    (v) =>
+      isEarlier(v) ||
+      (isObject(v) &&
         Array.isArray(v.parts) &&
         v.parts.every((id) => (PART_IDS as readonly unknown[]).includes(id)) &&
-        (v.parts.includes('auto') ? isSwitches(v.config) : v.config === undefined),
-      'the parts unblock-all on turned on',
-    ) ?? null
+        (v.parts.includes('auto') ? isSwitches(v.config) : v.config === undefined)),
+    'the parts unblock-all on turned on',
   );
+  if (!v) return null;
+  return isEarlier(v) ? { parts: ['auto'], config: { permission_hook: v.permission_hook, preflight_auto: v.preflight_auto, permission_unblock: false } } : v;
 }
 
 /** Records that `on` turned a part on (or that `off` took it back); the record goes once no part is left. */
@@ -317,7 +328,7 @@ export function preview(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTar
   } else {
     lines.push(
       target === 'on'
-        ? `change ${p.token}: nothing changes until the person confirms all of the above, once; then run \`kharos permissions unblock-all on --expect ${p.token}\`. \`${UNBLOCK_ALL_UNDO}\` shows how to take all of it back.`
+        ? `change ${p.token}: nothing changes until the person confirms all of the above, once; then run \`kharos permissions unblock-all on --expect ${p.token}\`. \`${UNBLOCK_ALL_UNDO}\` shows how to take back what it turns on.`
         : `change ${p.token}: nothing changes until the person confirms it; then run \`kharos permissions unblock-all off --expect ${p.token}\`.`,
     );
   }
@@ -407,6 +418,6 @@ export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: Un
   if (p.todo.length === 0) out.push(target === 'on' ? 'nothing to change.' : 'nothing to take back.');
   const after = describeUnblockAll(readUnblockAll(paths, env, policy).parts).text;
   out.push(`now ${after}.`);
-  if (target === 'on') out.push(`\`kharos permissions approvals\` lists what the preset allowed; \`${UNBLOCK_ALL_UNDO}\` shows how to take all of it back.`);
+  if (target === 'on') out.push(`\`kharos permissions approvals\` lists what the preset allowed; \`${UNBLOCK_ALL_UNDO}\` shows how to take back what it turned on.`);
   return out.join('\n');
 }

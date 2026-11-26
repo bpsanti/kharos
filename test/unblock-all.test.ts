@@ -165,6 +165,19 @@ test('unblock-all: off leaves permission_unblock and the confirmation that were 
   assert.match((await kharos(sb, 'permissions', 'unblock-all', 'show', 'off')).out, /nothing to take back/);
 });
 
+test('unblock-all: a record left by the first builds of on still reads, and off puts its two switches back', async () => {
+  const sb = account();
+  writeConfig(sb, { permission_hook: true, preflight_auto: true, permission_unblock: true });
+  fs.mkdirSync(sb.paths.state, { recursive: true });
+  fs.writeFileSync(path.join(sb.paths.state, 'unblock-all.json'), JSON.stringify({ permission_hook: true, preflight_auto: false }));
+  const shown = await kharos(sb, 'permissions', 'unblock-all', 'show', 'off');
+  assert.equal(shown.code, 0, shown.err);
+  const off = await kharos(sb, 'permissions', 'unblock-all', 'off', '--expect', tokenOf(shown.out));
+  assert.equal(off.code, 0, off.err);
+  assert.deepEqual(switches(sb), [true, false, false]);
+  assert.equal(fs.existsSync(path.join(sb.paths.state, 'unblock-all.json')), false);
+});
+
 test('unblock-all: each part keeps its own guards; what the organization rules out is listed, skipped and named in the doctor', async () => {
   // Bypass mode disabled: no unblock preset, auto mode still possible.
   const strict = account({ permissions: { ...POLICY_JSON.permissions, disableBypassPermissionsMode: 'disable' } });

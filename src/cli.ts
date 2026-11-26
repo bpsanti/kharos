@@ -124,7 +124,7 @@ const USAGE = `usage: kharos <command>
         [--permissions <as-is (or default)|standard|hook|standard+hook|auto-preflight|unblock|unblock-all [--unblock-expect token]>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--max-open n] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
-  permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token>   (everything kharos can free for this account, in one step, or all of it taken back)
+  permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token>   (everything kharos can free for this account, in one step, or what it turned on taken back)
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
   permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]

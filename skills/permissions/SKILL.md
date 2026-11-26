@@ -51,7 +51,7 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
    2. Ask with AskUserQuestion whether to write exactly this change, with the diff in the preview of the yes option and its effect (every session of this account, not only launches) in the question.
    3. Only on an explicit yes, run the `kharos permissions account-mode write ... --expect <token>` command the diff names, exactly, and show its output.
 10. When the person asks what the hook allowed, run `kharos permissions approvals` (add `--all` for the denials too, `--session <id>` for one session) and show its output as it is.
-11. For `unblock-all` (everything kharos can free for this account, in one step) or `unblock-all off` (all of it taken back):
+11. For `unblock-all` (everything kharos can free for this account, in one step) or `unblock-all off` (what it turned on taken back):
     1. Run `kharos permissions unblock-all show` (`kharos permissions unblock-all show off` for off) and show its whole output as it is.
        If it says there is nothing to change or nothing to take back, stop.
     2. Ask one AskUserQuestion: its question says, in plain words, every part the output turns on (or takes back) and what each frees, the parts it leaves out with why, and that auto mode changes every session of this account, not only launches; its yes option says the person accepts all of it, with the output's diff of the account's settings as the preview of that option.

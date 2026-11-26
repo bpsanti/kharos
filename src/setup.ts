@@ -317,7 +317,7 @@ function unblockAllOption(parts: readonly Part[] | null): PermissionOption {
     id: 'unblock-all',
     title: 'Unblock all (opt-in, for the whole account)',
     does: "one confirmation frees every prompt kharos can free: the unblock preset, confirmed for the organization's settings, goes on a side branch of each launch (no checkout changes), and this account's sessions start in auto mode, so launches need no approval prompt",
-    tradeoff: `${UNBLOCK_RISK}, at every launch, while your confirmation matches the organization's settings; and ${ACCOUNT_AUTO_EFFECT}; \`${UNBLOCK_ALL_UNDO}\` takes all of it back`,
+    tradeoff: `${UNBLOCK_RISK}, at every launch, while your confirmation matches the organization's settings; and ${ACCOUNT_AUTO_EFFECT}; \`${UNBLOCK_ALL_UNDO}\` takes back what it turned on`,
     unavailable: !parts
       ? null
       : out.length === parts.length
