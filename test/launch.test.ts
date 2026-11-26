@@ -498,3 +498,39 @@ test('launch: the deadline counts from the open of the session, not from the lau
   assert.notEqual(s.state, 'overdue');
   assert.equal(s.overdue_at ?? null, null);
 });
+
+test('close: --ask-stop sends a stop request before releasing a running session, and keeps it followed when the send fails', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const { stdout: closed, value } = await captured(() => main(['close', id, '--ask-stop'], sb.env));
+  assert.equal(value, 0);
+  assert.match(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), /^kharos: the person closed this session and asks you to stop now\. .*commit and push them first\. Then end your turn/);
+  assert.match(closed, /was asked to stop.*https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA/);
+  assert.match(closed, /delete it at https:\/\/claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
+  assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
+
+  // Without --ask-stop, the output says how to ask.
+  const other = sandbox();
+  const id2 = prepared(other);
+  launch(other, id2);
+  assert.match(close(other.paths, id2, T0 + 700_000), new RegExp(`/kharos:close ${id2} --ask-stop asks it to stop`));
+  assert.equal(fs.existsSync(`${other.dir}/sent.txt`), false);
+
+  const failing = sandbox({ send: { ok: false, error: 'session not found' } });
+  const id3 = prepared(failing);
+  launch(failing, id3);
+  assert.throws(() => close(failing.paths, id3, T0 + 700_000, null, { askStop: true, env: failing.env }), /still followed: the request to stop could not be sent \(not sent: session not found\)/);
+  assert.equal(loadRegistry(failing.paths).sessions[id3]?.step, 'open');
+});
+
+test('close: a --no-push launch is not asked to push before it stops', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.no_push = true;
+  });
+  close(sb.paths, id, T0 + 700_000, null, { askStop: true, env: sb.env });
+  assert.doesNotMatch(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), /push/);
+});

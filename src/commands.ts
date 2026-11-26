@@ -339,8 +339,35 @@ function closeSideBranch(paths: Paths, s: Session, forge: Forge | null, now: num
   return `deleted the side branch ${p.branch} of ${slug}, which held only the permission hook commit of this launch`;
 }
 
-export function close(paths: Paths, ref: string, now: number, forge: Forge | null = null): string {
+/** The message `close --ask-stop` sends into a session before it is released. */
+export function stopRequest(s: Pick<Session, 'no_push'>): string {
+  return [
+    'kharos: the person closed this session and asks you to stop now.',
+    'Start no new work, and run nothing more in the background.',
+    ...(s.no_push ? [] : ['If you have changes worth keeping, commit and push them first.']),
+    'Then end your turn: nobody reads this session any more.',
+  ].join(' ');
+}
+
+export interface CloseOptions {
+  /** Send the session a request to stop (`--ask-stop`) before releasing it; nothing is released if it cannot be sent. */
+  askStop?: boolean;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function close(paths: Paths, ref: string, now: number, forge: Forge | null = null, opts: CloseOptions = {}): string {
   const s = need(paths, ref);
+  const running = s.step === 'open' && !TERMINAL_STATES.has(s.state);
+  let asked = false;
+  if (opts.askStop && running) {
+    try {
+      sendMessage(paths, s.id, stopRequest(s), opts.env ?? process.env);
+      asked = true;
+    } catch (err) {
+      if (!(err instanceof CommandError)) throw err;
+      throw new CommandError(`${s.id} is still followed: the request to stop could not be sent (${err.message}). Try again, or close it without --ask-stop and stop it at ${s.url}`);
+    }
+  }
   updateRegistry(paths, (reg) => {
     const cur = reg.sessions[s.id];
     if (!cur || cur.step === 'closed') return;
@@ -355,8 +382,12 @@ export function close(paths: Paths, ref: string, now: number, forge: Forge | nul
     return lines.join('\n');
   }
   const lines = [`${s.id} is no longer followed.`];
-  if (s.state !== 'finished' && s.state !== 'failed' && s.step === 'open') {
-    lines.push(`The cloud session itself was not stopped (the tool has no stop action): ask it to stop with /kharos:send ${s.id}, or stop it at ${s.url}`);
+  if (asked) {
+    lines.push(`It was asked to stop, and stops at the end of its current step; nobody reads it now, so check that it did at ${s.url} (the tool has no stop action).`);
+  } else if (running) {
+    lines.push(`The cloud session itself was not stopped (the tool has no stop action): /kharos:close ${s.id} --ask-stop asks it to stop before it is released, /kharos:send ${s.id} sends it any message, and ${s.url} stops it.`);
+  } else if (opts.askStop) {
+    lines.push('There was nothing to ask to stop: no cloud session of it is running.');
   }
   if (s.trigger_id) lines.push(`Its disabled routine stays in your account; delete it at ${routineUrl(s.trigger_id)} (the tool cannot delete routines).`);
   const side = closeSideBranch(paths, s, forge, now);

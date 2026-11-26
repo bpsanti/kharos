@@ -79,7 +79,7 @@ npm install -g kharos
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log; `kharos log <id> [lines] --cached` prints the lines already stored, from a shell, with no model |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
-| `/kharos:close <id>` | Stops following a session, and shows where to delete its routine; cancels a queued launch |
+| `/kharos:close <id> [--ask-stop]` | Stops following a session, and shows where to delete its routine; `--ask-stop` first sends the session a request to stop; cancels a queued launch |
 | `/kharos:watch` | One watcher pass, the advanced mode; run it as `/loop 10m /kharos:watch` in a session of its own |
 
 Commands that spend plan usage or change state can only be started by you, not by the model.

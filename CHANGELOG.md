@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `/kharos:close <id> --ask-stop` sends the session a request to stop (start nothing new, commit and push what is worth keeping unless the launch was `--no-push`, end the turn) before it is released; when the request cannot be sent, the session stays followed. Without it, the output of `/kharos:close` on a running session says how to ask.
 - The deadline counts from the moment the cloud session opened, not from the preparation of the launch: the wait for an approval, a refused fire or a place in the queue no longer count. `session.overdue` is raised once per session, and not again at once when a message reopens a session past its deadline.
 
 ## 0.2.0
