@@ -14,7 +14,7 @@ The person wants this done once, with as few questions as possible: never ask wh
    With neither, ask for `owner/repo` and stop until you have it.
 2. Read what Claude Code knows about this account: call the Skill tool with skill `schedule` and args `kharos setup: show the Available environments list only; create, update, list or run nothing`.
    It loads the account's cloud environments (it creates a first one when there is none) and, for the repository of this folder, a heads-up when Claude cannot reach it on GitHub.
-   Do not follow its workflow and do not call RemoteTrigger for it: copy only its lines under "Available environments:" and every line that mentions GitHub, word for word, and go on here.
+   Do not follow its workflow and do not call RemoteTrigger for it: copy only the "Available environments:" line, the lines under it, and every line that mentions GitHub, word for word, and go on here.
    If the skill is not available, or you have no RemoteTrigger tool, skip this step and add `--no-remote-tool` in step 3 when you have no RemoteTrigger tool.
 3. Run, with the lines of step 2 unchanged between the markers (nothing between them when you skipped it), and the choices the person made so far as flags:
    ```
