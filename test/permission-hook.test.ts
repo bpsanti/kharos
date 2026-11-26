@@ -414,6 +414,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     settings: () => ({ status: 'found', text: JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }) }),
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
     managedPolicy: () => parseManagedPolicy(JSON.stringify(POLICY), '/home/person/.claude/remote-settings.json'),
+    setupScript: () => ({ status: 'absent' }),
     ...over,
   };
 }

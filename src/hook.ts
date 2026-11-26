@@ -2,6 +2,8 @@
 // answers a kharos command asked for; every other use of the tool (such as /schedule) passes untouched.
 
 import fs from 'node:fs';
+import { clean } from './body.ts';
+import { repoSlug } from './config.ts';
 import { StateError } from './fsutil.ts';
 import { condensedLine, mergePage, parseLog } from './logparse.ts';
 import type { Paths } from './paths.ts';
@@ -17,9 +19,9 @@ import {
   type Registry,
   type Session,
 } from './registry.ts';
-import { readCreatedTrigger, readEnvironments, readError, readLogHeader, readRunSession, readRuns, readToolResponse } from './remote.ts';
+import { readCreatedTrigger, readEnvironments, readError, readLogHeader, readRunSession, readRuns, readToolResponse, type EnvironmentUse } from './remote.ts';
 import { recordAccess, readOwnerType, refusalFix, type OwnerType } from './repo.ts';
-import { saveEnvironments, takeIntent } from './state.ts';
+import { findSetup, saveEnvironments, takeIntent } from './state.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
 import { health, isActiveWatcher } from './watch.ts';
@@ -313,13 +315,24 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
     if (!intent) return null;
     const envs = readEnvironments(r);
     if (!envs) return reshape(r.status, { kharos: 'environments', read: 'failed' }, `kharos: the list of routines could not be read (HTTP ${r.status ?? '?'}).`);
-    saveEnvironments(ctx.paths, envs, ctx.now);
+    saveEnvironments(ctx.paths, envs, ctx.now, intent.account ?? null);
     const lines = envs.length
-      ? envs.map((e) => `${e.id}  used by ${e.routines} routine(s), last ${e.last_used?.slice(0, 10) ?? 'unknown'}`)
-      : ['no routine uses an environment yet: create one at claude.ai/code, and see its id with /schedule'];
-    return reshape(r.status, { kharos: 'environments', count: envs.length }, ['kharos: cloud environments seen in your routines:', ...lines].join('\n'));
+      ? envs.map((e) => `${e.id}  used by ${e.routines} routine(s)${e.repos?.length ? ` on ${e.repos.map((x) => clean(x, 100)).join(', ')}` : ''}, last ${e.last_used?.slice(0, 10) ?? 'unknown'}`)
+      : ['no routine uses an environment yet'];
+    if (intent.repo) lines.push(knownFor(ctx.paths, intent.account ?? null, intent.repo, envs));
+    return reshape(r.status, { kharos: 'environments', count: envs.length }, ['kharos: cloud environments seen in your routines (there is no list of all of them):', ...lines].join('\n'));
   }
   return null;
+}
+
+/** Whether kharos knows an environment for the repository: one the person confirmed, or one its routines used. */
+function knownFor(paths: Paths, account: string | null, repo: string, envs: EnvironmentUse[]): string {
+  const slug = repoSlug(repo);
+  const confirmed = findSetup(paths, account, slug);
+  if (confirmed) return `for ${slug}: ${confirmed.environment} (you confirmed it on ${confirmed.confirmed_at.slice(0, 10)})`;
+  const used = envs.filter((e) => e.repos?.includes(slug.toLowerCase())).map((e) => e.id);
+  if (used.length) return `for ${slug}: ${used.join(', ')} (used by your routines on it)`;
+  return `for ${slug}: no environment is known to fit it; offer the assisted path (kharos env-guide)`;
 }
 
 export function postToolUseFailure(ctx: Ctx, input: HookInput): HookOutput {
