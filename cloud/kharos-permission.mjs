@@ -12,7 +12,8 @@
 // - The same for a mirrored rule: an ask rule of the organization's managed settings that the person
 //   chose to turn into a cloud-only allow.
 // - The same for a prefix rule, `Bash(<program> <subcommands>:*)` with literal words: it allows that
-//   program, or that subcommand of it, with any arguments.
+//   program, or that subcommand of it, with any arguments. The known global options a program takes
+//   before its subcommand are skipped (`Bash(git log:*)` covers `git --no-pager log`).
 // - A broad rule (an allow pattern, a mirrored rule or a prefix rule for a shell, an interpreter, a wrapper or any
 //   program) counts only when the rules file says `"broad": true`, which
 //   kharos writes only when the person asked for broad rules with --broad.
@@ -273,6 +274,101 @@ export function prefixRuleWhy(rule, broad = false) {
   return why ? `it is broad (${why})` : null;
 }
 
+/** Programs built on subcommands, with how many words after the program name the action. */
+const SUBCOMMAND_WORDS = {
+  ...Object.fromEntries(['git', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go', 'make', 'terraform', 'helm', 'brew', 'pip', 'poetry', 'uv', 'docker', 'podman'].map((p) => [p, 1])),
+  ...Object.fromEntries(['kubectl', 'gh', 'aws', 'gcloud'].map((p) => [p, 2])),
+};
+const SUBCOMMAND_RE = /^[a-z0-9][a-z0-9-]*$/;
+const NPM_OPTIONS = { value: ['--prefix', '-C', '--dir', '-w', '--workspace', '--filter'], flag: ['--silent', '-s'] };
+const DOCKER_OPTIONS = { value: ['-H', '--host', '--context', '--config', '-f', '--file', '-p', '--project-name', '--project-directory', '--env-file', '--profile'], flag: [] };
+/**
+ * The global options a program takes before its subcommand: those that take a value, and those that
+ * take none. None of them makes the program run another command.
+ * @type {Record<string, { value: string[], flag: string[] }>}
+ */
+const GLOBAL_OPTIONS = {
+  git: { value: ['-C', '--git-dir', '--work-tree', '--namespace'], flag: ['--no-pager', '--paginate', '-p', '--bare', '--no-replace-objects'] },
+  kubectl: { value: ['-n', '--namespace', '--context', '--cluster', '--kubeconfig', '--user', '-s', '--server'], flag: [] },
+  npm: NPM_OPTIONS,
+  pnpm: NPM_OPTIONS,
+  yarn: NPM_OPTIONS,
+  docker: DOCKER_OPTIONS,
+  podman: DOCKER_OPTIONS,
+  gh: { value: ['-R', '--repo'], flag: [] },
+  aws: { value: ['--profile', '--region', '--output', '--endpoint-url'], flag: [] },
+  gcloud: { value: ['--project', '--account', '--configuration'], flag: [] },
+};
+
+/** @param {string} program */
+const baseName = (program) => program.slice(program.lastIndexOf('/') + 1);
+
+/**
+ * A command's words without the known global options (and their values) before its subcommand, and
+ * after `docker compose`: `git --no-pager log -1` reads as `git log -1`. A null word is one whose value
+ * is not known (a variable); it stays.
+ * @param {(string | null)[]} words
+ * @returns {(string | null)[]}
+ */
+export function commandWords(words) {
+  const program = /** @type {string} */ (words[0]);
+  const name = baseName(program);
+  const options = GLOBAL_OPTIONS[name];
+  if (!options) return [...words];
+  const compose = name === 'docker' || name === 'podman';
+  /** @type {(string | null)[]} */
+  const out = [program];
+  for (let i = 1; i < words.length; i++) {
+    const w = /** @type {string | null} */ (words[i]);
+    const seeking = out.length === 1 || (compose && out.length === 2 && out[1] === 'compose');
+    if (seeking && typeof w === 'string' && w.startsWith('-')) {
+      if (/^--[^=]+=/.test(w) || options.flag.includes(w)) continue;
+      if (options.value.includes(w)) {
+        i++;
+        continue;
+      }
+    }
+    out.push(w);
+  }
+  return out;
+}
+
+/**
+ * The program of a command and the subcommand words that name its action (`git push`, `docker compose
+ * exec`, `kubectl get pods`), with its global options skipped. `complete` is false when a program built
+ * on subcommands shows none that can be told apart from its options.
+ * @param {(string | null)[]} words
+ * @returns {{ words: string[], complete: boolean }}
+ */
+export function commandHead(words) {
+  const cw = commandWords(words);
+  const program = /** @type {string} */ (cw[0]);
+  const name = baseName(program);
+  let need = SUBCOMMAND_WORDS[name] ?? 0;
+  const head = [program];
+  for (let i = 1; i < cw.length && head.length <= need; i++) {
+    const w = cw[i];
+    if (typeof w !== 'string' || !SUBCOMMAND_RE.test(w)) break;
+    head.push(w);
+    if ((name === 'docker' || name === 'podman') && head.length === 2 && w === 'compose') need++;
+  }
+  const compose = (name === 'docker' || name === 'podman') && head[1] === 'compose';
+  return { words: head, complete: need === 0 || head.length >= (compose ? 3 : 2) };
+}
+
+/**
+ * Whether a prefix rule covers a single simple command: its words start the command, as written or with
+ * the program's global options before the subcommand skipped.
+ * @param {string} rule
+ * @param {(string | null)[]} words
+ */
+export function prefixMatches(rule, words) {
+  const want = prefixOf(rule).split(' ');
+  /** @param {(string | null)[]} ws */
+  const starts = (ws) => want.length <= ws.length && want.every((w, i) => ws[i] === w);
+  return starts(words) || starts(commandWords(words));
+}
+
 /** The literal words a prefix rule starts a command with.
  * @param {string} rule */
 export function prefixOf(rule) {
@@ -376,10 +472,10 @@ export function decide(input, rules) {
     // Only a broad rule, in a rules file that allows broad rules, covers a program that runs other commands.
     const others = runsOtherCommands(/** @type {string} */ (split.words[0]));
     /** @param {string} r */
-    const covers = (r) => bashRuleMatches(r, command) && (!others || (broad && broadRuleWhy(r) !== null));
-    const mirrored = rules.mirror.find(covers);
+    const allowed = (r) => !others || (broad && broadRuleWhy(r) !== null);
+    const mirrored = rules.mirror.find((r) => bashRuleMatches(r, command) && allowed(r));
     if (mirrored !== undefined) return { behavior: 'allow', rule: mirrored, source: 'mirror', broad: broadRuleWhy(mirrored) !== null };
-    const prefixed = (rules.prefix ?? []).find(covers);
+    const prefixed = (rules.prefix ?? []).find((r) => prefixMatches(r, split.words) && allowed(r));
     if (prefixed !== undefined) return { behavior: 'allow', rule: prefixed, source: 'prefix', broad: broadRuleWhy(prefixed) !== null };
   }
 

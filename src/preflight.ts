@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { bashRuleMatches, broadRuleWhy, decide, parsePattern, prefixOf, showPattern, type HookRules } from '../cloud/kharos-permission.mjs';
+import { bashRuleMatches, broadRuleWhy, commandHead, decide, MAX_ALLOWED_LENGTH, parsePattern, prefixMatches, prefixOf, showPattern, splitCommand, type HookRules } from '../cloud/kharos-permission.mjs';
 import { promptCommand } from './approvals.ts';
 import { isPermissionPrompt } from './classify.ts';
 import { normalizeRepo } from './config.ts';
@@ -206,63 +206,16 @@ export function toCandidate(command: string): Candidate | null {
   return { words, text: toks.map((t) => t.raw).join(' ') };
 }
 
-/** Programs built on subcommands, with how many leading words name the action. */
-const SUBCOMMAND_WORDS: Record<string, number> = {
-  ...Object.fromEntries(['git', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go', 'make', 'terraform', 'helm', 'brew', 'pip', 'poetry', 'uv', 'docker', 'podman'].map((p) => [p, 1])),
-  ...Object.fromEntries(['kubectl', 'gh', 'aws', 'gcloud'].map((p) => [p, 2])),
-};
-const SUBCOMMAND_RE = /^[a-z0-9][a-z0-9-]*$/;
-
-const NPM_VALUE_OPTIONS = ['--prefix', '-C', '--dir', '-w', '--workspace', '--filter'];
-const NPM_FLAG_OPTIONS = ['--silent', '-s'];
-const DOCKER_VALUE_OPTIONS = ['-H', '--host', '--context', '--config', '-f', '--file', '-p', '--project-name', '--project-directory', '--env-file', '--profile'];
-/** The global options that may come before the subcommand: those that take a value, and those that take none. */
-const GLOBAL_OPTIONS: Record<string, { value: string[]; flag: string[] }> = {
-  git: { value: ['-C', '-c', '--git-dir', '--work-tree', '--namespace'], flag: ['--no-pager', '--paginate', '-p', '--bare', '--no-replace-objects'] },
-  kubectl: { value: ['-n', '--namespace', '--context', '--cluster', '--kubeconfig', '--user', '-s', '--server'], flag: [] },
-  npm: { value: NPM_VALUE_OPTIONS, flag: NPM_FLAG_OPTIONS },
-  pnpm: { value: NPM_VALUE_OPTIONS, flag: NPM_FLAG_OPTIONS },
-  yarn: { value: NPM_VALUE_OPTIONS, flag: NPM_FLAG_OPTIONS },
-  docker: { value: DOCKER_VALUE_OPTIONS, flag: [] },
-  podman: { value: DOCKER_VALUE_OPTIONS, flag: [] },
-  gh: { value: ['-R', '--repo'], flag: [] },
-  aws: { value: ['--profile', '--region', '--output', '--endpoint-url'], flag: [] },
-  gcloud: { value: ['--project', '--account', '--configuration'], flag: [] },
-};
-
 /**
  * A command recorded in an earlier session as a prefix rule: its program and the subcommand words that
- * name the action (`Bash(git push:*)`, `Bash(docker compose exec:*)`, `Bash(kubectl get pods:*)`), and
- * nothing else of it, so no value, flag or path it was run with reaches a rule. The program's known
- * global options before the subcommand are skipped. `review` is set when a program built on subcommands
- * shows none that can be told apart from its options: the rule is then the bare program, for a person
- * to review, never applied on its own.
+ * name the action (`Bash(git push:*)`, `Bash(docker compose exec:*)`, `Bash(kubectl get pods:*)`), found
+ * by the hook's own parser, and nothing else of it, so no value, flag or path it was run with reaches a
+ * rule. `review` is set when a program built on subcommands shows none that can be told apart from its
+ * options: the rule is then the bare program, for a person to review, never applied on its own.
  */
 export function prefixRule(c: Candidate): { rule: string; review: boolean } {
-  const program = c.words[0] as string;
-  const name = path.posix.basename(program);
-  let need = SUBCOMMAND_WORDS[name] ?? 0;
-  const options = GLOBAL_OPTIONS[name] ?? { value: [], flag: [] };
-  const words = [program];
-  for (let i = 1; i < c.words.length && words.length <= need; i++) {
-    const w = c.words[i];
-    if (w === null || w === undefined) break;
-    const seeking = words.length === 1 || (words.length === 2 && words[1] === 'compose' && (name === 'docker' || name === 'podman'));
-    if (w.startsWith('-')) {
-      if (!seeking) break;
-      if (/^--[^=]+=/.test(w) || options.flag.includes(w)) continue;
-      if (options.value.includes(w)) {
-        i++;
-        continue;
-      }
-      break;
-    }
-    if (!SUBCOMMAND_RE.test(w)) break;
-    words.push(w);
-    if ((name === 'docker' || name === 'podman') && words.length === 2 && w === 'compose') need++;
-  }
-  const compose = (name === 'docker' || name === 'podman') && words[1] === 'compose';
-  return { rule: `Bash(${words.join(' ')}:*)`, review: need > 0 && words.length < (compose ? 3 : 2) };
+  const head = commandHead(c.words);
+  return { rule: `Bash(${head.words.join(' ')}:*)`, review: !head.complete };
 }
 
 /** The command lines a file of the repository holds, by what kind of file it is. */
@@ -419,6 +372,14 @@ function mentions(instruction: string, program: string): boolean {
 
 const sample = (words: readonly (string | null)[]) => words.map((w) => (w === null ? 'x' : w)).join(' ');
 
+/**
+ * Whether a prefix rule allows the commands it was learned from, by the hook's own decision on it alone.
+ * A command the hook could never allow by any rule (not a single simple command) is not counted.
+ */
+function allowsSources(rule: string, texts: Iterable<string>): boolean {
+  return [...texts].every((t) => !splitCommand(t).ok || (t.length <= MAX_ALLOWED_LENGTH && decide({ tool_name: 'Bash', tool_input: { command: t } }, { allow: [], mirror: [], prefix: [rule] }).behavior === 'allow'));
+}
+
 function groupKey(words: readonly (string | null)[]): string {
   return [words[0], words[1] ?? '*', words.length].join('\u0000');
 }
@@ -517,7 +478,9 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
 
   const repoDeny = repoRules.deny;
   const suggestions: Suggestion[] = [];
-  const currentRules = current ? [...(current.prefix ?? []), ...current.mirror] : [];
+  /** A rule covers a prefix when it allows the prefix alone and with one more argument. */
+  const coversHead = (r: string, head: string, prefix: boolean) =>
+    prefix ? prefixMatches(r, head.split(' ')) && prefixMatches(r, [...head.split(' '), 'x']) : bashRuleMatches(r, head) && bashRuleMatches(r, `${head} x`);
   for (const g of groups.values()) {
     const head = g.rule === null ? null : prefixOf(g.rule);
     const pattern = g.rule ?? (g.words as (string | null)[]).map((w) => (w === null ? '*' : w)).join(' ');
@@ -526,7 +489,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     const matched = narrowAsks.filter((a) => [...g.texts, shown].some((t) => bashRuleMatches(a.rule, t)));
     const refusal = g.rule ? prefixRefusal(g.rule, false, policy, repoDeny) : allowRefusal(pattern, false, policy, repoDeny);
     const covered = g.rule
-      ? currentRules.some((r) => bashRuleMatches(r, shown) && bashRuleMatches(r, `${shown} x`))
+      ? current !== null && ((current.prefix ?? []).some((r) => coversHead(r, shown, true)) || current.mirror.some((r) => coversHead(r, shown, false)))
       : current !== null && decide({ tool_name: 'Bash', tool_input: { command: shown } }, current).behavior === 'allow';
     const p = g.words ? parsePattern(pattern, true) : null;
     suggestions.push({
@@ -537,7 +500,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
       asks: matched,
       sources: g.sources,
       mentioned: mentions(instruction, program),
-      status: refusal ? 'refused' : covered ? 'covered' : g.review ? 'review' : 'suggested',
+      status: refusal ? 'refused' : covered ? 'covered' : g.review || (g.rule !== null && !allowsSources(g.rule, g.texts)) ? 'review' : 'suggested',
       coveredBy: null,
       refusal,
     });
@@ -547,7 +510,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
   for (const s of suggestions) {
     if (s.kind !== 'pattern' || s.status !== 'suggested') continue;
     const p = parsePattern(s.pattern, true);
-    const by = p.ok ? prefixes.find((x) => bashRuleMatches(x.pattern, sample(p.words))) : undefined;
+    const by = p.ok ? prefixes.find((x) => prefixMatches(x.pattern, sample(p.words).split(' '))) : undefined;
     if (by) {
       s.status = 'covered';
       s.coveredBy = by.pattern;
@@ -569,7 +532,7 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
       (current.mirror.includes(a.rule) ||
         (current.prefix ?? []).some((r) => {
           const head = programOf(a.rule) === null ? null : a.rule.replace(/^Bash\(/, '').replace(/(?::\*| \*)?\)$/, '');
-          return head !== null && !head.includes('*') && bashRuleMatches(r, head) && bashRuleMatches(r, `${head} x`);
+          return head !== null && !head.includes('*') && coversHead(r, head, true);
         }) ||
         current.allow.some((p) => {
           const w = parsePattern(p, true);

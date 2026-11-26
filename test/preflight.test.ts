@@ -106,6 +106,27 @@ test('preflight: a prompt of an earlier session becomes a prefix rule of its pro
   for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin', 'feature-x', '-n prod', 'view 12', '--no-pager', 'x.yml', '--unknown-option']) assert.equal(text.includes(word), false, word);
 });
 
+test('preflight: every rule it suggests allows, by the hook\'s own decision, each command it was learned from', () => {
+  const sources = ['git --no-pager log', 'git -C dir status', 'kubectl -n prod get pods', 'npm --prefix web test', 'docker compose -f x.yml exec db psql', 'gh -R org/repo pr view 12', 'psql -h 127.0.0.1 -c x'];
+  const long = `git log --grep ${'x'.repeat(700)}`;
+  const r = report({}, { history: [...sources, long, 'git -c core.pager=less log'].map((command) => ({ session: 'k-0001', tool: 'Bash', command })) });
+  const rules = applicable(r);
+  assert.deepEqual([...rules.prefix].sort(), ['Bash(docker compose exec:*)', 'Bash(gh pr view:*)', 'Bash(git status:*)', 'Bash(kubectl get pods:*)', 'Bash(npm test:*)', 'Bash(psql:*)']);
+  const hook = { allow: [], mirror: [], prefix: rules.prefix };
+  for (const command of sources.filter((c) => !c.startsWith('git --no-pager log'))) assert.equal(decide({ tool_name: 'Bash', tool_input: { command } }, hook).behavior, 'allow', command);
+  // Built to fail: the hook refuses a command over 600 characters whatever the rules, so Bash(git log:*), learned from one, is for review only.
+  assert.equal(r.suggestions.find((s) => s.pattern === 'Bash(git log:*)')?.status, 'review');
+  // git -c can set a pager or an alias, so it is not skipped: the bare program, for review.
+  assert.equal(r.suggestions.find((s) => s.pattern === 'Bash(git:*)')?.status, 'review');
+});
+
+test('permission hook: a prefix rule matches with the program\'s known global options skipped, never git -c', () => {
+  const rules = { allow: [], mirror: [], prefix: ['Bash(git log:*)', 'Bash(kubectl get pods:*)', 'Bash(docker compose exec:*)', 'Bash(npm test:*)'] };
+  const ask = (command: string) => decide({ tool_name: 'Bash', tool_input: { command } }, rules).behavior;
+  for (const command of ['git log -1', 'git --no-pager log', 'git -C ../other log', 'kubectl -n prod get pods', 'kubectl get pods -A', 'docker compose -f x.yml exec db psql', 'npm --prefix web test']) assert.equal(ask(command), 'allow', command);
+  for (const command of ['git -c core.pager=sh log', 'git --no-pager push', 'kubectl -n prod delete pods', 'npm exec x', 'docker run x']) assert.equal(ask(command), 'deny', command);
+});
+
 test('preflight: a prefix rule that a deny rule covers, or whose program runs other code, is never suggested', () => {
   const settings = JSON.stringify({ permissions: { deny: ['Bash(rm:*)'] } });
   const r = report({ '.claude/settings.json': settings }, { history: [{ session: 'k-0001', tool: 'Bash', command: 'rm -rf build' }, { session: 'k-0001', tool: 'Bash', command: 'python3 manage.py check' }] });

@@ -131,7 +131,7 @@ kharos permissions hook diff --allow "psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc
 
 This allows `psql -h 127.0.0.1 -p 5432 -U dev -d app -Atc 'select 1'` and nothing longer, shorter or chained.
 kharos refuses a pattern that a deny rule of the managed settings or of the repository covers, since a hook cannot approve what a deny rule refuses.
-A prefix rule, `--allow-prefix 'Bash(<program> <subcommands>:*)'`, allows that program, or that subcommand of it, with any arguments, still as one simple command: `Bash(psql:*)` allows `psql -h 127.0.0.1 -c 'select 1'`, and `Bash(git push:*)` allows any `git push`.
+A prefix rule, `--allow-prefix 'Bash(<program> <subcommands>:*)'`, allows that program, or that subcommand of it, with any arguments, still as one simple command: `Bash(psql:*)` allows `psql -h 127.0.0.1 -c 'select 1'`, and `Bash(git push:*)` allows any `git push`, also with the program's known global options in front (`git --no-pager push`).
 Its words are literal (no wildcard), and kharos refuses it when its program runs other commands (unless `--broad`) or when a deny rule covers it.
 `--drop <pattern or prefix rule>` removes one, and `--uninstall` removes the three files' kharos parts.
 
@@ -192,6 +192,9 @@ Commands with the same program, first argument and length merge into one pattern
 A prompt of an earlier session never gives a rule its values: it is reduced to its program and the words that name its action, and suggested as a prefix rule, `Bash(<program> <subcommands>:*)`, so no password, token, host or path it was run with reaches a rule, a side branch or a log.
 The subcommand words are the lowercase words after the program (letters, digits and `-`): one for `git`, `npm`, `pnpm`, `yarn`, `bun`, `cargo`, `go`, `make`, `terraform`, `helm`, `brew`, `pip`, `poetry`, `uv`, `docker` and `podman` (`Bash(git push:*)`, `Bash(docker ps:*)`), two for `kubectl`, `gh`, `aws` and `gcloud` (`Bash(kubectl get pods:*)`, `Bash(gh pr view:*)`), and one more after `docker compose` or `podman compose` (`Bash(docker compose exec:*)`); any other program keeps only its name (`Bash(psql:*)`, `Bash(redis-cli:*)`).
 The program's known global options before the subcommand are skipped with their values (`git --no-pager log` and `git -C dir log` give `Bash(git log:*)`, `npm --prefix web test` gives `Bash(npm test:*)`, `docker compose -f x.yml exec db psql` gives `Bash(docker compose exec:*)`), and so is any `--option=value` word.
+The hook skips the same options when it matches a prefix rule, with the same parser, so `Bash(git log:*)` allows `git --no-pager log` too.
+The options skipped are ones that never make the program run another command: `git -c`, which can set a pager or an alias, is not one of them, so `git -c core.pager=less log` gives the bare `Bash(git:*)` for review.
+A suggested rule must allow, by the hook's own decision, each command it was learned from; one that does not is listed for review instead.
 When an option kharos does not know comes first, or no subcommand follows, the subcommand cannot be told apart from the options: the bare program (`Bash(git:*)`) is listed under `review before adding`, left out of the command that adds the suggestions, and never applied by automatic preflight.
 A prefix rule allows any arguments of that program or subcommand, a width chosen on purpose so a session is not stopped by the next form of the same command.
 Earlier prompts with the same prefix give one rule, and a repository pattern that a suggested prefix rule allows anyway is listed as covered by it.
