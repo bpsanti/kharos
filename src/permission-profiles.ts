@@ -1,14 +1,15 @@
 // Permission profiles for the repository a cloud session starts in. A session on one repository reads
 // that repository's .claude/settings.json; the user's own settings and .claude/settings.local.json stay
 // on the person's machine. A session that a routine starts begins in auto mode when it is available:
-// actions that match an allow rule resolve at once, ask rules always prompt, and the classifier decides
-// the rest, with a prompt after it blocks 3 actions in a row or 20 in the session. A prompt waits for a
-// person. These profiles add allow rules so fewer actions reach the classifier or a prompt; they never
-// touch deny rules.
+// broad allow rules are dropped, narrow ones resolve before the classifier, ask rules always prompt, and
+// the classifier decides the rest, with a prompt after it blocks 3 actions in a row or 20 in the session.
+// The classifier also reads the repository's CLAUDE.md. A prompt waits for a person. The standard profile
+// adds narrow allow rules, which auto mode keeps, so fewer actions reach the classifier or a prompt; the
+// environment note tells the classifier where the session runs. Neither touches ask or deny rules.
 
 import crypto from 'node:crypto';
 
-export const PERMISSION_PROFILES = ['default', 'standard', 'open'] as const;
+export const PERMISSION_PROFILES = ['default', 'standard'] as const;
 export type PermissionProfile = (typeof PERMISSION_PROFILES)[number];
 
 export const SETTINGS_PATH = '.claude/settings.json';
@@ -19,9 +20,35 @@ export function isPermissionProfile(v: string): v is PermissionProfile {
 
 export const PROFILE_SUMMARY: Record<PermissionProfile, string> = {
   default: 'changes nothing',
-  standard: 'allows file tools, read-only shell and git commands, and the build and test commands of the repository; keeps ask and deny rules',
-  open: 'allows every built-in tool, removes ask rules, and keeps deny rules',
+  standard: 'allows file tools, read-only shell and git commands, and the build, test and dev commands of the repository, as narrow rules that auto mode keeps; keeps ask and deny rules',
 };
+
+export const CLAUDE_MD_PATH = 'CLAUDE.md';
+export const ENVIRONMENT_SUMMARY = 'adds a short paragraph to CLAUDE.md that tells the auto mode classifier the session runs in an isolated, disposable cloud VM with local development services';
+
+const ENVIRONMENT_MARK = '<!-- kharos:cloud-environment -->';
+
+/** The paragraph for CLAUDE.md. It states only what holds for every cloud session, never what the repository's data is. */
+export const ENVIRONMENT_NOTE = [
+  ENVIRONMENT_MARK,
+  '## Cloud session environment',
+  '',
+  'When this repository runs in a Claude Code cloud session, the session runs in an isolated, disposable cloud VM made for that task, and the VM is removed when the session ends.',
+  'Development services started in it (databases, caches, emulators) are local to that VM.',
+  "Running the repository's build, test and development commands there, and starting, seeding or resetting those local services, is expected work.",
+  '<!-- /kharos:cloud-environment -->',
+].join('\n');
+
+/** CLAUDE.md with the environment note at its end, or null when the note is there already. */
+export function withEnvironmentNote(text: string | null): string | null {
+  if (text?.includes(ENVIRONMENT_MARK)) return null;
+  if (text === null || text.trim() === '') return ENVIRONMENT_NOTE + '\n';
+  return `${text.replace(/\s*$/, '')}\n\n${ENVIRONMENT_NOTE}\n`;
+}
+
+export function hasEnvironmentNote(text: string | null): boolean {
+  return text?.includes(ENVIRONMENT_MARK) ?? false;
+}
 
 export class SettingsError extends Error {}
 
@@ -30,6 +57,8 @@ export interface Rules {
   ask: string[];
   deny: string[];
   defaultMode: string | null;
+  /** The file has autoMode settings, which a project's settings cannot set. */
+  autoMode: boolean;
 }
 
 /** What the repository holds, so the standard profile allows its own build and test commands. */
@@ -70,10 +99,8 @@ export const STANDARD_BASE: readonly string[] = [
   'Bash(git checkout -b *)',
 ];
 
-export const OPEN_RULES: readonly string[] = ['Bash', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Agent'];
-
-/** Script and target names that build, test or check, and name no deploy, release, publish, upload or push step. */
-const BUILD_TEST_RE = /^(?!.*(?:deploy|release|publish|upload|push))(?:build|test|tests|check|lint|typecheck|type-check|types|format|fmt|compile|verify)(?:[:._-][\w:.-]*)?$/i;
+/** Script and target names that build, test, check or run the project for development, and name no deploy, release, publish, upload or push step. */
+const BUILD_TEST_RE = /^(?!.*(?:deploy|release|publish|upload|push))(?:build|test|tests|check|lint|typecheck|type-check|types|format|fmt|compile|verify|dev|start|serve)(?:[:._-][\w:.-]*)?$/i;
 const SAFE_NAME_RE = /^[\w:.-]+$/;
 
 function packageManager(files: readonly string[]): string {
@@ -83,18 +110,21 @@ function packageManager(files: readonly string[]): string {
   return 'npm';
 }
 
-/** The build and test rules for what the repository holds at its root. */
+/**
+ * The build, test and dev rules for what the repository holds at its root. Auto mode drops
+ * package-manager run rules with a wildcard, so package scripts get exact rules.
+ */
 export function buildRules(facts: RepoFacts): string[] {
   const has = (f: string) => facts.files.includes(f);
   const out: string[] = [];
   if (has('package.json')) {
     const pm = packageManager(facts.files);
-    out.push(pm === 'npm' ? 'Bash(npm ci)' : `Bash(${pm} install --frozen-lockfile)`, `Bash(${pm} install)`, `Bash(${pm} test *)`);
-    for (const s of facts.scripts) if (BUILD_TEST_RE.test(s) && SAFE_NAME_RE.test(s)) out.push(`Bash(${pm} run ${s} *)`);
+    out.push(pm === 'npm' ? 'Bash(npm ci)' : `Bash(${pm} install --frozen-lockfile)`, `Bash(${pm} install)`, `Bash(${pm} test)`);
+    for (const s of facts.scripts) if (BUILD_TEST_RE.test(s) && SAFE_NAME_RE.test(s)) out.push(`Bash(${pm} run ${s})`);
   }
   if (has('Cargo.toml')) out.push('Bash(cargo build *)', 'Bash(cargo test *)', 'Bash(cargo check *)', 'Bash(cargo clippy *)', 'Bash(cargo fmt *)');
   if (has('go.mod')) out.push('Bash(go build *)', 'Bash(go test *)', 'Bash(go vet *)');
-  if (['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'pytest.ini', 'tox.ini'].some(has)) out.push('Bash(pytest *)', 'Bash(python -m pytest *)');
+  if (['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'pytest.ini', 'tox.ini'].some(has)) out.push('Bash(pytest *)');
   if (has('Makefile') || has('makefile') || has('GNUmakefile')) {
     for (const t of facts.makeTargets) if (BUILD_TEST_RE.test(t) && SAFE_NAME_RE.test(t)) out.push(`Bash(make ${t} *)`);
   }
@@ -138,7 +168,8 @@ export function parseSettings(text: string | null): Record<string, unknown> {
 
 export function readRules(settings: Record<string, unknown>): Rules {
   const p = settings.permissions;
-  if (p === undefined) return { allow: [], ask: [], deny: [], defaultMode: null };
+  const autoMode = settings.autoMode !== undefined;
+  if (p === undefined) return { allow: [], ask: [], deny: [], defaultMode: null, autoMode };
   if (typeof p !== 'object' || p === null || Array.isArray(p)) throw new SettingsError('"permissions" must be an object');
   const o = p as Record<string, unknown>;
   return {
@@ -146,6 +177,7 @@ export function readRules(settings: Record<string, unknown>): Rules {
     ask: strings(o.ask, 'permissions.ask'),
     deny: strings(o.deny, 'permissions.deny'),
     defaultMode: typeof o.defaultMode === 'string' ? o.defaultMode : null,
+    autoMode,
   };
 }
 
@@ -153,19 +185,32 @@ export function readRules(settings: Record<string, unknown>): Rules {
 export function applyProfile(settings: Record<string, unknown>, profile: PermissionProfile, facts: RepoFacts): Record<string, unknown> {
   if (profile === 'default') return settings;
   const rules = readRules(settings);
-  const add = profile === 'open' ? OPEN_RULES : [...STANDARD_BASE, ...buildRules(facts)];
+  const add = [...STANDARD_BASE, ...buildRules(facts)];
   const allow = [...rules.allow, ...add.filter((r) => !rules.allow.includes(r))];
   const permissions = { ...(settings.permissions as Record<string, unknown> | undefined) };
   permissions.allow = allow;
-  if (profile === 'open') delete permissions.ask;
   return { ...settings, permissions };
 }
 
-const BASH_ALL = new Set(['Bash', 'Bash(*)']);
+const INTERPRETER_RE = /^(?:python[\d.]*|node|deno|bun|ruby|perl|php|sh|bash|zsh|fish|pwsh|powershell)(?:\*|[\s:].*\*)/;
+const WRAPPER_RE = /^(?:timeout|env|xargs|nohup|nice|time|sudo|exec|eval|command|watch|npx|pnpx|bunx|uvx)(?:\s+\*|:\*)$/;
+const PM_RUN_RE = /^(?:(?:npm|pnpm|yarn|bun)\s+(?:run|run-script|exec|dlx|x)|(?:cargo|poetry|uv|pipenv|deno)\s+run)\b.*\*/;
 
-/** Which profile the rules match: open, standard, default (no rules at all) or custom. */
-export function identify(rules: Rules): 'open' | 'standard' | 'default' | 'custom' {
-  if (rules.allow.some((r) => BASH_ALL.has(r)) && rules.ask.length === 0) return 'open';
+/**
+ * An allow rule of the kinds that auto mode drops on entering it: every command of a shell, a rule
+ * that starts with a wildcard, a wildcarded interpreter, a wrapper followed only by a wildcard, a
+ * package-manager run with a wildcard, and Agent or Monitor rules.
+ */
+export function isBroadRule(rule: string): boolean {
+  if (['Bash', 'PowerShell', 'Agent', 'Monitor'].includes(rule) || /^(?:Agent|Monitor)\(/.test(rule)) return true;
+  const m = rule.match(/^(?:Bash|PowerShell)\((.*)\)$/);
+  if (!m) return false;
+  const c = (m[1] as string).trim();
+  return c.startsWith('*') || INTERPRETER_RE.test(c) || WRAPPER_RE.test(c) || PM_RUN_RE.test(c);
+}
+
+/** Which profile the rules match: standard, default (no rules at all) or custom. */
+export function identify(rules: Rules): 'standard' | 'default' | 'custom' {
   if (STANDARD_BASE.every((r) => rules.allow.includes(r))) return 'standard';
   if (rules.allow.length === 0 && rules.ask.length === 0 && rules.deny.length === 0 && rules.defaultMode === null) return 'default';
   return 'custom';
@@ -176,22 +221,32 @@ export interface Finding {
   text: string;
 }
 
-const IGNORED_MODES = new Set(['bypassPermissions', 'dontAsk', 'auto']);
+function some(xs: string[]): string {
+  return xs.slice(0, 3).join(', ') + (xs.length > 3 ? ', ...' : '');
+}
 
 /** What in the rules would hold a cloud session at a prompt nobody sees, or does not work there. */
 export function assess(rules: Rules): Finding[] {
   const out: Finding[] = [];
   if (rules.ask.length) {
-    const some = rules.ask.slice(0, 3).join(', ') + (rules.ask.length > 3 ? ', ...' : '');
-    out.push({ level: 'warn', text: `${rules.ask.length} ask rule(s) (${some}) prompt even in auto mode, and the session waits until a person answers` });
+    out.push({ level: 'warn', text: `${rules.ask.length} ask rule(s) (${some(rules.ask)}) prompt even in auto mode, and the session waits until a person answers` });
   }
-  if (!rules.allow.some((r) => r === 'Bash' || r.startsWith('Bash('))) {
+  const broad = rules.allow.filter(isBroadRule);
+  if (broad.length) {
+    out.push({ level: 'warn', text: `${broad.length} broad allow rule(s) (${some(broad)}) are dropped by auto mode, which routine runs start in, so they allow nothing in a cloud session` });
+  }
+  if (!rules.allow.some((r) => r.startsWith('Bash(') && !isBroadRule(r))) {
     out.push({
       level: 'warn',
-      text: 'no allow rule for Bash: every command goes to the auto mode classifier, and after 3 blocks in a row or 20 in the session a prompt waits for a person (at the first command when auto mode is not available)',
+      text: 'no narrow allow rule for Bash: every command goes to the auto mode classifier, and after 3 blocks in a row or 20 in the session a prompt waits for a person (at the first command when auto mode is not available)',
     });
   }
-  if (rules.defaultMode && IGNORED_MODES.has(rules.defaultMode)) out.push({ level: 'info', text: `defaultMode "${rules.defaultMode}" does not apply from a repository's settings in a cloud session` });
+  if (rules.defaultMode === 'bypassPermissions' || rules.defaultMode === 'dontAsk') {
+    out.push({ level: 'warn', text: `defaultMode "${rules.defaultMode}" is ignored by cloud sessions, which have no such mode` });
+  } else if (rules.defaultMode === 'auto') {
+    out.push({ level: 'info', text: 'defaultMode "auto" does not take effect from a repository\'s settings; routine runs start in auto mode anyway' });
+  }
+  if (rules.autoMode) out.push({ level: 'info', text: 'autoMode settings are not read from a repository\'s .claude/settings.json, only from user or managed settings' });
   return out;
 }
 

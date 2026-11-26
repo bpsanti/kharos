@@ -10,7 +10,7 @@ import {
   assess,
   buildRules,
   identify,
-  OPEN_RULES,
+  isBroadRule,
   readFacts,
   readRules,
   STANDARD_BASE,
@@ -21,26 +21,32 @@ import { captured, HEADS_OK, sandbox, T0, writeConfig, type Sandbox } from './he
 
 const NO_FACTS = { files: [], scripts: [], makeTargets: [] };
 
-test('permission profiles: standard allows the build and test commands the repository has, never deploys', () => {
-  const pkg = JSON.stringify({ scripts: { test: 'x', 'test:unit': 'x', build: 'x', lint: 'x', deploy: 'x', release: 'x', 'bad name': 'x' } });
-  const facts = readFacts(['package.json', 'pnpm-lock.yaml', 'Cargo.toml', 'Makefile'], pkg, 'build:\n\tcc\ntest: build\n\t./t\ndeploy:\n\tscp\nX := 1\n');
+test('permission profiles: standard allows the build, test and dev commands the repository has, never deploys', () => {
+  const pkg = JSON.stringify({ scripts: { test: 'x', 'test:unit': 'x', build: 'x', lint: 'x', dev: 'x', deploy: 'x', release: 'x', 'bad name': 'x' } });
+  const facts = readFacts(['package.json', 'pnpm-lock.yaml', 'Cargo.toml', 'Makefile', 'pyproject.toml'], pkg, 'build:\n\tcc\ntest: build\n\t./t\ndeploy:\n\tscp\nX := 1\n');
   assert.deepEqual(buildRules(facts), [
     'Bash(pnpm install --frozen-lockfile)',
     'Bash(pnpm install)',
-    'Bash(pnpm test *)',
-    'Bash(pnpm run test *)',
-    'Bash(pnpm run test:unit *)',
-    'Bash(pnpm run build *)',
-    'Bash(pnpm run lint *)',
+    'Bash(pnpm test)',
+    'Bash(pnpm run test)',
+    'Bash(pnpm run test:unit)',
+    'Bash(pnpm run build)',
+    'Bash(pnpm run lint)',
+    'Bash(pnpm run dev)',
     'Bash(cargo build *)',
     'Bash(cargo test *)',
     'Bash(cargo check *)',
     'Bash(cargo clippy *)',
     'Bash(cargo fmt *)',
+    'Bash(pytest *)',
     'Bash(make build *)',
     'Bash(make test *)',
   ]);
-  assert.deepEqual(buildRules(readFacts(['package.json'], '{not json', null)), ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test *)']);
+  assert.deepEqual(buildRules(readFacts(['package.json'], '{not json', null)), ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test)']);
+  // Every rule the profile adds is narrow, so auto mode keeps it.
+  const rules = readRules(applyProfile({}, 'standard', facts));
+  assert.deepEqual(rules.allow.filter(isBroadRule), []);
+  assert.deepEqual(assess(rules), []);
 });
 
 test('permission profiles: standard allows no build or test script whose name says it deploys, releases, publishes, uploads or pushes', () => {
@@ -48,7 +54,7 @@ test('permission profiles: standard allows no build or test script whose name sa
   const pkg = JSON.stringify({ scripts: Object.fromEntries([...names, 'build:prod'].map((n) => [n, 'x'])) });
   const make = [...names.map((n) => n.replace(/:/g, '-')), 'build-release', 'test-unit'].map((t) => `${t}:\n\tx\n`).join('');
   const rules = buildRules(readFacts(['package.json', 'Makefile'], pkg, make));
-  assert.deepEqual(rules, ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test *)', 'Bash(npm run build:prod *)', 'Bash(make test-unit *)']);
+  assert.deepEqual(rules, ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test)', 'Bash(npm run build:prod)', 'Bash(make test-unit *)']);
 });
 
 test('permission profiles: standard adds allow rules after the existing ones and keeps ask, deny and every other key', () => {
@@ -66,13 +72,13 @@ test('permission profiles: standard adds allow rules after the existing ones and
   assert.equal(identify(rules), 'standard');
 });
 
-test('permission profiles: open allows every built-in tool, drops ask rules and keeps deny rules', () => {
-  const next = applyProfile({ permissions: { ask: ['Bash(git push *)'], deny: ['Bash(rm -rf *)'] } }, 'open', NO_FACTS);
-  const rules = readRules(next);
-  assert.deepEqual(rules.allow, [...OPEN_RULES]);
-  assert.deepEqual(rules.ask, []);
-  assert.deepEqual(rules.deny, ['Bash(rm -rf *)']);
-  assert.equal(identify(rules), 'open');
+test('permission profiles: the broad allow rules that auto mode drops are told from narrow ones', () => {
+  for (const r of ['Bash', 'Bash(*)', 'PowerShell', 'Bash(* --version)', 'Bash(python*)', 'Bash(python3 *)', 'Bash(node scripts/*)', 'Bash(timeout *)', 'Bash(env:*)', 'Bash(npm run *)', 'Bash(pnpm run test *)', 'Bash(cargo run *)', 'Agent', 'Agent(Explore)', 'Monitor']) {
+    assert.ok(isBroadRule(r), r);
+  }
+  for (const r of ['Bash(npm test)', 'Bash(npm run test)', 'Bash(git status *)', 'Bash(cargo test *)', 'Bash(pytest *)', 'Bash(node --version)', 'Bash(make test *)', 'Read', 'Edit', 'WebFetch']) {
+    assert.ok(!isBroadRule(r), r);
+  }
   assert.equal(applyProfile({ x: 1 }, 'default', NO_FACTS).x, 1);
 });
 
@@ -80,15 +86,21 @@ test('permission profiles: identify and assess name what would hold a session at
   const none = readRules({});
   assert.equal(identify(none), 'default');
   assert.deepEqual(assess(none).map((f) => f.level), ['warn']);
-  assert.match(assess(none)[0]!.text, /^no allow rule for Bash: .*3 blocks in a row or 20/);
-  const custom = readRules({ permissions: { allow: ['Bash(npm test *)'], ask: ['Bash(git push *)', 'WebFetch', 'Edit', 'Write'], defaultMode: 'bypassPermissions' } });
+  assert.match(assess(none)[0]!.text, /^no narrow allow rule for Bash: .*3 blocks in a row or 20/);
+  const custom = readRules({ permissions: { allow: ['Bash(npm test)'], ask: ['Bash(git push *)', 'WebFetch', 'Edit', 'Write'], defaultMode: 'bypassPermissions' } });
   assert.equal(identify(custom), 'custom');
   const found = assess(custom);
   assert.match(found[0]!.text, /^4 ask rule\(s\) \(Bash\(git push \*\), WebFetch, Edit, \.\.\.\) prompt even in auto mode/);
-  assert.deepEqual(found.map((f) => f.level), ['warn', 'info']);
-  assert.match(found[1]!.text, /bypassPermissions" does not apply/);
-  // Bash allowed but an ask rule left: not open.
-  assert.equal(identify(readRules({ permissions: { allow: ['Bash'], ask: ['Bash(git push *)'] } })), 'custom');
+  assert.deepEqual(found.map((f) => f.level), ['warn', 'warn']);
+  assert.match(found[1]!.text, /defaultMode "bypassPermissions" is ignored by cloud sessions/);
+  // A repository that relies on broad rules gets nothing from them in a cloud session.
+  const broad = assess(readRules({ permissions: { allow: ['Bash', 'Bash(npm run *)', 'Read'], defaultMode: 'dontAsk' }, autoMode: { allow: ['x'] } }));
+  assert.deepEqual(broad.map((f) => f.level), ['warn', 'warn', 'warn', 'info']);
+  assert.match(broad[0]!.text, /^2 broad allow rule\(s\) \(Bash, Bash\(npm run \*\)\) are dropped by auto mode/);
+  assert.match(broad[1]!.text, /^no narrow allow rule for Bash/);
+  assert.match(broad[2]!.text, /"dontAsk" is ignored/);
+  assert.match(broad[3]!.text, /^autoMode settings are not read from a repository/);
+  assert.deepEqual(assess(readRules({ permissions: { allow: ['Bash(npm test)'], defaultMode: 'auto' } })).map((f) => f.level), ['info']);
   assert.throws(() => readRules({ permissions: { allow: 'Bash' } }), /permissions\.allow must be a list of strings/);
 });
 
@@ -140,13 +152,15 @@ test('kharos permissions: shows the rules, writes only the diff the person saw, 
   assert.match(shown.out, /permission profile: custom/);
   assert.match(shown.out, /ask \(1\): Bash\(git push \*\)/);
   assert.match(shown.out, /warn: 1 ask rule\(s\)/);
-  assert.match(shown.out, /warn: no allow rule for Bash/);
+  assert.match(shown.out, /warn: no narrow allow rule for Bash/);
   assert.match(shown.out, /kharos launch profiles on example\/demo: demo \(branch main\)/);
+  assert.match(shown.out, /CLAUDE\.md: no kharos cloud environment note/);
+  assert.doesNotMatch(shown.out, /\bopen\b/);
 
   const diff = await run(sb, 'permissions', 'diff', 'standard', dir);
   assert.equal(diff.code, 0);
-  assert.match(diff.out, /adds \d+ allow rule\(s\); deny rules stay as they are/);
-  assert.match(diff.out, /^\+ {12}"Bash\(npm test \*\)",$/m, 'the file keeps its four-space indent');
+  assert.match(diff.out, /adds \d+ allow rule\(s\); ask and deny rules stay as they are/);
+  assert.match(diff.out, /^\+ {12}"Bash\(npm test\)",$/m, 'the file keeps its four-space indent');
   assert.doesNotMatch(diff.out, /deploy/);
   const token = diff.out.match(/change ([0-9a-f]{12}):/)?.[1];
   assert.ok(token);
@@ -154,7 +168,7 @@ test('kharos permissions: shows the rules, writes only the diff the person saw, 
 
   // Without the token, with the token of another profile, or after the file changed: nothing is written.
   assert.match((await run(sb, 'permissions', 'write', 'standard', dir)).err, /--expect needs the change token/);
-  assert.match((await run(sb, 'permissions', 'write', 'open', '--expect', token, dir)).err, /not what that diff was made from/);
+  assert.match((await run(sb, 'permissions', 'write', 'environment', '--expect', token, dir)).err, /not what that diff was made from/);
   assert.equal(fs.readFileSync(file, 'utf8'), original);
 
   const wrote = await run(sb, 'permissions', 'write', 'standard', '--expect', token, dir);
@@ -172,18 +186,50 @@ test('kharos permissions: shows the rules, writes only the diff the person saw, 
   assert.match((await run(sb, 'permissions', 'diff', 'standard', dir)).out, /nothing to change/);
   assert.match((await run(sb, 'permissions', 'write', 'standard', '--expect', token, dir)).out, /nothing to change/);
   assert.match((await run(sb, 'permissions', 'diff', 'default', dir)).out, /permission profile default: nothing to change/);
-  assert.match((await run(sb, 'permissions', 'diff', 'wide', dir)).err, /one of default, standard, open/);
+  assert.match((await run(sb, 'permissions', 'diff', 'open', dir)).err, /one of default, standard, environment/);
+});
+
+test('kharos permissions: the environment note goes into CLAUDE.md only through an approved diff, once', async () => {
+  const sb = sandbox();
+  const dir = gitRepo(sb);
+  const agents = path.join(dir, 'AGENTS.md');
+  fs.writeFileSync(agents, '# Demo\n\nRun npm test.\n');
+  fs.symlinkSync('AGENTS.md', path.join(dir, 'CLAUDE.md'));
+  const diff = await run(sb, 'permissions', 'diff', 'environment', dir);
+  assert.equal(diff.code, 0, diff.err);
+  assert.match(diff.out, /^--- a\/CLAUDE\.md$/m);
+  assert.match(diff.out, /^\+When this repository runs in a Claude Code cloud session, the session runs in an isolated, disposable cloud VM/m);
+  assert.match(diff.out, /^ Run npm test\.$/m);
+  const token = diff.out.match(/change ([0-9a-f]{12}):/)?.[1];
+  assert.ok(token);
+  assert.equal(fs.readFileSync(agents, 'utf8'), '# Demo\n\nRun npm test.\n', 'a diff writes nothing');
+  const wrote = await run(sb, 'permissions', 'write', 'environment', '--expect', token, dir);
+  assert.equal(wrote.code, 0, wrote.err);
+  assert.ok(fs.lstatSync(path.join(dir, 'CLAUDE.md')).isSymbolicLink(), 'the link stays a link');
+  const text = fs.readFileSync(agents, 'utf8');
+  assert.ok(text.startsWith('# Demo\n\nRun npm test.\n\n<!-- kharos:cloud-environment -->\n## Cloud session environment\n'));
+  assert.equal(spawnSync('git', ['-C', dir, 'log', '--oneline'], { encoding: 'utf8' }).stdout.trim().split('\n').length, 1, 'no commit was made');
+  assert.match((await run(sb, 'permissions', 'diff', 'environment', dir)).out, /has the note already; nothing to change/);
+  assert.match((await run(sb, 'permissions', 'show', dir)).out, /CLAUDE\.md: has the kharos cloud environment note/);
+  // A link that leads outside the checkout is never written through.
+  fs.rmSync(path.join(dir, 'CLAUDE.md'));
+  const elsewhere = path.join(sb.dir, 'elsewhere.md');
+  fs.writeFileSync(elsewhere, 'x\n');
+  fs.symlinkSync(elsewhere, path.join(dir, 'CLAUDE.md'));
+  const t2 = (await run(sb, 'permissions', 'diff', 'environment', dir)).out.match(/change ([0-9a-f]{12}):/)?.[1];
+  assert.match((await run(sb, 'permissions', 'write', 'environment', '--expect', t2 ?? '', dir)).err, /points outside the checkout/);
+  assert.equal(fs.readFileSync(elsewhere, 'utf8'), 'x\n');
 });
 
 test('kharos permissions: a settings file that is not valid JSON, or a folder outside git, is refused', async () => {
   const sb = sandbox();
   const dir = gitRepo(sb);
   fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), '{ // a comment\n}');
-  const r = await run(sb, 'permissions', 'diff', 'open', dir);
+  const r = await run(sb, 'permissions', 'diff', 'standard', dir);
   assert.equal(r.code, 1);
   assert.match(r.err, /not valid JSON .*kharos does not edit it/);
   fs.rmSync(path.join(dir, '.claude', 'settings.json'));
-  const created = await run(sb, 'permissions', 'diff', 'open', dir);
+  const created = await run(sb, 'permissions', 'diff', 'standard', dir);
   assert.match(created.out, /^--- \/dev\/null$/m);
   const outside = path.join(sb.dir, 'plain');
   fs.mkdirSync(outside);
@@ -206,14 +252,17 @@ test('doctor: reports the permission profile of the launch branch and warns when
   const check = (s: RemoteSettings) => runDoctor(sb.paths, { now: T0, env: sb.env }, deps(s)).find((c) => c.name === 'demo: permissions');
   const absent = check({ status: 'absent' });
   assert.equal(absent?.level, 'warn');
-  assert.match(absent?.detail ?? '', /^example\/demo@main is on the default permission profile \(no settings file\); no allow rule for Bash/);
+  assert.match(absent?.detail ?? '', /^example\/demo@main is on the default permission profile \(no settings file\); no narrow allow rule for Bash/);
   assert.match(absent?.fix?.[0] ?? '', /\/kharos:permissions standard .*commit and push it to main/);
-  const asks = check({ status: 'found', text: JSON.stringify({ permissions: { allow: ['Bash'], ask: ['Bash(git push *)'] } }) });
+  const asks = check({ status: 'found', text: JSON.stringify({ permissions: { allow: ['Bash(npm test)'], ask: ['Bash(git push *)'] } }) });
   assert.equal(asks?.level, 'warn');
   assert.match(asks?.detail ?? '', /custom permission profile \(1 allow, 1 ask, 0 deny\); 1 ask rule\(s\)/);
-  const open = check({ status: 'found', text: JSON.stringify({ permissions: { allow: [...OPEN_RULES], deny: ['Bash(rm -rf *)'] } }) });
-  assert.equal(open?.level, 'ok');
-  assert.match(open?.detail ?? '', /on the open permission profile/);
+  const broad = check({ status: 'found', text: JSON.stringify({ permissions: { allow: ['Bash', 'Read', 'Edit'], defaultMode: 'bypassPermissions' } }) });
+  assert.equal(broad?.level, 'warn');
+  assert.match(broad?.detail ?? '', /1 broad allow rule\(s\) \(Bash\) are dropped by auto mode.*defaultMode "bypassPermissions" is ignored by cloud sessions/);
+  const standard = check({ status: 'found', text: JSON.stringify(applyProfile({ permissions: { deny: ['Bash(rm -rf *)'] } }, 'standard', NO_FACTS)) });
+  assert.equal(standard?.level, 'ok');
+  assert.match(standard?.detail ?? '', /on the standard permission profile/);
   assert.equal(check({ status: 'unreadable', error: 'gh is not installed' })?.level, 'info');
   assert.equal(check({ status: 'found', text: '{' })?.level, 'warn');
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps({ status: 'absent' }))), /warn {2}demo: permissions: /);

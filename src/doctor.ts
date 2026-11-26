@@ -188,7 +188,7 @@ function checkProfile(
 function checkPermissions(name: string, p: Profile, deps: DoctorDeps, add: (l: Level, n: string, d: string, f?: string[]) => void): void {
   const label = `${name}: permissions`;
   const where = `${repoSlug(p.repo)}@${p.revision}`;
-  const fix = [`/kharos:permissions standard (or open) in a checkout of ${repoSlug(p.repo)} shows the change as a diff and writes it after you approve; then commit and push it to ${p.revision}.`];
+  const fix = [`/kharos:permissions standard in a checkout of ${repoSlug(p.repo)} shows the change as a diff and writes it after you approve; then commit and push it to ${p.revision}.`];
   const remote = deps.settings(p.repo, p.revision);
   if (remote.status === 'unreadable') {
     add('info', label, `${SETTINGS_PATH} of ${where} could not be read with gh (${remote.error}); a cloud session uses the file on that branch`, [`Run /kharos:permissions in a checkout of ${repoSlug(p.repo)} to see its rules.`]);

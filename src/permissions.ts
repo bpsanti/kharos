@@ -1,6 +1,7 @@
-// /kharos:permissions: the permission rules a repository gives its cloud sessions, and the change to a
-// permission profile, always shown as a diff first. Only `write` changes a file, only with the token of
-// the diff the person saw, and only in the local checkout: kharos never commits or pushes.
+// /kharos:permissions: the permission rules a repository gives its cloud sessions, the change to a
+// permission profile, and the environment note for CLAUDE.md, always shown as a diff first. Only `write`
+// changes a file, only with the token of the diff the person saw, and only in the local checkout: kharos
+// never commits or pushes.
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -12,7 +13,10 @@ import {
   applyProfile,
   assess,
   changeToken,
+  CLAUDE_MD_PATH,
   describeRules,
+  ENVIRONMENT_SUMMARY,
+  hasEnvironmentNote,
   identify,
   parseSettings,
   PERMISSION_PROFILES,
@@ -23,9 +27,14 @@ import {
   SETTINGS_PATH,
   SettingsError,
   unifiedDiff,
+  withEnvironmentNote,
   type PermissionProfile,
   type RepoFacts,
 } from './permission-profiles.ts';
+
+/** What `diff` and `write` change: a permission profile in the settings, or the environment note in CLAUDE.md. */
+export type Target = PermissionProfile | 'environment';
+export const TARGETS: readonly Target[] = [...PERMISSION_PROFILES, 'environment'];
 
 interface Checkout {
   root: string;
@@ -102,9 +111,14 @@ export function showPermissions(paths: Paths, dir: string, env: NodeJS.ProcessEn
   const lines = [`${file}${text === null ? ': no file' : ''}`, `permission profile: ${identify(rules)}`, ...describeRules(rules).map((l) => `  ${l}`)];
   for (const f of assess(rules)) lines.push(`${f.level}: ${f.text}`);
   if (fs.existsSync(path.join(co.root, '.claude', 'settings.local.json'))) lines.push('info: .claude/settings.local.json exists here; cloud sessions do not read it, since it is not in the clone');
+  lines.push(
+    hasEnvironmentNote(readText(path.join(co.root, CLAUDE_MD_PATH)))
+      ? `${CLAUDE_MD_PATH}: has the kharos cloud environment note`
+      : `${CLAUDE_MD_PATH}: no kharos cloud environment note (optional: environment ${ENVIRONMENT_SUMMARY})`,
+  );
   const launches = launchProfiles(paths, co.origin);
   if (launches.length) lines.push(`kharos launch profiles on ${repoSlug(co.origin as string)}: ${launches.join(', ')}; their sessions read the file from that branch`);
-  lines.push(`permission profiles: ${PERMISSION_PROFILES.map((p) => `${p} (${PROFILE_SUMMARY[p]})`).join('; ')}`);
+  lines.push(`permission profiles: ${PERMISSION_PROFILES.map((p) => `${p} (${PROFILE_SUMMARY[p]})`).join('; ')}; and environment (${ENVIRONMENT_SUMMARY})`);
   return lines.join('\n');
 }
 
@@ -116,8 +130,18 @@ interface Plan {
   summary: string;
 }
 
-function plan(dir: string, profile: PermissionProfile, env: NodeJS.ProcessEnv): Plan & { co: Checkout } {
+function planEnvironment(co: Checkout): Plan {
+  const file = path.join(co.root, CLAUDE_MD_PATH);
+  const before = readText(file);
+  const after = withEnvironmentNote(before);
+  if (after === null) return { file, before, after: null, token: null, summary: `environment: ${file} has the note already; nothing to change` };
+  return { file, before, after, token: changeToken(before, after), summary: `environment note for ${file}: adds a paragraph the auto mode classifier reads; nothing else in the file changes` };
+}
+
+function plan(dir: string, target: Target, env: NodeJS.ProcessEnv): Plan & { co: Checkout } {
   const co = checkout(dir, env);
+  if (target === 'environment') return { co, ...planEnvironment(co) };
+  const profile = target;
   const file = path.join(co.root, SETTINGS_PATH);
   const before = readText(file);
   const settings = settingsOf(before);
@@ -127,41 +151,42 @@ function plan(dir: string, profile: PermissionProfile, env: NodeJS.ProcessEnv): 
   if (profile === 'default' || (before !== null && JSON.stringify(next) === JSON.stringify(settings))) {
     return { co, file, before, after: null, token: null, summary: `permission profile ${profile}: nothing to change in ${file}` };
   }
-  const nextRules = readRules(next);
-  const added = nextRules.allow.length - rules.allow.length;
-  const removed = rules.ask.length - nextRules.ask.length;
-  const summary = `permission profile ${profile} for ${file}: adds ${added} allow rule(s)${removed ? `, removes ${removed} ask rule(s)` : ''}; deny rules stay as they are`;
+  const added = readRules(next).allow.length - rules.allow.length;
+  const summary = `permission profile ${profile} for ${file}: adds ${added} allow rule(s); ask and deny rules stay as they are`;
   return { co, file, before, after, token: changeToken(before, after), summary };
 }
 
-function validProfile(name: string): PermissionProfile {
-  if (!(PERMISSION_PROFILES as readonly string[]).includes(name)) throw new CommandError(`the permission profile is one of ${PERMISSION_PROFILES.join(', ')}`);
-  return name as PermissionProfile;
+function validTarget(name: string): Target {
+  if (!(TARGETS as readonly string[]).includes(name)) throw new CommandError(`what to change is one of ${TARGETS.join(', ')}`);
+  return name as Target;
 }
 
 export function diffPermissions(dir: string, profileName: string, env: NodeJS.ProcessEnv): string {
-  const p = plan(dir, validProfile(profileName), env);
+  const p = plan(dir, validTarget(profileName), env);
   if (!p.after || !p.token) return p.summary;
   return [
     p.summary,
-    unifiedDiff(p.before, p.after, SETTINGS_PATH),
+    unifiedDiff(p.before, p.after, path.relative(p.co.root, p.file)),
     `change ${p.token}: nothing is written until the person approves this diff; then run \`kharos permissions write ${profileName} --expect ${p.token} ${p.co.root}\``,
   ].join('\n');
 }
 
 export function writePermissions(paths: Paths, dir: string, profileName: string, expect: string | undefined, env: NodeJS.ProcessEnv): string {
   if (!expect) throw new CommandError('--expect needs the change token that `kharos permissions diff` printed, so only an approved diff is written');
-  const p = plan(dir, validProfile(profileName), env);
+  const p = plan(dir, validTarget(profileName), env);
   if (!p.after || !p.token) return p.summary;
-  if (p.token !== expect) throw new CommandError(`${p.file} is not what that diff was made from (the file changed, or the diff was for another profile); nothing was written. Show the diff again.`);
-  fs.mkdirSync(path.dirname(p.file), { recursive: true });
-  const tmp = `${p.file}.kharos-${process.pid}.tmp`;
-  fs.writeFileSync(tmp, p.after, { mode: p.before === null ? 0o644 : fs.statSync(p.file).mode & 0o777 });
-  fs.renameSync(tmp, p.file);
+  if (p.token !== expect) throw new CommandError(`${p.file} is not what that diff was made from (the file changed, or the diff was for another change); nothing was written. Show the diff again.`);
+  // A link (CLAUDE.md pointing at AGENTS.md, say) is followed, and must stay inside the checkout.
+  const target = p.before === null ? p.file : fs.realpathSync(p.file);
+  if (p.before !== null && !target.startsWith(fs.realpathSync(p.co.root) + path.sep)) throw new CommandError(`${p.file} points outside the checkout; nothing was written`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.kharos-${process.pid}.tmp`;
+  fs.writeFileSync(tmp, p.after, { mode: p.before === null ? 0o644 : fs.statSync(target).mode & 0o777 });
+  fs.renameSync(tmp, target);
   const launches = launchProfiles(paths, p.co.origin);
   const where = launches.length ? ` (kharos launch profiles on this repository: ${launches.join(', ')})` : '';
   return [
-    `wrote ${p.file} with permission profile ${profileName}. Nothing was committed or pushed.`,
+    `wrote ${p.file} (${profileName}). Nothing was committed or pushed.`,
     `Cloud sessions read the file from the branch they start on${where}: review it, commit it and push it there yourself.`,
   ].join('\n');
 }
