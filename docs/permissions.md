@@ -101,7 +101,8 @@ With no copy, kharos cannot tell an account that has none from one whose setting
 So parts 1 and 2 are not available, and `show` says why and the one check to make: open an interactive Claude Code session with this account, which downloads the settings when there are any, then show the list again.
 If there is still no copy, `show` also offers a second token, for the same change with the statement "this account has no organization settings" (`kharos permissions unblock-all on --no-org-settings --expect <token>`; in setup, `--no-org-settings` with the `unblock-all` mode).
 With it, kharos reads the organization's settings as empty (0 ask rules, 0 deny rules), with a fingerprint of the absent copy, so all three parts are available.
-If a copy appears later, even an empty one, the fingerprint changes: kharos stops applying the preset and asks for the confirmation again, as for any change of the managed settings, and the statement ends once the confirmation is made for the copy.
+If a copy appears later, even an empty one, the fingerprint changes: kharos stops applying the preset and asks for the confirmation again, as for any change of the managed settings, and the statement ends as soon as kharos reads a copy, readable or not.
+If that copy is removed later, the statement does not come back: the preset stays off until you confirm again, with or without the statement.
 `unblock-all off` forgets the statement with the confirmation, and `/kharos:doctor` shows in its `managed policy` line whether there is a copy, no copy, or none by your statement.
 Make the statement only when you know it is true: kharos cannot check it, and if the account does have organization settings, their rules are not known here.
 

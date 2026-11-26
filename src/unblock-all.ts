@@ -147,7 +147,8 @@ export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: Man
   const preset = presetRefusal(policy);
   const turned = readBefore(paths)?.parts ?? [];
   const saved = loadConfirmation(paths, 'unblock');
-  const confirmed = confirmationState(saved, policy);
+  const undeclared = policy.status === 'found' && policy.noCopy && !loadConfirmation(paths, 'no-org-settings');
+  const confirmed = undeclared ? ({ state: 'none' } as const) : confirmationState(saved, policy);
   const auto = config.permission_hook && config.preflight_auto && config.permission_unblock;
   const acct = readAccountMode(env);
   const acctAuto = !('error' in acct) && acct.mode === 'auto';
@@ -419,9 +420,7 @@ export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: Un
           confirm: () => {
             const policy = p.state.policy;
             if (policy.status !== 'found') throw new CommandError("the organization's managed settings cannot be read");
-            // The statement holds only while there is no copy: once one appears, the confirmation is made for it.
-            if (!policy.noCopy) forgetConfirmation(paths, 'no-org-settings');
-            else if (!loadConfirmation(paths, 'no-org-settings')) saveConfirmation(paths, 'no-org-settings', policy, now);
+            if (policy.noCopy && !loadConfirmation(paths, 'no-org-settings')) saveConfirmation(paths, 'no-org-settings', policy, now);
             const c = saveConfirmation(paths, 'unblock', policy, now);
             record(paths, 'confirm', true);
             return policy.noCopy

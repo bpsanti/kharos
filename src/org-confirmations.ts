@@ -2,7 +2,8 @@
 // (an older kharos also kept a confirmation to mirror the organization's ask rules here; it is left in the file, unused):
 //   unblock  the unblock preset may allow every permission prompt in cloud sessions;
 //   no-org-settings  this account has no organization settings: with no copy of them on this machine, they read
-//            as empty (0 ask rules, 0 deny rules) until a copy appears, which changes the fingerprint.
+//            as empty (0 ask rules, 0 deny rules) until a copy appears, which changes the fingerprint and ends
+//            the statement for good: a copy removed later does not bring it back.
 // Each is stored with a fingerprint of what the organization's managed settings said then (the ask
 // rules, the deny rules and disableBypassPermissionsMode), and holds only while they still say the
 // same. When the fingerprint changes, kharos shows what changed and asks again.
@@ -74,10 +75,15 @@ export function forgetConfirmation(paths: Paths, kind: ConfirmationKind): boolea
 
 /**
  * The managed settings as kharos reads them for this account: the copy Claude Code keeps, or, with no copy at all,
- * empty settings when the person declared this account has none. A copy that appears ends the declaration.
+ * empty settings when the person declared this account has none. The first read that finds a copy, readable or not,
+ * forgets the declaration, so a copy removed later never brings it back: the person declares again.
  */
 export function accountPolicy(paths: Paths, policy: ManagedPolicy): ManagedPolicy {
-  if (policy.status !== 'absent' || !loadConfirmation(paths, 'no-org-settings')) return policy;
+  if (!loadConfirmation(paths, 'no-org-settings')) return policy;
+  if (policy.status !== 'absent') {
+    forgetConfirmation(paths, 'no-org-settings');
+    return policy;
+  }
   return declaredEmpty(policy.file);
 }
 

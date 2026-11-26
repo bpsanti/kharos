@@ -342,3 +342,22 @@ test('unblock-all: off takes back the statement that the account has no organiza
   assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'show', '--no-org-settings')).code, 1, 'the statement goes only with on');
   assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'show', 'off', '--no-org-settings')).code, 1, 'the statement goes only with on');
 });
+
+test('unblock-all: once a copy of the managed settings has been read, removing it does not bring the statement back', async () => {
+  const sb = account(null);
+  writeConfig(sb);
+  const policyFile = path.join(sb.env.CLAUDE_CONFIG_DIR as string, 'remote-settings.json');
+  const shown = await kharos(sb, 'permissions', 'unblock-all', 'show');
+  const statement = /change ([0-9a-f]{12}), with the statement "this account has no organization settings"/.exec(shown.out)?.[1] ?? '';
+  assert.equal((await kharos(sb, 'permissions', 'unblock-all', 'on', '--no-org-settings', '--expect', statement)).code, 0);
+  assert.equal(describeUnblockAll(readUnblockAll(sb.paths, sb.env).parts).overall, 'on');
+
+  fs.writeFileSync(policyFile, JSON.stringify({ permissions: { ask: ['Bash(git push:*)'], deny: ['Bash(rm -rf:*)'] } }));
+  assert.equal(describeUnblockAll(readUnblockAll(sb.paths, sb.env).parts).overall, 'partly', 'the copy stops the preset');
+
+  fs.rmSync(policyFile);
+  assert.equal(loadConfirmation(sb.paths, 'no-org-settings'), null, 'the copy ended the statement');
+  assert.notEqual(describeUnblockAll(readUnblockAll(sb.paths, sb.env).parts).overall, 'on', 'the preset stays off');
+  const after = await kharos(sb, 'permissions', 'unblock-all', 'show');
+  assert.match(after.out, /kharos permissions unblock-all on --no-org-settings --expect [0-9a-f]{12}/, 'the statement is offered again');
+});
