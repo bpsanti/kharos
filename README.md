@@ -187,6 +187,7 @@ The watcher logs each of the hook's decisions, and `kharos permissions approvals
 
 Events go to the outputs of the configuration: desktop notification, a JSON-lines file, Slack (the webhook URL is kept in the keychain as the plugin's `slack_webhook` option), any command, and the firstmate adapter.
 By default you get a notification when a session needs you or ends, and every event in `~/.local/state/kharos/events.jsonl`.
+That file is kharos's journal: it holds every event whatever the outputs are, with a `delivered` mark once the outputs got it and an `acknowledged` mark once a follower handed it on; a follower that starts again first sends the alerts no follower acknowledged.
 See [docs/outputs.md](docs/outputs.md).
 
 ## Files
@@ -195,6 +196,7 @@ See [docs/outputs.md](docs/outputs.md).
 |---|---|
 | `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
+| `~/.local/state/kharos/events.jsonl` | The journal: every event, with its `delivered` and `acknowledged` marks |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 | `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id, its kind (agent or process) and a heartbeat, or a handover while the next follower starts |
 | `~/.local/state/kharos/repo-rules.json` | The ask rules of each launch branch's `.claude/settings.json`, as the last launch preflight read them, to tell a repository prompt from the rest |

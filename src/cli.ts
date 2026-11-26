@@ -37,7 +37,7 @@ import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 import { detachFollower, followLoop, startFollowers } from './follow.ts';
-import { wait, WAIT_DEFAULTS } from './wait.ts';
+import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
 
 const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'no-push']);
 /** Flags that may be given more than once; each value is kept, in order. */
@@ -332,6 +332,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           env,
         });
         out(JSON.stringify(o));
+        // Printed to the agent, which ends with its report: the alerts in it are handed on.
+        acknowledge(paths, o, 'agent', Date.now());
         return 0;
       }
       case 'followers':

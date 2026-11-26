@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ConfigError, loadConfig, type OutputConfig } from '../config.ts';
-import { oneLine, readOutbox, type KharosEvent, type OutboxItem } from '../events.ts';
+import { appendMark, oneLine, readOutbox, type KharosEvent, type OutboxItem } from '../events.ts';
 import { appendLine, expandHome, isObject, readState, withLock, writeJsonAtomic } from '../fsutil.ts';
 import type { Paths } from '../paths.ts';
 import { loadRegistry } from '../registry.ts';
@@ -144,8 +144,12 @@ export async function send(o: OutputConfig, ev: KharosEvent, ctx: SendCtx): Prom
   switch (o.type) {
     case 'notification':
       return notify(ev, ctx);
-    case 'file':
-      return appendLine(filePath(o.path, ctx.paths), JSON.stringify(ev), 0o600);
+    case 'file': {
+      const file = filePath(o.path, ctx.paths);
+      // The journal holds every event already, from the moment it was queued.
+      if (path.resolve(file) === path.resolve(ctx.paths.events)) return;
+      return appendLine(file, JSON.stringify(ev), 0o600);
+    }
     case 'slack':
       return slack(o, ev, ctx);
     case 'command':
@@ -202,7 +206,7 @@ function tryLock(dir: string): boolean {
  * Saves one item as soon as its outputs are done with: the queue keeps it while an output still has to
  * receive it, and an event given up on is set aside before it leaves the queue.
  */
-function saveItem(paths: Paths, item: OutboxItem, pending: boolean, gaveUp: FailedDelivery[]): void {
+function saveItem(paths: Paths, item: OutboxItem, pending: boolean, gaveUp: FailedDelivery[], now: number): void {
   if (gaveUp.length) {
     withLock(failedPath(paths), () => {
       writeJsonAtomic(failedPath(paths), [...loadUndelivered(paths), ...gaveUp].slice(-100));
@@ -216,6 +220,10 @@ function saveItem(paths: Paths, item: OutboxItem, pending: boolean, gaveUp: Fail
     else box.splice(i, 1);
     writeJsonAtomic(paths.outbox, box);
   });
+  if (!pending) {
+    const lost = item.gave_up ?? [];
+    appendMark(paths, { mark: 'delivered', event: item.event.id, session: item.event.session, at: new Date(now).toISOString(), outputs: item.done.filter((k) => !lost.includes(k)), gave_up: lost });
+  }
 }
 
 export async function deliver(ctx: SendCtx): Promise<DeliveryReport> {
@@ -255,12 +263,13 @@ export async function deliver(ctx: SendCtx): Promise<DeliveryReport> {
           changed = true;
           if (attempts >= MAX_ATTEMPTS) {
             item.done.push(t.key);
+            (item.gave_up ??= []).push(t.key);
             gaveUp.push({ event: item.event, target: t.key, error: String((err as Error).message ?? err).slice(0, 300) });
           }
         }
       }
       const pending = report.configError !== null || targets.some((t) => !item.done.includes(t.key));
-      if (changed || !pending) saveItem(ctx.paths, item, pending, gaveUp);
+      if (changed || !pending) saveItem(ctx.paths, item, pending, gaveUp, Date.now());
       report.gaveUp.push(...gaveUp);
       if (ctx.deadline !== undefined && Date.now() >= ctx.deadline) break;
     }

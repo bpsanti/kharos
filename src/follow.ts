@@ -18,7 +18,7 @@ import { loadWatch } from './state.ts';
 import { deliver, filePath } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
-import { followersToStart, followTargets, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
+import { acknowledge, followersToStart, followTargets, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
 
 /** Claude Code runs without a terminal: `claude -p` says `sdk-cli`, the Agent SDK `sdk-ts` or `sdk-py`. */
 export function isHeadless(env: NodeJS.ProcessEnv): boolean {
@@ -83,6 +83,8 @@ export async function followLoop(paths: Paths, opts: FollowLoopOptions): Promise
   let since: string | null = null;
   let retries = 0;
   let held: string | null = null;
+  // Events a follower that stopped left queued go to the outputs first.
+  await (opts.deliver ?? deliver)({ paths, env: opts.env, now: Date.now(), platform: process.platform, inHook: false });
   try {
     for (;;) {
       const o = await run(paths, {
@@ -95,7 +97,10 @@ export async function followLoop(paths: Paths, opts: FollowLoopOptions): Promise
         follower: 'shell',
         ...opts.waitOptions,
       });
-      if (o.changed || o.error || settled(o)) opts.write(JSON.stringify(o));
+      if (o.changed || o.error || settled(o)) {
+        opts.write(JSON.stringify(o));
+        acknowledge(paths, o, 'shell', Date.now());
+      }
       if (settled(o)) return 0;
       if (o.error) {
         const next = RETRY_DELAYS_MS[retries++];

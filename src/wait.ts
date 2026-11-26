@@ -18,6 +18,7 @@ import { updateWatch } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { currentAccount, readsFor, type Read } from './watch.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
+import { appendMark, type AlertRef } from './events.ts';
 
 /** The plugin's root folder, which holds `scripts/kharos` and is loaded into each reader. */
 export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,6 +103,8 @@ export interface WaitOutcome {
   permission?: { tool: string; category: PermissionCategory };
   result?: { status: string | null; pr: string | null; branch: string | null; summary: string | null };
   error?: string;
+  /** Every alert of the session no follower handed on yet, this change included; acknowledged once printed. */
+  alerts?: AlertRef[];
   waited_s: number;
   reads: number;
   reader_cost_usd: number;
@@ -126,7 +129,25 @@ function words(v: string): string {
   return v.replace(/^session\./, '').replace(/_/g, ' ');
 }
 
+/** The alerts a report names besides the change it is about: the ones raised while no follower handed them on. */
+function earlier(s: Session, o: Omit<WaitOutcome, 'report'>): string[] {
+  const current = s.notice;
+  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && a.event === `session.${s.state}`));
+  if (rest.length === 0) return [];
+  return [`Raised earlier, while no follower handed it on (${rest.length}): ${rest.map((a) => `${a.at.slice(11, 16)} UTC ${words(a.event)}: ${a.reason}`).join('; ')}`];
+}
+
 function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
+  const lines = buildMain(s, o, root, follower);
+  const more = o.changed && !o.error ? earlier(s, o) : [];
+  if (more.length === 0) return lines;
+  // The earlier alerts go before the line that says how to go on, which stays the last.
+  const all = lines.split('\n');
+  const again = follower === 'agent' && all.at(-1)?.startsWith(`To keep following ${s.id}`) ? [all.pop() as string] : [];
+  return [...all, ...more, ...again].join('\n');
+}
+
+function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; /kharos:follow ${s.id} starts a follower again once it is fixed.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
@@ -161,7 +182,8 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
       ...again,
     ].join('\n');
   }
-  return [`${s.id} is ${words(s.state)} (${o.notice ? words(o.notice) : 'notice'}): ${o.url ?? 'no link'}`, ...again].join('\n');
+  if (!o.notice) return [`${s.id} is ${words(s.state)} now: ${o.url ?? 'no link'}`, ...again].join('\n');
+  return [`${s.id} is ${words(s.state)} (${words(o.notice)}): ${o.url ?? 'no link'}`, ...again].join('\n');
 }
 
 export function outcome(s: Session, key: string, changed: boolean, extra: { waitedMs: number; reads: number; cost: number; error?: string; root?: string; follower?: Follower }): WaitOutcome {
@@ -178,6 +200,7 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
     reader_cost_usd: Math.round(extra.cost * 1e6) / 1e6,
   };
   if (extra.error) o.error = extra.error;
+  if (changed && !extra.error && s.unacked?.length) o.alerts = s.unacked.map((a) => ({ ...a, reason: clean(a.reason, 300) }));
   if (changed && s.notice?.event === 'session.waiting_answer' && s.result.question) o.question = clean(s.result.question, 300);
   // The tool's name and a fixed category only: what it would run stays on the session page.
   if (changed && s.notice?.event === 'session.waiting_permission' && s.permission) o.permission = { tool: clean(s.permission.tool, 80), category: s.permission.category ?? 'unknown' };
@@ -295,7 +318,8 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
     for (;;) {
       s = find();
       const key = stopKey(s);
-      if (key !== opts.since && key !== 'ok') return done(key, true);
+      // An alert no follower handed on yet (raised while none followed, or not acknowledged by the last one) goes out at once.
+      if ((key !== opts.since && key !== 'ok') || s.unacked?.length) return done(key, true);
       if (settled(key) || now() - start >= opts.maxMs) return done(key, false);
       const t = now();
       // The lease says this wait follows the session from its first look, not only from its first read.
@@ -389,4 +413,20 @@ export function followersToStart(paths: Paths, ref: string | null, now: number):
     lines.push(followerPrompt(id, null));
   }
   return lines.join('\n');
+}
+
+/**
+ * Marks the alerts of a printed outcome as acknowledged: they leave the session's list, and the journal
+ * gets one mark each. Only the ones the outcome carried, so an alert raised since goes to the next one.
+ */
+export function acknowledge(paths: Paths, o: WaitOutcome, by: Follower, now: number): void {
+  const ids = new Set((o.alerts ?? []).map((a) => a.id));
+  if (ids.size === 0) return;
+  const session = updateRegistry(paths, (reg) => {
+    const s = reg.sessions[o.id];
+    if (s?.unacked) s.unacked = s.unacked.filter((a) => !ids.has(a.id));
+    return s?.id ?? o.id;
+  });
+  const at = new Date(now).toISOString();
+  for (const event of ids) appendMark(paths, { mark: 'acknowledged', event, session, at, by });
 }

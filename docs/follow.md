@@ -69,6 +69,7 @@ Closing the Claude Code session stops its follower agents with it.
 The cloud session goes on, and the registry keeps the last state it read.
 After you open Claude Code again, the session start says which open sessions nobody follows, and `/kharos:follow` (or `/kharos:follow <id>`) starts a new follower for each.
 A new follower first reads the current state: a question asked or an end reached while nobody followed is reported at once.
+It also sends every alert no follower handed on yet, even one that cleared since (a prompt answered, a silence that ended), with its time and reason; each alert a follower hands on is marked acknowledged in `events.jsonl` ([watcher.md](watcher.md#the-journal-delivered-and-acknowledged)).
 
 ## The Stop hook
 

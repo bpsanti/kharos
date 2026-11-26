@@ -18,6 +18,8 @@ export interface Paths {
   watch: string;
   intents: string;
   outbox: string;
+  /** kharos's journal: every event, one JSON line each, and the marks of its delivery and acknowledgement. */
+  events: string;
   repos: string;
   /** The ask rules of each repository's .claude/settings.json, by branch, as the last launch preflight read them. */
   repoRules: string;
@@ -63,6 +65,7 @@ function layout(home: string, account: string | null, configDir: string, state: 
     watch: path.join(state, 'watch.json'),
     intents: path.join(state, 'intents.json'),
     outbox: path.join(state, 'outbox.json'),
+    events: path.join(state, 'events.jsonl'),
     repos: path.join(state, 'repos.json'),
     repoRules: path.join(state, 'repo-rules.json'),
     environments: path.join(state, 'environments.json'),

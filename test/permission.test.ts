@@ -103,11 +103,11 @@ test('permission: one alert per prompt with the session link, a new alert for a 
   assert.equal(s.notice, null);
 
   // Delivered through the configured outputs like every other needs_you event.
-  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/events.jsonl', events: ['needs_you'] }] });
+  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/out.jsonl', events: ['needs_you'] }] });
   await deliver({ paths: sb.paths, env: sb.env, now: Date.parse('2026-11-25T21:21:00Z'), platform: 'aix', inHook: false });
-  const lines = fs.readFileSync(path.join(sb.paths.state, 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as KharosEvent);
+  const lines = fs.readFileSync(path.join(sb.paths.state, 'out.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as KharosEvent);
   assert.deepEqual(lines.map((e) => [e.permission?.tool, e.url]), [['Bash', 'https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA'], ['Bash', 'https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA']]);
-  assert.doesNotMatch(fs.readFileSync(path.join(sb.paths.state, 'events.jsonl'), 'utf8'), /s3cr3t|ghp_|psql|git push|db\.example/);
+  assert.doesNotMatch(fs.readFileSync(path.join(sb.paths.state, 'out.jsonl'), 'utf8'), /s3cr3t|ghp_|psql|git push|db\.example/);
 });
 
 test('permission: a prompt still open after renotify_min is reported again', () => {

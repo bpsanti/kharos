@@ -7,6 +7,7 @@ import path from 'node:path';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import type { OutputConfig } from './config.ts';
+import type { AlertRef } from './events.ts';
 import type { Paths } from './paths.ts';
 import type { PermissionRequest } from './permission-request.ts';
 
@@ -110,6 +111,8 @@ export interface Session {
   repo_ask?: string[] | null;
   /** The launch left out the footer line that asks the session to push work in progress (`--no-push`). */
   no_push?: boolean;
+  /** Alerts (notices and ends) that no follower handed on yet, oldest first; the next follower sends them. */
+  unacked?: AlertRef[];
   /** What automatic permission preflight did at launch; absent or null when it was off. */
   preflight?: Preflight | null;
 }

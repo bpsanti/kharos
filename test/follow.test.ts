@@ -139,7 +139,7 @@ test('follow: a failed wait is tried again with a growing delay, and only then t
   assert.ok(slept.every((ms) => ms < LEASE_STALE_MS));
   assert.ok(followedWhileAsleep.every(Boolean));
   assert.equal(liveFollowers(sb.paths, Date.now()).has(id), false);
-  assert.equal(delivered, 0);
+  assert.equal(delivered, 1, 'once at the start, for what a follower that stopped left queued');
   assert.equal(readOutbox(sb.paths).filter((i) => i.event.event === 'session.unfollowed').length, 0);
   assert.equal(JSON.parse(lines.at(-1) ?? '{}').key, 'end:finished');
 
@@ -152,7 +152,7 @@ test('follow: a failed wait is tried again with a growing delay, and only then t
   assert.ok(followedWhileAsleep.length > 0 && followedWhileAsleep.every(Boolean));
   assert.equal(liveFollowers(sb.paths, Date.now()).has(id), false);
   assert.match(lines.at(-1) ?? '', /reads failed/);
-  assert.equal(delivered, 1);
+  assert.equal(delivered, 3);
   const events = readOutbox(sb.paths).filter((i) => i.event.event === 'session.unfollowed');
   assert.equal(events.length, 1);
   assert.equal(events[0]?.event.class, 'needs_you');
