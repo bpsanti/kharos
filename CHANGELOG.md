@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A turn that closed with no end mark is reported (`session.quiet_unmarked`) after `watch.unmarked_end_min`, 5 minutes by default, when it started no background task; one that started a command in the background, a `Monitor` or a background agent keeps `watch.quiet_end_min` (40), since that task may wake it. The notice says which.
 - `/kharos:run --revision <branch>` starts the session on another branch or tag than the profile's, for that launch only; the permission preflight reads that branch, and the launch checks that it exists every time.
 - A `run` that the auto mode classifier refused goes back to "routine created" (a `PermissionDenied` hook): nothing reached the service, so `/kharos:run --resume` fires it once with no re-arm, a queued launch is tried again, and `kharos show` names the refusal. A refusal in a permission dialog or in a headless session outside auto mode reaches no hook, and keeps the re-arm path.
 - `kharos log <id> [lines]` in a shell prints the events already stored for a session, with no model (`--cached` does the same anywhere), and `--full` prints each event's whole stored text instead of its start. `kharos show` names the session's last message and its time, which tells a turn closed on the session's own build from one that stopped.

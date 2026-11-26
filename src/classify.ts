@@ -123,6 +123,18 @@ export function sameErrorRun(events: readonly LogEvent[]): number {
   return run;
 }
 
+/**
+ * Whether the turn started work that goes on after it closes and can wake it: a command run or moved to
+ * the background, a Monitor, or a background agent.
+ */
+export function startedBackground(turn: readonly LogEvent[]): boolean {
+  return turn.some(
+    (e) =>
+      (e.kind === 'tool_use' && (e.tool === 'Monitor' || /"run_in_background":\s*true/.test(e.text))) ||
+      (e.kind === 'tool_result' && /^Command (?:is )?running in (?:the )?background|\bmoved to the background\b/i.test(e.text)),
+  );
+}
+
 export function classify(input: ClassifyInput): Verdict {
   const { events, now, watch } = input;
   const last = events[events.length - 1];
@@ -198,10 +210,14 @@ export function classify(input: ClassifyInput): Verdict {
     return { state: 'provisioning', notice: null, reason: 'provisioning' };
   }
 
-  // a turn that closed without an end mark: not an end, since a background command can wake it
+  // a turn that closed without an end mark: not an end, since a background task it started can wake it;
+  // with no such task, nothing will, so it is said soon
   if (last.kind === 'result') {
-    if (idleMin > watch.quiet_end_min) return { state: 'turn_closed', notice: 'quiet_unmarked', reason: `turn closed without an end mark, quiet for ${Math.round(idleMin)} min` };
-    return { state: 'turn_closed', notice: null, reason: 'turn closed' };
+    const waking = startedBackground(turn);
+    const limit = waking ? watch.quiet_end_min : watch.unmarked_end_min;
+    const why = waking ? 'a background task it started may still wake it' : 'it started no background task';
+    if (idleMin > limit) return { state: 'turn_closed', notice: 'quiet_unmarked', reason: `turn closed without an end mark, quiet for ${Math.round(idleMin)} min; ${why}` };
+    return { state: 'turn_closed', notice: null, reason: waking ? 'turn closed; a background task it started may wake it' : 'turn closed' };
   }
 
   // an open turn with no new event

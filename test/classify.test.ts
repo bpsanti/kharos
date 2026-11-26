@@ -65,12 +65,28 @@ test('classify: a ten-minute foreground command is quiet, not silent', () => {
   assert.equal(at(events.slice(0, 4), 130 + 46 * 60).notice, 'silent_severe');
 });
 
-test('classify: a closed turn is not an end; it warns only after quiet_end_min', () => {
-  const events = log([...START, [200, 'assistant', null, 'waiting for CI'], [201, 'result', null, 'success is_error=false turns=9 — waiting for CI']]);
-  assert.deepEqual(at(events, 201 + 627), { state: 'turn_closed', notice: null, reason: 'turn closed' });
-  assert.equal(at(events, 201 + 41 * 60).notice, 'quiet_unmarked');
+test('classify: a closed turn is not an end; with no background task it warns after unmarked_end_min', () => {
+  const events = log([...START, [200, 'assistant', null, 'all done'], [201, 'result', null, 'success is_error=false turns=9 — all done']]);
+  assert.deepEqual(at(events, 201 + 4 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed' });
+  assert.deepEqual(at(events, 201 + 6 * 60), { state: 'turn_closed', notice: 'quiet_unmarked', reason: 'turn closed without an end mark, quiet for 6 min; it started no background task' });
   const woke = log([...START, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success is_error=false'], [828, 'init', null, 'model=x']]);
   assert.equal(at(woke, 830).state, 'running');
+});
+
+test('classify: a turn that closed on a background task it started warns only after quiet_end_min', () => {
+  for (const started of [
+    [150, 'tool_use', 'Bash', '{"command":"cargo build","run_in_background":true}'],
+    [150, 'tool_use', 'Monitor', '{"command":"tail -f build.log"}'],
+    [150, 'tool_result', null, 'Command running in background with ID: b01. Output is being written to: /tmp/b01.output'],
+  ] as [number, string, string | null, string][]) {
+    const events = log([...START, started, [200, 'assistant', null, 'The server is still compiling'], [201, 'result', null, 'success is_error=false']]);
+    assert.deepEqual(at(events, 201 + 10 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed; a background task it started may wake it' }, started[3]);
+    assert.equal(at(events, 201 + 41 * 60).notice, 'quiet_unmarked');
+    assert.match(at(events, 201 + 41 * 60).reason, /a background task it started may still wake it$/);
+  }
+  // A task of an earlier turn does not count: a person's message since then started a new turn.
+  const earlier = log([...START, [150, 'tool_use', 'Monitor', '{}'], [160, 'result', null, 'success'], [170, 'user', null, 'go on'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success']]);
+  assert.equal(at(earlier, 201 + 6 * 60).notice, 'quiet_unmarked');
 });
 
 test('classify: repeated calls that succeed, or a hook that blocks one, are not a loop', () => {
