@@ -106,7 +106,7 @@ export function formatHookDecisions(paths: Paths, q: ApprovalQuery): string {
   }
   const shown = rows.slice(-q.limit);
   const lines = shown.map((d) => {
-    const what = d.decision === 'allow' ? `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : 'allow pattern'} ${d.rule}` :  `denied${d.program ? ` (refusal named the forms of ${d.program})` : ''}`;
+    const what = d.decision === 'allow' ? `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : 'allow pattern'} ${d.rule}` : `denied${d.program ? ` (refusal named the forms of ${d.program})` : ''}`;
     return `${d.at.slice(0, 19)}Z  ${d.kharos}  ${d.tool}  ${what}`;
   });
   const head = `${rows.length} ${q.all ? 'decision(s)' : 'approval(s)'} of the kharos permission hook, as the watcher read them from the session logs${shown.length < rows.length ? `; the last ${shown.length}` : ''}:`;

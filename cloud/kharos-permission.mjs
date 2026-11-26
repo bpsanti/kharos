@@ -10,9 +10,9 @@
 // - A Bash call that is one simple command (no chaining, pipe, substitution, redirection, variable or
 //   glob) and matches one of the rules file's allow patterns word by word is allowed.
 // - The same for a mirrored rule: an ask rule of the organization's managed settings that the person
-//   chose to turn into a cloud-only allow, never for a program that runs other commands.
-// - A broad rule (an allow pattern for a shell, an interpreter, a wrapper or any program, or a mirrored
-//   rule that does not name its program) counts only when the rules file says `"broad": true`, which
+//   chose to turn into a cloud-only allow.
+// - A broad rule (an allow pattern or a mirrored rule for a shell, an interpreter, a wrapper or any
+//   program) counts only when the rules file says `"broad": true`, which
 //   kharos writes only when the person asked for broad rules with --broad.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
 //   right command or goes on without it instead of waiting.
