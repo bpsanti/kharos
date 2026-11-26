@@ -55,7 +55,7 @@ It shows one list of everything a launch needs, in order (account and plan, GitH
 It checks again after each fix, asks only what it cannot settle itself (the environment by name when there are several, and the permission mode, once), then writes the profile and ends with a short summary and the next action: see [docs/setup.md](docs/setup.md).
 
 Every launch asks for your approval before its routine is created and run: Claude Code ignores allow rules for that and offers no "always allow".
-In auto mode its classifier reviews the launch instead: setup offers, once, to start the account's sessions in auto mode (every session of the account, not only launches), and then headless launches need nothing extra; otherwise a headless launch needs `claude -p --permission-mode auto` ([docs/setup.md](docs/setup.md#launch-approval)).
+In auto mode its classifier reviews the launch instead: unblock all (`/kharos:permissions unblock-all`, or setup's `unblock-all` permission mode) starts the account's sessions in auto mode (every session of the account, not only launches), and then headless launches need nothing extra; otherwise a headless launch needs `claude -p --permission-mode auto` ([docs/setup.md](docs/setup.md#launch-approval)).
 
 Cloud sessions push with the GitHub credential your Claude account has, and author commits as `Claude <noreply@anthropic.com>` unless the environment sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` (on claude.ai/code: the environment's settings, Environment variables).
 
@@ -157,7 +157,7 @@ To keep a follower agent inside the headless launch instead, start it with `CLAU
 
 Two more things a headless launch needs:
 
-- The `run` step needs an approval that `--allowedTools` does not give: start `claude -p` with `--permission-mode auto`, or let `/kharos:setup` start the account's sessions in auto mode, so the classifier reviews the launch.
+- The `run` step needs an approval that `--allowedTools` does not give: start `claude -p` with `--permission-mode auto`, or start the account's sessions in auto mode with unblock all, so the classifier reviews the launch.
 - Give it an empty stdin (`< /dev/null`) when nothing is piped in, or `claude -p` waits for input before it starts.
 
 `kharos follow <id>` also runs in your own shell or from another orchestrator: it prints one JSON line per change, the same line as `kharos wait`, until the session ends.
