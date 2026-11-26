@@ -7,7 +7,8 @@ import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, liveFollowers } from './lease.ts';
-import { activeCount, findSession, isFollowed, loadRegistry, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { activeCount, findSession, isFollowed, loadRegistry, logPath, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { readStoredEvents, storedLogView } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
 import { readOutbox } from './events.ts';
@@ -30,8 +31,9 @@ function stateLabel(s: Session): string {
 export function sessionLine(s: Session, now: number): string {
   const age = minutes(now - Date.parse(s.created_at));
   const last = s.last_event_at ? `${minutes(now - Date.parse(s.last_event_at))} ago` : 'no event';
-  const tail = s.notice || s.state === 'waiting_permission' ? (s.url ?? s.title) : s.title;
-  return `${s.id}  ${stateLabel(s).padEnd(20)} ${age.padStart(8)}  turn ${s.closed_turns}  ${last.padEnd(12)} ${tail}`;
+  const line = `${s.id}  ${stateLabel(s).padEnd(20)} ${age.padStart(8)}  turn ${s.closed_turns}  ${last.padEnd(12)} ${s.title}`;
+  // The title always names the work; the link goes under it while the session needs a look.
+  return (s.notice || s.state === 'waiting_permission') && s.url ? `${line}\n        ${s.url}` : line;
 }
 
 export function watcherLine(paths: Paths, now: number): string {
@@ -140,6 +142,13 @@ export function rearm(paths: Paths, ref: string, now: number): string {
   });
 }
 
+/** The events already stored for a session, read with no model and no network: what `kharos log --cached` prints. */
+export function cachedLog(paths: Paths, ref: string, lines: number): string {
+  const s = need(paths, ref);
+  const text = storedLogView(logPath(paths, s.id), `${s.id} (${s.url ?? 'no link yet'}), as stored by the last read ${s.last_read_at ? `at ${s.last_read_at.slice(11, 19)} UTC` : '(none yet)'}`, lines);
+  return text;
+}
+
 /** Records that the next get_run_log of this session is for a person, and says what to call. */
 export function logRequest(paths: Paths, ref: string, lines: number, claudeSession: string, now: number): string {
   const s = need(paths, ref);
@@ -222,7 +231,10 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
     // Named by its URL, never `origin`: the folder this runs in may be a checkout of another repository.
     lines.push(`bring it here, in a checkout of ${slug}: git fetch https://github.com/${slug}.git '${r.branch}:${r.branch}' && git switch '${r.branch}'`);
   }
-  if (s.session_id) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
+  // The service cuts each message of the log to about two thousand characters: say so when the last one was cut.
+  const said = readStoredEvents(logPath(paths, s.id)).filter((e) => e.kind === 'assistant' || e.kind === 'result');
+  if (said.at(-1)?.truncated) lines.push(`the session's last message is cut in the log the tool returns; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
+  if (s.session_id && (r.branch || r.pr)) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
   if (s.url) lines.push(`session: ${s.url}`);
   return lines.join('\n');
 }

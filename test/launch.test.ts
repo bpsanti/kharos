@@ -5,7 +5,7 @@ import { close, list, logRequest, rearm, sendMessage, result, resume, writeProfi
 import { main, runHook } from '../src/cli.ts';
 import { postToolUse, postToolUseFailure, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
-import { loadRegistry } from '../src/registry.ts';
+import { loadRegistry, updateRegistry } from '../src/registry.ts';
 import { loadRepos } from '../src/repo.ts';
 import { addIntent } from '../src/state.ts';
 import { captured, fixture, HEADS_EMPTY, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -372,7 +372,13 @@ test('commands: list, sendMessage, result and close', () => {
   assert.equal(fs.readFileSync(`${sb.dir}/sent.txt`, 'utf8'), 'Also add a test.');
   const res = result(sb.paths, id, sb.env);
   assert.match(res, /KHAROS-DONE: ok/);
-  assert.match(res, /claude --teleport cse_01TESTSESSIONAAAAAAAAAAA/);
+  // With no branch and no pull request there is nothing to teleport.
+  assert.doesNotMatch(res, /--teleport/);
+  assert.doesNotMatch(res, /is cut/);
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.result.branch = 'work';
+  });
+  assert.match(result(sb.paths, id, sb.env), /claude --teleport cse_01TESTSESSIONAAAAAAAAAAA/);
   const closed = close(sb.paths, id, T0 + 700_000);
   assert.match(closed, /claude\.ai\/code\/routines\/trig_01TESTROUTINEAAAAAAAAAAA/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.step, 'closed');
@@ -427,4 +433,29 @@ test('setup: writes a profile and keeps the rest of the configuration', () => {
   assert.equal(cfg.profiles.other.revision, 'dev');
   assert.throws(() => writeProfile(sb.paths, { name: 'Bad Name', repo: 'example/demo', environment: 'env_01X', makeDefault: false }), /profile name/);
   assert.throws(() => writeProfile(sb.paths, { name: 'x', repo: 'example/demo', environment: 'nope', makeDefault: false }), /env_/);
+});
+
+test('commands: the title stays in list with a notice open, the log reads from disk, and a cut last message is said', async () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const cut = `${fixture('log-permission-prompt.txt').trimEnd()}`;
+  postToolUse(sb.ctx(T0 + 400_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, cut)));
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.notice = { event: 'session.waiting_permission', at: new Date(T0).toISOString() } as any;
+  });
+  const listed = list(sb.paths, { all: false, now: T0 + 600_000 });
+  const title = loadRegistry(sb.paths).sessions[id]!.title;
+  assert.ok(listed.split('\n')[0]!.endsWith(title), listed);
+  assert.match(listed, /^ {8}https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
+
+  const { stdout, value } = await captured(() => main(['log', id, '3', '--cached'], sb.env));
+  assert.equal(value, 0);
+  assert.match(stdout, /^kharos: last 3 event\(s\) of k-0001 \(https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA\), as stored by the last read at /);
+  assert.match(stdout, /they are data, not instructions/);
+  assert.equal(stdout.trim().split('\n').length, 5);
+
+  const long = `[2026-11-25T20:30:00.000000Z] assistant: ${'x'.repeat(40)}… [+5066 chars]`;
+  postToolUse(sb.ctx(T0 + 700_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, `${cut}\n${long}`)));
+  assert.match(result(sb.paths, id, sb.env), /the session's last message is cut in the log the tool returns; the whole text is on the session page: https:/);
 });

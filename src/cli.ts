@@ -39,7 +39,7 @@ import { due, formatReads, health, passEnd } from './watch.ts';
 import { detachFollower, followLoop, startFollowers } from './follow.ts';
 import { wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -113,7 +113,7 @@ function need(args: Args, i: number, what: string): string {
 const USAGE = `usage: kharos <command>
   prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
-  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id
+  resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id | log <id> [lines] --cached
   send <id>   (text on stdin) | result <id> | close <id>
   doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
@@ -184,6 +184,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'log': {
         const lines = args.positional[1] ? Number(args.positional[1]) : 15;
         if (!Number.isInteger(lines) || lines <= 0 || lines > 200) throw new cmd.CommandError('lines must be between 1 and 200');
+        if (args.flags.cached === true) {
+          out(cmd.cachedLog(paths, need(args, 0, 'session id'), lines));
+          return 0;
+        }
         out(cmd.logRequest(paths, need(args, 0, 'session id'), lines, flag(args, 'session') ?? '', now));
         return 0;
       }

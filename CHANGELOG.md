@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `kharos log <id> [lines] --cached` prints the events already stored for a session, from a shell and with no model.
+- `kharos list` keeps each session's title while a notice is open, with the link on the line under it.
+- `/kharos:result` offers `claude --teleport` only when the session left a branch or a pull request, and says when the service cut the session's last message.
+- The README states two limits of the service: a session's cost is not readable from its log, and each message in the log is cut to about two thousand characters.
 - The permission preflight reads large repositories: gh's output is no longer cut at one megabyte (which made the file list of a large repository fail), and only a gh that is not there reads as "gh is not installed"; a timeout or another failure says what happened.
 - `watch.max_open` is 10 by default (5 before), and `/kharos:setup` asks it once per account, with its trade-off: each open session spends plan usage, the service publishes no limit on concurrent cloud sessions, and runs started by hand are capped at 30 per routine and 100 per account per hour. A launch refused for it names the sessions that hold the slots and how long the ones waiting on a person have waited; `kharos list` shows the slots in use.
 - Headless launches stay followed: a headless Claude Code stops its background agents 10 minutes after its last turn, so there `/kharos:run` and `/kharos:follow` start a follower process of its own (`kharos follow <id>`, the follower's loop without a model), which outlives `claude -p` and feeds the outputs; `claude -p` ends right after the launch and says how to answer from a shell. `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, when the person sets it, keeps the follower agent (`docs/follow.md`).
