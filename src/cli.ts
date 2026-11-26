@@ -23,6 +23,8 @@ import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, ty
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
+import { diffAccountMode, showAccountMode, writeAccountMode } from './account-mode.ts';
+import { readManagedPolicy } from './managed-policy.ts';
 import { formatSetup, parseScheduleView, runSetup, SetupError } from './setup.ts';
 import { formatHookDecisions } from './approvals.ts';
 import { diffHook, diffPermissions, preflight, readRemoteFile, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
@@ -116,7 +118,7 @@ const USAGE = `usage: kharos <command>
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
   setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
+        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
@@ -124,6 +126,7 @@ const USAGE = `usage: kharos <command>
   permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
+  permissions account-mode show | permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
   permissions preflight [dir] | permissions preflight --launch [--profile p]   [--stdin | --file f]: the launch instruction
   permissions auto <preflight|unblock> <on|off>
   permissions unblock show | permissions unblock confirm --fingerprint <fp>
@@ -233,6 +236,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             ...(intFlag(args, 'deadline') !== undefined ? { deadline_min: intFlag(args, 'deadline') as number } : {}),
             ...(flag(args, 'environment') !== undefined ? { environment: flag(args, 'environment') as string } : {}),
             ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
+            ...accountModeFlags(args),
             ...(tools !== undefined ? { allowed_tools: tools.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             ...(args.flags.connectors === true ? { connectors: true } : args.flags['no-connectors'] === true ? { connectors: false } : {}),
             makeDefault: args.flags.default === true,
@@ -286,9 +290,16 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           const [what, v] = [args.positional[1], args.positional[2]];
           if ((what !== 'preflight' && what !== 'unblock') || (v !== 'on' && v !== 'off')) throw new cmd.CommandError('permissions auto takes preflight or unblock, then on or off');
           out(what === 'preflight' ? switchPreflightAuto(paths, v === 'on') : switchUnblockAuto(paths, v === 'on', env));
+        } else if (sub === 'account-mode') {
+          const [what, target] = [args.positional[1], args.positional[2]];
+          const policy = readManagedPolicy(env);
+          if (what === 'show') out(showAccountMode(env, policy));
+          else if ((what === 'diff' || what === 'write') && (target === 'auto' || target === 'off')) {
+            out(what === 'diff' ? diffAccountMode(paths, env, target, policy) : writeAccountMode(paths, env, target, flag(args, 'expect'), policy));
+          } else throw new cmd.CommandError('permissions account-mode takes show, or diff or write with auto or off');
         } else if (sub === 'approvals') {
           out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
-        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto or approvals');
+        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto, account-mode or approvals');
         return 0;
       }
       case 'due': {
@@ -375,6 +386,15 @@ function envGuide(args: Args, paths: Paths, env: NodeJS.ProcessEnv): string {
     ...(args.flags.copy === true ? { copied: copyToClipboard(guide.script, env) } : {}),
     ...(args.flags.open === true ? { opened: openBrowser(CREATE_URL, env) } : {}),
   });
+}
+
+/** --account-mode auto|as-is, with --account-expect <token> for auto: the person's answer about this account's mode. */
+function accountModeFlags(args: Args): { accountMode?: 'auto' | 'as-is'; accountExpect?: string } {
+  const mode = flag(args, 'account-mode');
+  if (mode === undefined) return {};
+  if (mode !== 'auto' && mode !== 'as-is') throw new cmd.CommandError('--account-mode takes auto or as-is');
+  const expect = flag(args, 'account-expect');
+  return { accountMode: mode, ...(expect !== undefined ? { accountExpect: expect } : {}) };
 }
 
 /** owner/name of the current folder's GitHub origin: the repository the /schedule skill checks Claude's access to. */

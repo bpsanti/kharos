@@ -245,7 +245,7 @@ test('doctor: a confirmation made while the repository shipped no setup script w
 test('setup --confirmed writes the id into the profile and records it for this account', async () => {
   const sb = sandbox();
   const env = tools(sb, { gh: 'printf "%s" "echo setup"' });
-  const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is'], env, () => ''));
+  const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--account-mode', 'as-is'], env, () => ''));
   assert.equal(r.value, 0);
   assert.match(r.stdout, /^Ready: profile demo \(default\) launches on example\/demo@main in env_01NEW\./);
   const stored = Object.values(JSON.parse(fs.readFileSync(sb.paths.setups, 'utf8')) as Record<string, { account: string }>)[0]!;
@@ -254,7 +254,7 @@ test('setup --confirmed writes the id into the profile and records it for this a
   assert.doesNotMatch(r.stdout, /bootstrap\.sh could not be read/);
 
   const failing = tools(sb, { gh: 'echo "gh: Bad Gateway (HTTP 502)" >&2; exit 1' });
-  const u = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is'], failing, () => ''));
+  const u = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed', '--permissions', 'as-is', '--account-mode', 'as-is'], failing, () => ''));
   assert.equal(u.value, 0, u.stderr);
   assert.match(u.stdout, /tools\/cloud\/bootstrap\.sh could not be read \(gh: Bad Gateway \(HTTP 502\)\), so \/kharos:doctor will ask you to paste it again/);
   assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'main')?.script_sha256, null);

@@ -1,8 +1,8 @@
 ---
 description: Show the permission rules a repository gives its cloud sessions; list the prompts a launch is likely to hit (preflight); add narrow allow rules to its .claude/settings.json (the standard profile), or install the opt-in kharos permission hook or its unblock preset, each after the person approves the diff. Never commits or pushes.
 disable-model-invocation: true
-argument-hint: '[default|standard|hook|preflight|unblock] [path of the repository checkout]'
-allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions approvals:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions unblock show:*)
+argument-hint: '[default|standard|hook|preflight|unblock|account-mode] [path of the repository checkout]'
+allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions account-mode show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions account-mode diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook show:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions hook diff:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions approvals:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions preflight:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" permissions unblock show:*)
 ---
 
 Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
@@ -45,4 +45,9 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
    3. Then follow `hook` from its step 4, with the flag `--unblock` (or `--no-unblock` to turn it off); the confirmation already covers the mirroring, so ask no second question about the organization.
    4. The automatic mode (`kharos permissions auto unblock on|off`) is the person's to run; never run it for them.
 8. Never commit, push, or open a pull request: say that the change takes effect for cloud sessions only once the person commits it and pushes it to the branch their launches start from, and that `/kharos:doctor` reads that branch.
-9. When the person asks what the hook allowed, run `kharos permissions approvals` (add `--all` for the denials too, `--session <id>` for one session) and show its output as it is.
+9. For `account-mode` (whether this Claude account starts its sessions in auto mode, where the classifier reviews each launch instead of an approval prompt):
+   1. Run `kharos permissions account-mode show` and show its output as it is.
+   2. Run `kharos permissions account-mode diff auto` (or `off` to undo it) and show its whole output as it is; if it says there is nothing to change, or that it is not available, stop.
+   3. Ask with AskUserQuestion whether to write exactly this change, with the diff in the preview of the yes option and its effect (every session of this account, not only launches) in the question.
+   4. Only on an explicit yes, run the `kharos permissions account-mode write ... --expect <token>` command the diff names, exactly, and show its output.
+10. When the person asks what the hook allowed, run `kharos permissions approvals` (add `--all` for the denials too, `--session <id>` for one session) and show its output as it is.

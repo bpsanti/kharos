@@ -12,6 +12,7 @@ import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RUL
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { loadMarker, planMigration } from './accounts.ts';
+import { autoModeRefusal, readAccountMode } from './account-mode.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
@@ -211,7 +212,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
     checkProfile(name, p, deps, add, repos ?? {}, config.permission_hook, policy);
     checkEnvironment(name, p, deps, add, environmentsOf(envs, account), findSetup(setups ?? {}, account, repoSlug(p.repo), p.revision));
   }
-  add('info', 'launch approval', LAUNCH_APPROVAL);
+  checkAccountMode(opts.env, policy, add);
   add('info', 'commits', COMMIT_IDENTITY, ['Set them on the environment at claude.ai/code: open the environment selector, the settings of the environment, and add one NAME=value line each under Environment variables.']);
 
   const reg = state('registry', paths.registry, () => loadRegistry(paths));
@@ -361,6 +362,25 @@ function checkPermissions(
   else add('warn', label, detail, fix);
   const mirrored = checkHook(name, p, settings, deps, add, hookOn, policy);
   checkManagedAsk(name, policy, mirrored, hookOn, add);
+}
+
+/** Whether this account starts its sessions in auto mode, where the classifier reviews each launch instead of an approval prompt. */
+function checkAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy, add: Add): void {
+  const cur = readAccountMode(env);
+  if ('error' in cur) {
+    add('info', 'launch approval', `${cur.file} cannot be read (${cur.error}); ${LAUNCH_APPROVAL}`);
+    return;
+  }
+  const refusal = autoModeRefusal(policy);
+  if (cur.mode === 'auto' && refusal) {
+    add('warn', 'launch approval', `${cur.file} starts this account's sessions in auto mode, but ${refusal}, so each launch asks for approval and a headless one is denied`, [
+      'Ask the organization\'s administrator about auto mode, or take it out of your settings with `kharos permissions account-mode diff off`.',
+    ]);
+  } else if (cur.mode === 'auto') {
+    add('ok', 'launch approval', `this account starts its sessions in auto mode (${cur.file}): Claude Code's classifier reviews each launch, interactive or headless, with no approval prompt`);
+  } else {
+    add('ok', 'launch approval', `this account's sessions start in ${cur.mode ?? 'the default'} mode, so each launch asks for your approval, and a headless one needs \`claude -p --permission-mode auto\`${refusal ? '' : '; /kharos:setup can start the account in auto mode'}`);
+  }
 }
 
 /** Says when profiles or sessions of this account still sit in the files every account shared; /kharos:setup moves them. */

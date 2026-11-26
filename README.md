@@ -54,7 +54,8 @@ Then run `/kharos:setup` in the repository you want to launch sessions on, once 
 It shows one list of everything a launch needs, in order (account and plan, GitHub connection, repository access, cloud environment, commit identity, permission prompts, profile), each with its state and the one action that fixes it.
 It checks again after each fix, asks only what it cannot settle itself (the environment by name when there are several, and the permission mode, once), then writes the profile and ends with a short summary and the next action: see [docs/setup.md](docs/setup.md).
 
-Every launch asks for your approval before its routine is created and run: Claude Code ignores allow rules for that and offers no "always allow", so a headless launch needs `claude -p --permission-mode auto`, where its classifier reviews the launch ([docs/setup.md](docs/setup.md#launch-approval)).
+Every launch asks for your approval before its routine is created and run: Claude Code ignores allow rules for that and offers no "always allow".
+In auto mode its classifier reviews the launch instead: setup offers, once, to start the account's sessions in auto mode (every session of the account, not only launches), and then headless launches need nothing extra; otherwise a headless launch needs `claude -p --permission-mode auto` ([docs/setup.md](docs/setup.md#launch-approval)).
 
 Cloud sessions push with the GitHub credential your Claude account has, and author commits as `Claude <noreply@anthropic.com>` unless the environment sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` (on claude.ai/code: the environment's settings, Environment variables).
 

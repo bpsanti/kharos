@@ -86,6 +86,11 @@ export interface Config {
    * allows every permission prompt in the cloud session.
    */
   permission_unblock: boolean;
+  /**
+   * What the person chose in /kharos:setup about starting this account's sessions in auto mode, asked once:
+   * "auto" (kharos wrote it to the account's user settings after they approved the diff) or "as-is".
+   */
+  account_mode?: 'auto' | 'as-is';
 }
 
 export const DEFAULT_WATCH: WatchConfig = {
@@ -252,6 +257,7 @@ export function parseConfig(v: unknown): Config {
   if (o.permission_hook !== undefined && typeof o.permission_hook !== 'boolean') throw new ConfigError('config.permission_hook must be true or false');
   if (o.preflight_auto !== undefined && typeof o.preflight_auto !== 'boolean') throw new ConfigError('config.preflight_auto must be true or false');
   if (o.permission_unblock !== undefined && typeof o.permission_unblock !== 'boolean') throw new ConfigError('config.permission_unblock must be true or false');
+  if (o.account_mode !== undefined && o.account_mode !== 'auto' && o.account_mode !== 'as-is') throw new ConfigError('config.account_mode must be auto or as-is');
   return {
     version: 1,
     default_profile: defaultProfile,
@@ -261,6 +267,7 @@ export function parseConfig(v: unknown): Config {
     permission_hook: o.permission_hook === true,
     preflight_auto: o.preflight_auto === true,
     permission_unblock: o.permission_unblock === true,
+    ...(o.account_mode !== undefined ? { account_mode: o.account_mode as 'auto' | 'as-is' } : {}),
   };
 }
 

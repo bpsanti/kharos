@@ -7,10 +7,11 @@
 
 import path from 'node:path';
 import { migrate } from './accounts.ts';
+import { ACCOUNT_AUTO_EFFECT, autoModeRefusal, diffAccountMode, readAccountMode, writeAccountMode } from './account-mode.ts';
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { findSetup, loadSetups, recordSetup } from './state.ts';
 import { clean } from './body.ts';
-import { isPermissionChoice, loadConfig, normalizeRepo, otherAccount, PERMISSION_CHOICES, repoSlug, type Config, type PermissionChoice, type Profile } from './config.ts';
+import { isPermissionChoice, loadConfig, normalizeRepo, otherAccount, PERMISSION_CHOICES, repoSlug, saveConfig, type Config, type PermissionChoice, type Profile } from './config.ts';
 import { accountChecks, CHECKED_BY_CLAUDE_CODE, LAUNCH_APPROVAL, runDoctor, type Check, type DoctorDeps } from './doctor.ts';
 import { hooksBlocked, mirrorRefusal, type ManagedPolicy } from './managed-policy.ts';
 import { hasHookEntry, hookState, UNBLOCK_RISK } from './permission-hook.ts';
@@ -106,7 +107,7 @@ export interface Step {
 
 /** A permission mode, or a part of one, with what it does, its trade-off, and whether this account can have it. */
 export interface PermissionOption {
-  id: PermissionChoice | 'mirror' | 'broad';
+  id: PermissionChoice | 'mirror' | 'broad' | 'account-auto';
   title: string;
   does: string;
   tradeoff: string;
@@ -130,7 +131,14 @@ export type Next =
   | { kind: 'ask-environment-ready'; environment: string; script: string; changed: boolean }
   /** No environment fits: the assisted path of `kharos env-guide`. */
   | { kind: 'env-assist'; action: string }
-  | { kind: 'ask-permissions'; options: PermissionOption[]; offer: PermissionChoice[] }
+  | {
+      kind: 'ask-permissions';
+      options: PermissionOption[];
+      /** The modes to offer for the repository; empty when that choice is made already. */
+      offer: PermissionChoice[];
+      /** The change that starts this account's sessions in auto mode, to ask about with its diff; null when it is not asked. */
+      account: { diff: string; token: string } | null;
+    }
   | { kind: 'ready'; summary: string[] }
   | { kind: 'not-ready'; summary: string[] };
 
@@ -158,6 +166,9 @@ export interface SetupInput {
   environment?: string;
   /** The permission mode the person picked. */
   permissions?: string;
+  /** Whether this account's sessions start in auto mode: `auto` with the token of the diff the person approved, or `as-is`. */
+  accountMode?: 'auto' | 'as-is';
+  accountExpect?: string;
   /** The person said the picked environment is set up for the repository (it runs its setup script). */
   confirmed?: boolean;
   /** The folders every account shared, when this account has files of its own. */
@@ -195,7 +206,10 @@ export function rankEnvironments(envs: Environment[], slug: string, config: Conf
 }
 
 /** Every permission mode kharos has, marked unavailable with the reason when this account or organization rules it out. */
-export function permissionOptions(policy: ManagedPolicy, ctx: { standardInPlace: boolean; hookInPlace: boolean; checkout: string | null; role: RepoRole; slug: string }): PermissionOption[] {
+export function permissionOptions(
+  policy: ManagedPolicy,
+  ctx: { standardInPlace: boolean; hookInPlace: boolean; checkout: string | null; role: RepoRole; slug: string; account?: { auto: boolean; unavailable: string | null } },
+): PermissionOption[] {
   const blocked = hooksBlocked(policy);
   const refusal = mirrorRefusal(policy)?.replace(/^(mirroring is unavailable|refused): /, '') ?? null;
   const noAsk = policy.status === 'found' && policy.ask.length === 0 ? "the organization's managed settings have no ask rule to mirror" : null;
@@ -281,6 +295,13 @@ export function permissionOptions(policy: ManagedPolicy, ctx: { standardInPlace:
       does: 'the side branch of each launch gets the unblock preset, so no session waits on a person, and no checkout changes',
       tradeoff: `${UNBLOCK_RISK}, at every launch, while your confirmation matches the organization's settings`,
       unavailable: blocked ?? refusal,
+    },
+    {
+      id: 'account-auto',
+      title: 'This account in auto mode (opt-in, for the whole account)',
+      does: "writes permissions.defaultMode \"auto\" to this account's user settings, so Claude Code's classifier reviews each kharos launch instead of an approval prompt, and headless launches need no extra flag",
+      tradeoff: `${ACCOUNT_AUTO_EFFECT}; undone with \`kharos permissions account-mode diff off\``,
+      unavailable: ctx.account?.unavailable ?? (ctx.account?.auto ? 'already in place' : null),
     },
   ];
 }
@@ -491,7 +512,13 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
   }
   const here = input.here?.toLowerCase() === slug.toLowerCase() ? '.' : null;
   const role = deps.repoRole(url);
-  const options = permissionOptions(policy, { standardInPlace, hookInPlace, checkout: here, role, slug });
+  // The account's own mode, which decides whether a launch stops for approval; asked once per account.
+  const acct = readAccountMode(input.env);
+  const acctRefusal = autoModeRefusal(policy) ?? ('error' in acct ? `${acct.file} cannot be read (${acct.error})` : null);
+  const acctAuto = !('error' in acct) && acct.mode === 'auto';
+  const acctChoice = input.accountMode ?? config.account_mode ?? null;
+  const askAccount = !acctAuto && !acctChoice && !acctRefusal;
+  const options = permissionOptions(policy, { standardInPlace, hookInPlace, checkout: here, role, slug, account: { auto: acctAuto, unavailable: acctRefusal } });
   const actx = { standardInPlace, hookInPlace, config, checkout: here, slug };
   let choice: PermissionChoice | null = null;
   let permQuestion: Next | null = null;
@@ -501,12 +528,24 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     if (picked.unavailable && !/already in place/.test(picked.unavailable)) throw new SetupError(`${picked.title} is not available here: ${picked.unavailable}`);
     choice = picked.id;
   } else if (existing?.permissions) choice = existing.permissions;
-  if (choice) {
+  const launches = acctAuto
+    ? 'this account starts its sessions in auto mode, so launches need no approval prompt'
+    : input.accountMode === 'auto'
+      ? 'this account starts its sessions in auto mode once the approved change is written'
+      : 'each launch asks for your approval (headless: claude -p --permission-mode auto)';
+  if (choice && !askAccount) {
     const todo = permissionAction(choice, actx);
-    add('ok', `${CHOICE_TEXT[choice]} (now on ${slug}@${revision}: ${current})`, todo ? `Then: ${todo}.` : undefined);
+    add('ok', `${CHOICE_TEXT[choice]} (now on ${slug}@${revision}: ${current}); ${launches}`, todo ? `Then: ${todo}.` : undefined);
   } else {
-    add('choose', `now on ${slug}@${revision}: ${current}; ${options.filter((o) => o.unavailable === null).length} of ${options.length} modes available here`, 'Pick one mode below; it is asked once.');
-    permQuestion = { kind: 'ask-permissions', options, offer: offer(options, standardInPlace ? 'as-is' : 'standard') };
+    const ask = [choice ? null : 'the mode for this repository', askAccount ? "whether this account's sessions start in auto mode" : null].filter(Boolean).join(', and ');
+    add('choose', `now on ${slug}@${revision}: ${current}; ${options.filter((o) => o.unavailable === null).length} of ${options.length} modes available here`, `Pick ${ask}; each is asked once.`);
+    let account: { diff: string; token: string } | null = null;
+    if (askAccount) {
+      const diff = diffAccountMode(paths, input.env, 'auto', policy);
+      const token = /change ([0-9a-f]{12}):/.exec(diff)?.[1];
+      if (token) account = { diff, token };
+    }
+    permQuestion = { kind: 'ask-permissions', options, offer: choice ? [] : offer(options, standardInPlace ? 'as-is' : 'standard'), account };
   }
 
   // 7. The profile, written once everything above is settled.
@@ -546,6 +585,11 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
       script_sha256: script?.status === 'found' ? scriptDigest(script.text) : null,
     });
   }
+  if (input.accountMode === 'auto' && !acctAuto) writeAccountMode(paths, input.env, 'auto', input.accountExpect, policy);
+  if (input.accountMode !== undefined) {
+    const cfg = loadConfig(paths).config;
+    saveConfig(paths, { ...cfg, account_mode: input.accountMode });
+  }
   const isDefault = /\(default\)/.test(written.split('\n')[0] ?? '');
   add('ok', written.split('\n')[0] as string);
 
@@ -566,7 +610,7 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     `Ready: profile ${name}${isDefault ? ' (default)' : ''} launches on ${where} in ${env.name ? `"${env.name}"` : env.id}.`,
     confirmed ? `GitHub: Claude reaches ${slug}.` : `GitHub: not confirmed for ${slug} yet; the first launch checks it before any session starts, at no cost.`,
     `Commits: authored as Claude <noreply@anthropic.com> unless ${envLabel} sets GIT_AUTHOR_* and GIT_COMMITTER_* (on claude.ai/code: the environment's settings, Environment variables).`,
-    `Permissions: ${choice ? CHOICE_TEXT[choice] : 'not chosen'}.`,
+    `Permissions: ${choice ? CHOICE_TEXT[choice] : 'not chosen'}; ${input.accountMode === 'auto' || acctAuto ? 'this account starts its sessions in auto mode, so launches need no approval prompt' : launches}.`,
     ...(input.confirmed && script?.status === 'unreadable'
       ? [`Setup script: ${SETUP_SCRIPT_PATH} could not be read (${clean(script.error, 120)}), so /kharos:doctor will ask you to paste it again, and to confirm once it can read it.`]
       : open.length
@@ -606,8 +650,9 @@ export function formatSetup(r: SetupResult): string {
       lines.push(`      does: ${o.does}`, `      trade-off: ${o.tradeoff}`);
       if (o.note && !o.unavailable) lines.push(`      note: ${o.note}`);
     }
-    lines.push(`Launch approval, not a mode: ${LAUNCH_APPROVAL}.`);
-    lines.push(`To offer in the question, recommended first: ${n.offer.join(', ')}; any other available mode above can be named.`);
+    lines.push(`Launch approval: ${LAUNCH_APPROVAL}.`);
+    if (n.offer.length) lines.push(`To offer in the question, recommended first: ${n.offer.join(', ')}; any other available mode above can be named.`);
+    if (n.account) lines.push('', `Ask too: start this account's sessions in auto mode? Yes writes this change (token ${n.account.token}); no leaves the account as it is.`, n.account.diff);
   }
   lines.push(`next: ${n.kind === 'person' ? `person (step ${n.step})` : n.kind}`);
   return lines.join('\n');

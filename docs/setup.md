@@ -39,9 +39,17 @@ kharos cannot read those variables, so it says this instead of checking it.
 
 Each launch asks for your approval before its routine is created and run.
 Claude Code's `RemoteTrigger` tool asks on every create and run of a routine, ignores an allow rule for the whole tool on those calls (`--allowedTools RemoteTrigger` included), and offers no "always allow", so kharos cannot make that approval durable.
-In auto mode, Claude Code's classifier reviews each such call instead of a person, which is the only way a headless launch (`claude -p --permission-mode auto`) gets past it ([permission modes](https://code.claude.com/docs/en/permission-modes)).
+In auto mode, Claude Code's classifier reviews each such call instead of a person ([permission modes](https://code.claude.com/docs/en/permission-modes)).
 In a kharos test, a headless `/kharos:run` in auto mode had both the create and the run approved by the classifier, and the session started; the classifier decides each call, so a launch it blocks stops there and says why.
-kharos never bypasses that approval.
+
+So there are two ways past the prompt, and kharos never bypasses it:
+
+- For the whole account: the first `/kharos:setup` asks once whether this Claude account should start its sessions in auto mode, with the diff of its user settings (`permissions.defaultMode: "auto"` in `CLAUDE_CONFIG_DIR/settings.json`, `~/.claude/settings.json` by default), and writes it only on your yes.
+  Then launches need no approval prompt and headless ones need nothing extra; the side effect is that every session of that account starts in auto mode, not only launches.
+  `kharos permissions account-mode diff off` undoes it, back to the mode the file had; the option is unavailable when the organization turns auto mode off (`permissions.disableAutoMode`).
+- For one launch: `claude -p --permission-mode auto`.
+
+`/kharos:doctor` says which applies to the account in use.
 
 ## One setup per Claude account
 
@@ -98,6 +106,7 @@ The last line says whether a launch is ready, and when Claude's access to a repo
 | `account files` | profiles or sessions of this account still sit in the files every account shared (warning) | `/kharos:setup` once on this account |
 | `profile <name>` | the profile was set up on another Claude account (information, or a failure when named with `--profile`) | `/kharos:setup` on this account |
 | `commits` | (information) how cloud commits are authored | see [Commit identity](#commit-identity) |
+| `launch approval` | whether this account starts its sessions in auto mode, so launches need no approval prompt; a warning when the settings ask for auto mode and the organization turns it off | `/kharos:setup`, or `kharos permissions account-mode diff auto` and `off`; see [Launch approval](#launch-approval) |
 | `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees; information only when you chose to leave the rules as they are, or your GitHub login cannot change the repository's settings) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
 | `managed policy` | (information) the local copy of the organization's managed settings: how many ask and deny rules, and whether bypass mode is disabled | none |
 | `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or use the opt-in permission hook; see [permissions.md](permissions.md) |

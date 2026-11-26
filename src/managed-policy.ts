@@ -1,8 +1,8 @@
 // The organization's server-managed settings, as Claude Code caches them on this machine. Claude Code
 // fetches them at startup and keeps a copy in ~/.claude/remote-settings.json (server-managed settings
 // docs); a cloud session gets the same settings from Anthropic's servers when it starts.
-// kharos reads only the permission rules, whether bypass mode is disabled and whether only managed hooks
-// run, never any other key, and never writes the file. With no readable copy, nothing is guessed: what depends on it is unavailable.
+// kharos reads only the permission rules, whether bypass mode or auto mode is disabled and whether only
+// managed hooks run, never any other key, and never writes the file. With no readable copy, nothing is guessed: what depends on it is unavailable.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,7 +10,7 @@ import path from 'node:path';
 import { broadRuleWhy } from '../cloud/kharos-permission.mjs';
 
 export type ManagedPolicy =
-  | { status: 'found'; file: string; ask: string[]; deny: string[]; bypassDisabled: boolean; managedHooksOnly: boolean }
+  | { status: 'found'; file: string; ask: string[]; deny: string[]; bypassDisabled: boolean; managedHooksOnly: boolean; autoModeDisabled?: boolean }
   | { status: 'absent'; file: string }
   | { status: 'unreadable'; file: string; error: string };
 
@@ -51,6 +51,7 @@ export function parseManagedPolicy(text: string, file: string): ManagedPolicy {
     deny,
     bypassDisabled: disabled(perms.disableBypassPermissionsMode) || disabled(o.disableBypassPermissionsMode),
     managedHooksOnly: disabled(o.allowManagedHooksOnly),
+    autoModeDisabled: disabled(perms.disableAutoMode),
   };
 }
 

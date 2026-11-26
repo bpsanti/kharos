@@ -37,8 +37,9 @@ The person wants this done once, with as few questions as possible: never ask wh
      Tell the person to create the environment on the page (or paste the script into the one they picked), and end your turn.
      Never type a value of an environment variable or a secret for them, and never ask for one.
      When they say it is done, go back to step 2, and run step 3 with `--environment "<its name>" --confirmed`.
-   - `next: ask-permissions`: ask one AskUserQuestion with the modes the output offers, the recommended one first, each with its one-line "does" and "trade-off" in the description, and say in the question that any other available mode in the list can be named instead.
-     Then run step 3 again with `--permissions <mode>`.
+   - `next: ask-permissions`: ask one AskUserQuestion with the modes the output offers (when it offers any), the recommended one first, each with its one-line "does" and "trade-off" in the description, and say in the question that any other available mode in the list can be named instead.
+     When the output says "Ask too: start this account's sessions in auto mode?", add a second question to the same call: yes (with the diff it prints as the preview of the yes option, and its effect on every session of the account in the description) or no.
+     Then run step 3 again with `--permissions <mode>`, and with `--account-mode auto --account-expect <the token it printed>` on yes, or `--account-mode as-is` on no; setup writes the account's settings only on that yes.
      When the output still has another question open (the environment, or its setup script), ask them in the same AskUserQuestion call.
    - `next: ready`: the summary is the end of the setup.
      When its `Next:` line starts with `/kharos:permissions` and this folder is a checkout of the repository, carry it out now: run `kharos action permissions --session ${CLAUDE_SESSION_ID}` and follow the instructions it prints exactly, with the mode as their request.

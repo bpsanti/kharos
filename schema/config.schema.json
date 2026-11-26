@@ -49,6 +49,13 @@
       "type": "boolean",
       "default": false,
       "description": "Opt-in, with preflight_auto and a remembered confirmation that matches the organization's managed settings: the side branch of each launch gets the unblock preset, which allows every permission prompt in its cloud session. Refused when the organization disabled bypass mode; deny rules are never touched. See docs/permissions.md."
+    },
+    "account_mode": {
+      "enum": [
+        "auto",
+        "as-is"
+      ],
+      "description": "What the person chose in /kharos:setup, once: start this Claude account's sessions in auto mode (written to its user settings after an approved diff) or leave the mode as it is. See docs/setup.md#launch-approval."
     }
   },
   "$defs": {

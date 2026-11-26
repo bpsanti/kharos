@@ -11,6 +11,7 @@ import { accountKey, resolvePaths, sharedPaths } from '../src/paths.ts';
 import { updateRegistry } from '../src/registry.ts';
 import { result as showResult } from '../src/commands.ts';
 import { saveEnvironments } from '../src/state.ts';
+import { diffAccountMode, writeAccountMode } from '../src/account-mode.ts';
 import { formatSetup, parseScheduleView, readGitHub, runSetup, SetupError, type SetupInput } from '../src/setup.ts';
 import { HEADS_EMPTY, HEADS_OK, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -38,7 +39,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
 }
 
 function input(sb: Sandbox, over: Partial<SetupInput> = {}): SetupInput {
-  return { repo: 'example/demo', makeDefault: false, view: parseScheduleView(LISTED), here: 'example/demo', noRemoteTool: false, shared: null, adopt: null, now: T0, env: sb.env, ...over };
+  return { repo: 'example/demo', makeDefault: false, view: parseScheduleView(LISTED), here: 'example/demo', noRemoteTool: false, shared: null, adopt: null, now: T0, env: sb.env, accountMode: 'as-is', ...over };
 }
 
 test('setup: reads the environments and the GitHub heads-up the /schedule skill shows', () => {
@@ -92,7 +93,7 @@ test('setup: one list up front, then each step in order, and the profile only on
   r = runSetup(sb.paths, input(sb, { environment: 'Demo' }), deps());
   assert.equal(r.next.kind, 'ask-permissions');
   if (r.next.kind === 'ask-permissions') {
-    assert.deepEqual(r.next.options.map((o) => o.id), ['as-is', 'standard', 'hook', 'standard+hook', 'mirror', 'broad', 'auto-preflight', 'unblock', 'auto-unblock']);
+    assert.deepEqual(r.next.options.map((o) => o.id), ['as-is', 'standard', 'hook', 'standard+hook', 'mirror', 'broad', 'auto-preflight', 'unblock', 'auto-unblock', 'account-auto']);
     assert.match(r.next.options.find((o) => o.id === 'mirror')?.unavailable ?? '', /no copy of the organization's managed settings/);
     assert.match(r.next.options.find((o) => o.id === 'unblock')?.unavailable ?? '', /no copy/);
     assert.equal(r.next.offer[0], 'standard', 'the recommended mode comes first');
@@ -357,4 +358,53 @@ test('setup: a repository with a setup script asks once whether the environment 
   const n = runSetup(fresh.paths, input(fresh, { environment: 'new', permissions: 'as-is' }), deps());
   assert.equal(n.next.kind, 'env-assist');
   if (n.next.kind === 'env-assist') assert.match(n.next.action, /kharos env-guide --repo example\/demo --copy --open/);
+});
+
+test('setup: asks once whether this account starts in auto mode, writes it only with the approved diff, and the same command undoes it', () => {
+  const sb = sandbox();
+  const conf = path.join(sb.dir, 'claude-config');
+  fs.mkdirSync(conf);
+  const settingsFile = path.join(conf, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ model: 'opus', permissions: { defaultMode: 'acceptEdits', allow: ['Read'] } }, null, 2) + '\n');
+  const env = { ...sb.env, CLAUDE_CONFIG_DIR: conf };
+  const unanswered = (s: Sandbox): SetupInput => {
+    const { accountMode: _, ...rest } = input(s);
+    return rest;
+  };
+  const ask = (over: Partial<SetupInput> = {}) => runSetup(sb.paths, { ...unanswered(sb), env, environment: 'demo', permissions: 'as-is', ...over }, deps());
+
+  const r = ask();
+  assert.equal(r.next.kind, 'ask-permissions');
+  if (r.next.kind !== 'ask-permissions' || !r.next.account) return assert.fail('the account question is asked');
+  assert.deepEqual(r.next.offer, [], 'the repository mode is chosen already');
+  assert.match(r.next.account.diff, /-\s+"defaultMode": "acceptEdits"/);
+  assert.match(r.next.account.diff, /\+\s+"defaultMode": "auto"/);
+  assert.match(formatSetup(r), /every session of this Claude account starts in auto mode/);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits', 'nothing is written before the answer');
+
+  assert.throws(() => ask({ accountMode: 'auto', accountExpect: '000000000000' }), /not what that diff was made from/);
+  const done = ask({ accountMode: 'auto', accountExpect: r.next.account.token });
+  assert.equal(done.next.kind, 'ready');
+  if (done.next.kind === 'ready') assert.match(done.next.summary.join('\n'), /launches need no approval prompt/);
+  const after = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.deepEqual(after, { model: 'opus', permissions: { defaultMode: 'auto', allow: ['Read'] } }, 'only defaultMode changes');
+  assert.equal(loadConfig(sb.paths).config.account_mode, 'auto');
+  assert.equal(ask().next.kind, 'ready', 'asked once');
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps())), /ok {4}launch approval: this account starts its sessions in auto mode/);
+
+  // The same command undoes it, back to what the file had.
+  const off = diffAccountMode(sb.paths, env, 'off', NO_POLICY);
+  const token = /change ([0-9a-f]{12}):/.exec(off)?.[1];
+  writeAccountMode(sb.paths, env, 'off', token, NO_POLICY);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits');
+  assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env }, deps())), /launch approval: this account's sessions start in acceptEdits mode, so each launch asks for your approval, and a headless one needs `claude -p --permission-mode auto`/);
+
+  // An organization that turns auto mode off rules the option out, with why, and it is not asked.
+  const noAuto: ManagedPolicy = { status: 'found', file: 'f', ask: [], deny: [], bypassDisabled: false, managedHooksOnly: false, autoModeDisabled: true };
+  const fresh = sandbox();
+  const r2 = runSetup(fresh.paths, { ...unanswered(fresh), env: { ...fresh.env, CLAUDE_CONFIG_DIR: conf }, environment: 'demo' }, deps({ managedPolicy: () => noAuto }));
+  if (r2.next.kind !== 'ask-permissions') return assert.fail(`expected the permission question, got ${r2.next.kind}`);
+  assert.equal(r2.next.account, null);
+  assert.match(r2.next.options.find((o) => o.id === 'account-auto')?.unavailable ?? '', /disableAutoMode/);
+  assert.throws(() => diffAccountMode(fresh.paths, env, 'auto', noAuto), /disableAutoMode/);
 });
