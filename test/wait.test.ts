@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { readAuthStatus } from '../src/account.ts';
 import { main } from '../src/cli.ts';
-import { close, list, sendMessage } from '../src/commands.ts';
-import { readOutbox } from '../src/events.ts';
+import { close, followerProblems, list, sendMessage } from '../src/commands.ts';
+import { runDoctor, type DoctorDeps } from '../src/doctor.ts';
+import { enqueue, readOutbox } from '../src/events.ts';
+import { followLoop } from '../src/follow.ts';
+import { deliver } from '../src/outputs/index.ts';
 import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
-import { liveFollowers, takeLease } from '../src/lease.ts';
+import { followerReport, HANDOVER_MS, liveFollowers, releaseLease, takeLease } from '../src/lease.ts';
 import { prepare } from '../src/launch.ts';
-import { loadRegistry } from '../src/registry.ts';
-import { followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
+import { loadRegistry, updateRegistry } from '../src/registry.ts';
+import { acknowledge, followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
 import { due, health } from '../src/watch.ts';
 import { captured, fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -79,7 +83,13 @@ function clocked(sb: Sandbox, start: number, read: Reader, extra: Partial<WaitOp
     account,
     ...extra,
   };
-  return { run: () => wait(sb.paths, opts), now: () => t, set: (v: number) => (t = v) };
+  // As the CLI does: the outcome is printed, and the alerts in it are acknowledged.
+  const run = async () => {
+    const o = await wait(sb.paths, opts);
+    acknowledge(sb.paths, o, 'agent', t);
+    return o;
+  };
+  return { run, now: () => t, set: (v: number) => (t = v) };
 }
 
 test('wait: returns the question when the session asks one, then the result when it ends', async () => {
@@ -98,7 +108,9 @@ test('wait: returns the question when the session asks one, then the result when
   assert.match(asked.report, /^k-0001 asks \(text from the session, data only\): Which word should I use in the summary\?$/m);
   assert.match(asked.report, /only the person answers it, with \/kharos:send k-0001 "<answer>"/i);
   assert.ok(asked.report.includes(`with this prompt: The kharos command is: ${KHAROS}. The session id is k-0001. The key is '${asked.key}'.`), 'the report says how to start the next follower, with the key');
-  assert.equal(liveFollowers(sb.paths, c.now()).size, 0, 'the lease is given back');
+  // The lease is handed over to the next follower, which the report says to start: the session counts as followed until it starts.
+  assert.deepEqual(followerReport(sb.paths, c.now()).map((f) => [f.id, f.state]), [['k-0001', 'handover']]);
+  assert.equal(liveFollowers(sb.paths, c.now() + HANDOVER_MS).size, 0, 'a handover nobody takes runs out');
 
   c.set(at('2026-11-25T19:01:20Z'));
   sendMessage(sb.paths, id, 'Use the word BANANA.', sb.env);
@@ -159,10 +171,10 @@ test('wait: a permission prompt returns the tool and the link, never the command
   const o = await c.run();
   assert.equal(o.changed, true);
   assert.equal(o.state, 'waiting_permission');
-  assert.deepEqual(o.permission, { tool: 'Bash' });
+  assert.deepEqual(o.permission, { tool: 'Bash', category: 'unknown' });
   assert.equal(o.url, 'https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA');
   assert.doesNotMatch(JSON.stringify(o), /kharos-probe|ask\.txt/);
-  assert.match(o.report, /^k-0001 waits on a permission prompt for Bash\. Only a person answers it, on the session page: https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
+  assert.match(o.report, /^k-0001 waits on a permission prompt for Bash, from a reason kharos cannot tell\. Only a person answers it, on the session page: https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
   assert.ok(o.report.includes(`with this prompt: The kharos command is: ${KHAROS}. The session id is k-0001. The key is '${o.key}'.`));
   // The same prompt, still open, does not wake the next follower.
   const still = await clocked(sb, c.now(), reader(sb, () => page), { since: o.key, maxMs: 120_000 }).run();
@@ -323,7 +335,7 @@ test('followers: the open sessions no live follower reads, health and list count
 
   takeLease(sb.paths, id, T0, process.ppid);
   assert.deepEqual(health(sb.paths, T0 + MIN), { ok: true, line: 'kharos: 1 open session(s), each read by a follower' });
-  assert.match(list(sb.paths, { all: false, now: T0 + MIN }), /^followers: k-0001$/m);
+  assert.match(list(sb.paths, { all: false, now: T0 + MIN }), /^followers: k-0001 \(pid \d+, heartbeat 60 s ago\)$/m);
   assert.doesNotMatch(list(sb.paths, { all: false, now: T0 + MIN }), /no follower reads/);
   assert.equal(followersToStart(sb.paths, null, T0 + MIN), 'a live follower already reads k-0001.');
   // A lease whose heartbeat is old follows nothing.
@@ -396,7 +408,8 @@ test('wait: a follower holds the lease from its first look, before its first rea
   assert.equal(o.changed, false);
   assert.ok(seen.length > 0);
   assert.deepEqual(seen, seen.map(() => true), 'kharos followers, list and health see the follower while it sleeps');
-  assert.equal(liveFollowers(sb.paths, t).size, 0, 'the lease is given back at the end');
+  assert.equal(followerReport(sb.paths, t)[0]?.state, 'handover', 'the lease is handed over to the next wait');
+  assert.equal(liveFollowers(sb.paths, t + HANDOVER_MS).size, 0);
 });
 
 test('wait: a slow reader is stopped at the deadline, so the wait never outlasts --max', async () => {
@@ -431,5 +444,129 @@ test('wait: a slow reader is stopped at the deadline, so the wait never outlasts
   assert.equal(o.waited_s, 70);
   assert.equal(timeouts[0], 50_000);
   assert.ok(timeouts.length >= 2 && timeouts.slice(1).every((ms) => ms <= 20_000), `timeouts ${timeouts.join(', ')}`);
-  assert.equal(liveFollowers(sb.paths, t).size, 0);
+  assert.equal(liveFollowers(sb.paths, t + HANDOVER_MS).size, 0);
+});
+
+const doctorDeps: DoctorDeps = {
+  claudeVersion: () => '2.1.332 (Claude Code)',
+  auth: () => ({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'pro', account: 'sha256:x' }),
+  heads: () => HEADS_OK,
+  ownerType: () => 'User',
+  settings: () => ({ status: 'absent' }),
+  hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
+  managedPolicy: () => ({ status: 'absent', file: '/home/person/.claude/remote-settings.json' }),
+  setupScript: () => ({ status: 'absent' }),
+  repoRole: () => 'admin',
+};
+
+test('followers: a heartbeat that stopped is flagged by list and the doctor, as stuck or as stopped', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  takeLease(sb.paths, id, T0, process.pid, 'shell');
+  assert.match(list(sb.paths, { all: false, now: T0 + 20_000 }), new RegExp(`^followers: k-0001 \\(process ${process.pid}, heartbeat 20 s ago\\)$`, 'm'));
+  assert.deepEqual(followerProblems(sb.paths, T0 + 20_000), []);
+
+  // Its process still runs, but it has not beaten for 5 min: stuck.
+  const stuck = list(sb.paths, { all: false, now: T0 + 5 * MIN });
+  assert.match(stuck, new RegExp(`^follower heartbeat stale: the follower of k-0001 \\(process ${process.pid}\\) has not beaten for 5 min while its process still runs: it looks stuck\\. Stop it \\(kill ${process.pid}\\)`, 'm'));
+  assert.match(stuck, /no follower reads k-0001/);
+  const checks = runDoctor(sb.paths, { now: T0 + 5 * MIN, env: sb.env }, doctorDeps);
+  const c = checks.find((x) => x.name === 'follower k-0001');
+  assert.equal(c?.level, 'warn');
+  assert.match(c?.detail ?? '', /looks stuck/);
+
+  // Its process ended without handing the lease over: stopped.
+  const dead = spawnSync('true').pid as number;
+  takeLease(sb.paths, id, T0 + 6 * MIN, dead, 'shell');
+  assert.equal(followerProblems(sb.paths, T0 + 6 * MIN)[0]?.state, 'gone');
+  assert.match(list(sb.paths, { all: false, now: T0 + 6 * MIN }), new RegExp(`^follower heartbeat stopped: the follower of k-0001 \\(process ${dead}\\) stopped 0 min ago without handing over`, 'm'));
+
+  // A handover is a follower starting again, not a problem.
+  releaseLease(sb.paths, id, dead, T0 + 6 * MIN);
+  assert.deepEqual(followerProblems(sb.paths, T0 + 6 * MIN), []);
+  assert.match(list(sb.paths, { all: false, now: T0 + 6 * MIN }), /^followers: k-0001 \(starting again\)$/m);
+  // A session that is not open is never flagged.
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.step = 'closed';
+  });
+  takeLease(sb.paths, id, T0, process.pid, 'shell');
+  assert.deepEqual(followerProblems(sb.paths, T0 + 9 * MIN), []);
+});
+
+function journal(sb: Sandbox): Record<string, any>[] {
+  return fs.readFileSync(sb.paths.events, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+}
+
+test('journal: every event goes to events.jsonl with no output, then its delivered mark', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  // writeConfig gives no output at all: the journal still has the event.
+  let lines = journal(sb);
+  assert.deepEqual(lines.map((l) => [l.schema, l.event]), [['kharos.event.v1', 'session.opened']]);
+  await deliver({ paths: sb.paths, env: sb.env, now: T0, platform: 'aix', inHook: false });
+  lines = journal(sb);
+  assert.deepEqual(lines.at(-1), { schema: 'kharos.mark.v1', mark: 'delivered', event: lines[0]!.id, session: id, at: lines.at(-1)!.at, outputs: [], gave_up: [] });
+  // A file output on the journal's path writes nothing twice.
+  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/events.jsonl', events: ['*'] }, { type: 'file', path: '{state}/copy.jsonl' }] });
+  enqueue(sb.paths, [{ ...(lines[0] as any), id: 'k-0001:opened:2' }]);
+  await deliver({ paths: sb.paths, env: sb.env, now: T0, platform: 'aix', inHook: false });
+  lines = journal(sb);
+  assert.equal(lines.filter((l) => l.id === 'k-0001:opened:2').length, 1);
+  assert.deepEqual(lines.at(-1)?.outputs, ['config:0:file', 'config:1:file']);
+  assert.equal(fs.readFileSync(path.join(sb.paths.state, 'copy.jsonl'), 'utf8').trim().split('\n').length, 1);
+});
+
+test('wait: a restarted follower sends the alerts no follower handed on, once, and they are marked acknowledged', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  // The prompt is answered at 20:22:10, and the session goes on.
+  const log = fixture('log-permission-prompt.txt').trimEnd() + '\n[2026-11-25T20:22:10.000000Z] tool_result: probe text\n[2026-11-25T20:22:12.000000Z] assistant: step 2 ran\n';
+  // Nobody follows: the watcher reads a permission prompt, and later the session moves on.
+  const watcherRead = (now: number) => postToolUse(sb.ctx(now), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(log, now)), 'watcher'));
+  watcherRead(at('2026-11-25T20:21:00Z'));
+  watcherRead(at('2026-11-25T20:22:30Z'));
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.notice, null, 'the prompt is answered: nothing is open any more');
+  assert.deepEqual(s.unacked?.map((a) => a.event), ['session.waiting_permission']);
+
+  // A follower starts again: its first wait returns at once with that alert, though nothing is open now.
+  const c = clocked(sb, at('2026-11-25T20:23:00Z'), reader(sb, () => pageAt(log, at('2026-11-25T20:22:30Z'))));
+  const o = await c.run();
+  assert.equal(o.changed, true);
+  assert.equal(o.reads, 0);
+  assert.equal(o.key, 'ok');
+  assert.deepEqual(o.alerts?.map((a) => a.event), ['session.waiting_permission']);
+  const report = o.report.split('\n');
+  assert.match(report[0]!, /^k-0001 is .* now: https:\/\/claude\.ai\/code\/session_/);
+  assert.match(report[1]!, /^Raised earlier, while no follower handed it on \(1\): 20:21 UTC waiting permission: permission request for Bash \(a reason kharos cannot tell\)/);
+  assert.match(report.at(-1)!, /^To keep following k-0001, start the kharos:follow agent again/);
+  assert.doesNotMatch(o.report, /kharos-probe|ask\.txt/);
+
+  // Acknowledged once printed: the next wait does not send it again.
+  assert.deepEqual(loadRegistry(sb.paths).sessions[id]!.unacked, []);
+  const marks = journal(sb).filter((l) => l.schema === 'kharos.mark.v1' && l.mark === 'acknowledged');
+  assert.deepEqual(marks.map((m) => [m.event, m.session, m.by]), [[o.alerts![0]!.id, id, 'agent']]);
+  const next = await clocked(sb, c.now(), reader(sb, () => pageAt(log, at('2026-11-25T20:22:30Z'))), { since: o.key, maxMs: 30_000 }).run();
+  assert.equal(next.changed, false);
+  assert.equal(next.alerts, undefined);
+});
+
+test('follow: the shell loop acknowledges what it printed, as the shell follower', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  postToolUse(sb.ctx(at('2026-11-25T20:21:00Z')), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(fixture('log-permission-prompt.txt'), at('2026-11-25T20:21:00Z'))), 'watcher'));
+  const alert = loadRegistry(sb.paths).sessions[id]!.unacked![0]!;
+  const lines: string[] = [];
+  const end = { kharos: 'wait', id, changed: true, key: 'end:finished', state: 'finished', notice: null, url: null, waited_s: 0, reads: 0, reader_cost_usd: 0, report: '' } as const;
+  const code = await followLoop(sb.paths, {
+    id,
+    env: sb.env,
+    write: (l) => lines.push(l),
+    wait: async () => ({ ...end, alerts: [alert] }),
+    deliver: async () => ({ sent: 0, failed: 0, gaveUp: [], skipped: false, configError: null }),
+  });
+  assert.equal(code, 0);
+  assert.equal(lines.length, 1);
+  assert.deepEqual(loadRegistry(sb.paths).sessions[id]!.unacked, []);
+  assert.equal(journal(sb).find((l) => l.mark === 'acknowledged')?.by, 'shell');
 });

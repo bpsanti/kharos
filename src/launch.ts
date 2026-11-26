@@ -4,19 +4,21 @@
 import fs from 'node:fs';
 import type { HookRules } from '../cloud/kharos-permission.mjs';
 import { readAuthStatus } from './account.ts';
+import { autoModeRefusal } from './account-mode.ts';
 import { buildCreateBody, MAX_INSTRUCTION_CHARS, sha256, sideBranchLines } from './body.ts';
 import { ConfigError, loadConfig, MAX_OPEN_TRADEOFF, otherAccount, pickProfile, repoSlug, type Config, type OutputConfig, type Profile } from './config.ts';
 import { ghForge, realGh, type Forge } from './forge.ts';
 import { appendLine, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
-import { activeCount, bodyPath, formatId, slotHolders, updateRegistry, type Session } from './registry.ts';
+import { activeCount, bodyPath, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
+import { buildEvent, enqueue } from './events.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, loadConfirmation } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
 import { SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
 import { EMPTY_CHANGE, readRemoteHookFiles, type RemoteHookFiles } from './permissions.ts';
-import { applicable, buildPreflight, hookFilesOf, readHistory, selectFiles } from './preflight.ts';
-import { loadRepos, readRemoteHeads, type RemoteHeads } from './repo.ts';
+import { applicable, buildPreflight, hookFilesOf, readHistory, selectFiles, snapshotAsk } from './preflight.ts';
+import { loadRepos, readRemoteHeads, recentRepoRules, recordRepoRules, type RemoteHeads } from './repo.ts';
 
 export interface PrepareOptions {
   instruction: string;
@@ -28,6 +30,10 @@ export interface PrepareOptions {
   extra_outputs?: OutputConfig[];
   /** Extra lines for the protocol footer, such as the session sheet a dedicated firstmate task needs. */
   footer_lines?: string[];
+  /** Leave out the footer line that asks the session to commit and push work in progress every 30 minutes. */
+  no_push?: boolean;
+  /** When every watch.max_open slot is taken, queue the launch: kharos fires it by itself when a slot frees. */
+  queue?: boolean;
   claude_session: string | null;
   now: number;
   env?: NodeJS.ProcessEnv;
@@ -122,19 +128,31 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
     hookRules = found.status === 'found' ? hookSnapshot(found.files) : null;
   }
   const forge = opts.forge ?? ghForge(realGh(env));
-  const auto = config.preflight_auto && policy ? planAuto(paths, config, profile, instruction, policy, forge) : null;
+  const auto = config.preflight_auto && policy ? planAuto(paths, config, profile, instruction, policy, forge, opts.now) : null;
+  const repoAsk = recentRepoRules(paths, profile.repo, profile.revision, opts.now);
 
+  // A queued launch is fired later from a headless Claude Code in auto mode, where Claude Code's classifier approves the fire.
+  const autoOff = opts.queue ? autoModeRefusal(readManagedPolicy(env)) : null;
   const prepared = updateRegistry(paths, (reg) => {
-    if (activeCount(reg) >= config.watch.max_open) {
+    const ahead = queuedLaunches(Object.values(reg.sessions));
+    const full = activeCount(reg) + ahead.length >= config.watch.max_open;
+    if (full && !opts.queue) {
       throw new LaunchError([
-        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.`,
+        `There are ${activeCount(reg)} sessions open, and watch.max_open is ${config.watch.max_open}: ${slotHolders(reg, opts.now)}.${ahead.length ? ` ${ahead.length} queued launch(es) wait for a slot before any new one: ${ahead.map((s) => s.id).join(', ')}.` : ''}`,
         `Close finished ones with /kharos:close, answer the ones that wait on you, or raise watch.max_open in ${paths.config}.`,
         `Raising it: ${MAX_OPEN_TRADEOFF}.`,
+        'Or queue it with --queue: kharos fires it by itself when a slot frees, a paid action with nobody present.',
+      ]);
+    }
+    if (full && autoOff) {
+      throw new LaunchError([
+        `Every watch.max_open slot is taken (${slotHolders(reg, opts.now)}), and ${autoOff}: a queued launch is fired in auto mode, so it could not be approved with nobody present.`,
+        'Launch it later, once a slot is free.',
       ]);
     }
     const id = formatId(reg.next_seq);
     reg.next_seq++;
-    const body = buildCreateBody({ id, title, instruction, profile, model, footerLines: opts.footer_lines ?? [], now: opts.now });
+    const body = buildCreateBody({ id, title, instruction, profile, model, footerLines: opts.footer_lines ?? [], push: !opts.no_push, now: opts.now });
     writeJsonAtomic(bodyPath(paths, id), body);
     const s: Session = {
       id,
@@ -154,7 +172,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       created_at: createdAt,
       fired_at: null,
       runs_seen_empty_at: null,
-      step: 'prepared',
+      step: full ? 'queued' : 'prepared',
       state: 'launching',
       state_since: createdAt,
       pending_state: null,
@@ -174,9 +192,13 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       closed_at: null,
       error: null,
       permission_hook: hookRules,
+      repo_ask: repoAsk,
+      ...(opts.no_push ? { no_push: true } : {}),
+      ...(full ? { queue: { queued_at: createdAt, tries: 0, next_try_at: null, blocked: null, fired_by_queue_at: null } } : {}),
       preflight: auto === null ? null : 'skipped' in auto ? { status: 'skipped', reason: auto.skipped } : { status: 'creating', branch: `kharos/${id}`, base: profile.revision, applied: auto.patterns },
     };
     reg.sessions[id] = s;
+    if (full) enqueue(paths, [buildEvent(s, 'session.queued', 'launching', `every watch.max_open slot is taken (${activeCount(reg)} of ${config.watch.max_open}); it fires by itself when one frees`, opts.now)]);
     return s;
   });
   if (auto === null || 'skipped' in auto) return prepared;
@@ -198,6 +220,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       profile: { ...profile, revision: branch },
       model,
       footerLines: [...(opts.footer_lines ?? []), ...sideBranchLines(branch, profile.revision, made.commit)],
+      push: !opts.no_push,
       now: opts.now,
     });
     writeJsonAtomic(bodyPath(paths, id), body);
@@ -216,13 +239,15 @@ type AutoPlan = { patterns: string[]; mirrored: string[]; unblock: boolean; note
  * the same plan and filters as `kharos permissions hook diff`, with no broad pattern of its own; the
  * organization's ask rules are mirrored while a remembered mirror confirmation matches the managed settings.
  */
-function planAuto(paths: Paths, config: Config, profile: Profile, instruction: string, policy: ManagedPolicy, forge: Forge): AutoPlan {
+function planAuto(paths: Paths, config: Config, profile: Profile, instruction: string, policy: ManagedPolicy, forge: Forge, now: number): AutoPlan {
   if (!config.permission_hook) return { skipped: 'preflight_auto is on, but permission_hook is off, so nothing was applied' };
   const blocked = hooksBlocked(policy);
   if (blocked) return { skipped: `${blocked}; nothing was applied` };
   const read = forge.snapshot(profile.repo, profile.revision, selectFiles);
   if (!read.ok) return { skipped: `${repoSlug(profile.repo)}@${profile.revision} could not be read with gh (${read.error}); nothing was applied` };
   const snap = read.snapshot;
+  const ask = snapshotAsk(snap);
+  if (ask) recordRepoRules(paths, profile.repo, profile.revision, ask, now);
   if (!snap.base) return { skipped: `${snap.label} has no commit to start a side branch from; nothing was applied` };
   const unreadable = [SETTINGS_PATH, HOOK_SCRIPT_PATH, HOOK_RULES_PATH].filter((p) => snap.unreadable.has(p));
   if (unreadable.length) return { skipped: `${unreadable.join(', ')} could not be read as text; nothing was applied` };

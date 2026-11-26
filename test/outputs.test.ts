@@ -48,11 +48,11 @@ test('outputs: file and command receive each event once', async () => {
   const sb = sandbox();
   const script = path.join(sb.dir, 'receiver.sh');
   fs.writeFileSync(script, `#!/bin/sh\ncat >> "${sb.dir}/received.jsonl"\n`, { mode: 0o755 });
-  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/events.jsonl' }, { type: 'command', argv: [script], events: ['needs_you'] }] });
+  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/out.jsonl' }, { type: 'command', argv: [script], events: ['needs_you'] }] });
   enqueue(sb.paths, [event(), event({ id: 'k-0001:opened:1', event: 'session.opened', class: 'progress' })]);
   const r = await deliver(ctx(sb));
   assert.deepEqual([r.sent, r.failed], [3, 0]);
-  assert.equal(fs.readFileSync(path.join(sb.paths.state, 'events.jsonl'), 'utf8').trim().split('\n').length, 2);
+  assert.equal(fs.readFileSync(path.join(sb.paths.state, 'out.jsonl'), 'utf8').trim().split('\n').length, 2);
   const got = fs.readFileSync(`${sb.dir}/received.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(got.map((e) => e.event), ['session.waiting_permission']);
   assert.equal(readOutbox(sb.paths).length, 0);
@@ -61,7 +61,7 @@ test('outputs: file and command receive each event once', async () => {
 
 test('outputs: a failing output is tried again, five times at most, and then shown', async () => {
   const sb = sandbox();
-  writeConfig(sb, { outputs: [{ type: 'command', argv: ['/bin/sh', '-c', 'exit 3'] }, { type: 'file', path: '{state}/events.jsonl' }] });
+  writeConfig(sb, { outputs: [{ type: 'command', argv: ['/bin/sh', '-c', 'exit 3'] }, { type: 'file', path: '{state}/out.jsonl' }] });
   enqueue(sb.paths, [event()]);
   for (let i = 1; i < MAX_ATTEMPTS; i++) {
     const r = await deliver(ctx(sb));
@@ -74,7 +74,7 @@ test('outputs: a failing output is tried again, five times at most, and then sho
   assert.equal(readOutbox(sb.paths).length, 0);
   assert.equal(loadUndelivered(sb.paths).length, 1);
   // The file output got it on the first try, and only once.
-  assert.equal(fs.readFileSync(path.join(sb.paths.state, 'events.jsonl'), 'utf8').trim().split('\n').length, 1);
+  assert.equal(fs.readFileSync(path.join(sb.paths.state, 'out.jsonl'), 'utf8').trim().split('\n').length, 1);
 });
 
 test('outputs: a command that hangs is stopped at its deadline', async () => {
@@ -89,7 +89,7 @@ test('outputs: a command that hangs is stopped at its deadline', async () => {
 
 test('outputs: a delivery deadline cuts a hanging command short, counts no try, and keeps what was done', async () => {
   const sb = sandbox();
-  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/events.jsonl', events: ['progress'] }, { type: 'command', argv: ['/bin/sleep', '30'], timeout_s: 60, events: ['needs_you'] }] });
+  writeConfig(sb, { outputs: [{ type: 'file', path: '{state}/out.jsonl', events: ['progress'] }, { type: 'command', argv: ['/bin/sleep', '30'], timeout_s: 60, events: ['needs_you'] }] });
   enqueue(sb.paths, [event({ id: 'k-0001:opened:1', event: 'session.opened', class: 'progress' }), event()]);
   const started = Date.now();
   const r = await deliver(ctx(sb, { deadline: Date.now() + 500 }));

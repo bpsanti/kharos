@@ -11,12 +11,14 @@ import { fileURLToPath } from 'node:url';
 import { claudeBin } from './account.ts';
 import { clean } from './body.ts';
 import { CommandError } from './commands.ts';
-import { liveFollowers, releaseLease, takeLease } from './lease.ts';
+import { expectFollower, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { updateWatch } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { currentAccount, readsFor, type Read } from './watch.ts';
+import { categoryText, type PermissionCategory } from './permission-request.ts';
+import { appendMark, type AlertRef } from './events.ts';
 
 /** The plugin's root folder, which holds `scripts/kharos` and is loaded into each reader. */
 export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -48,7 +50,7 @@ const READER_PROMPT =
 export function stopKey(s: Session): string {
   if (s.step === 'closed' || s.step === 'refused') return `end:${s.step}`;
   if (TERMINAL_STATES.has(s.state)) return `end:${s.state}`;
-  if (s.step === 'prepared' || s.step === 'routine_created') return `launch:${s.step}`;
+  if (s.step === 'queued' || s.step === 'prepared' || s.step === 'routine_created') return `launch:${s.step}`;
   if (!s.notice) return 'ok';
   if (s.notice.event === 'session.waiting_answer' && s.state !== 'waiting_answer') return 'ok';
   if (s.notice.event === 'session.unfollowed') return 'ok';
@@ -98,9 +100,11 @@ export interface WaitOutcome {
   notice: string | null;
   url: string | null;
   question?: string;
-  permission?: { tool: string };
+  permission?: { tool: string; category: PermissionCategory };
   result?: { status: string | null; pr: string | null; branch: string | null; summary: string | null };
   error?: string;
+  /** Every alert of the session no follower handed on yet, this change included; acknowledged once printed. */
+  alerts?: AlertRef[];
   waited_s: number;
   reads: number;
   reader_cost_usd: number;
@@ -125,11 +129,30 @@ function words(v: string): string {
   return v.replace(/^session\./, '').replace(/_/g, ' ');
 }
 
+/** The alerts a report names besides the change it is about: the ones raised while no follower handed them on. */
+function earlier(s: Session, o: Omit<WaitOutcome, 'report'>): string[] {
+  const current = s.notice;
+  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && a.event === `session.${s.state}`));
+  if (rest.length === 0) return [];
+  return [`Raised earlier, while no follower handed it on (${rest.length}): ${rest.map((a) => `${a.at.slice(11, 16)} UTC ${words(a.event)}: ${a.reason}`).join('; ')}`];
+}
+
 function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
+  const lines = buildMain(s, o, root, follower);
+  const more = o.changed && !o.error ? earlier(s, o) : [];
+  if (more.length === 0) return lines;
+  // The earlier alerts go before the line that says how to go on, which stays the last.
+  const all = lines.split('\n');
+  const again = follower === 'agent' && all.at(-1)?.startsWith(`To keep following ${s.id}`) ? [all.pop() as string] : [];
+  return [...all, ...more, ...again].join('\n');
+}
+
+function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; /kharos:follow ${s.id} starts a follower again once it is fixed.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
+  if (o.key === 'launch:queued') return `${s.id} is queued for a free watch.max_open slot, and fires by itself when one frees; /kharos:close ${s.id} cancels it.`;
   if (o.key.startsWith('launch:')) return `${s.id} was never fired (step ${s.step}); /kharos:run --resume ${s.id} fires it once.`;
   if (o.key.startsWith('end:')) {
     const r = o.result;
@@ -156,11 +179,12 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
   }
   if (o.permission) {
     return [
-      `${s.id} waits on a permission prompt for ${o.permission.tool}. Only a person answers it, on the session page: ${o.url ?? 'no link'}`,
+      `${s.id} waits on a permission prompt for ${o.permission.tool}, from ${categoryText(o.permission.category)}. Only a person answers it, on the session page: ${o.url ?? 'no link'}`,
       ...again,
     ].join('\n');
   }
-  return [`${s.id} is ${words(s.state)} (${o.notice ? words(o.notice) : 'notice'}): ${o.url ?? 'no link'}`, ...again].join('\n');
+  if (!o.notice) return [`${s.id} is ${words(s.state)} now: ${o.url ?? 'no link'}`, ...again].join('\n');
+  return [`${s.id} is ${words(s.state)} (${words(o.notice)}): ${o.url ?? 'no link'}`, ...again].join('\n');
 }
 
 export function outcome(s: Session, key: string, changed: boolean, extra: { waitedMs: number; reads: number; cost: number; error?: string; root?: string; follower?: Follower }): WaitOutcome {
@@ -177,9 +201,10 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
     reader_cost_usd: Math.round(extra.cost * 1e6) / 1e6,
   };
   if (extra.error) o.error = extra.error;
+  if (changed && !extra.error && s.unacked?.length) o.alerts = s.unacked.map((a) => ({ ...a, reason: clean(a.reason, 300) }));
   if (changed && s.notice?.event === 'session.waiting_answer' && s.result.question) o.question = clean(s.result.question, 300);
-  // The tool's name only: what it would run stays on the session page.
-  if (changed && s.notice?.event === 'session.waiting_permission' && s.permission) o.permission = { tool: clean(s.permission.tool, 80) };
+  // The tool's name and a fixed category only: what it would run stays on the session page.
+  if (changed && s.notice?.event === 'session.waiting_permission' && s.permission) o.permission = { tool: clean(s.permission.tool, 80), category: s.permission.category ?? 'unknown' };
   if (key.startsWith('end:')) {
     const r = s.result;
     o.result = {
@@ -203,7 +228,8 @@ export const headlessRead: Reader = async (paths, read, env, now, timeoutMs) => 
     const params = Object.entries(read.params)
       .map(([k, v]) => `${k} "${v}"`)
       .join(' and ');
-    const childEnv = { ...env };
+    // A session of kharos's own: its Stop hook starts no follower.
+    const childEnv: NodeJS.ProcessEnv = { ...env, KHAROS_ROLE: 'reader' };
     delete childEnv.ANTHROPIC_API_KEY;
     const r = spawnSync(
       claudeBin(env),
@@ -283,17 +309,22 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   let failures = 0;
   let lastError = '';
   let leased = false;
-  const done = (key: string, changed: boolean, error?: string) =>
-    outcome(s, key, changed, { waitedMs: now() - start, reads, cost, ...(error ? { error } : {}), ...(opts.follower ? { follower: opts.follower } : {}) });
+  // A wait that returns for the next one to go on hands its lease over; an end or an error gives it back.
+  let handover = false;
+  const done = (key: string, changed: boolean, error?: string) => {
+    handover = !error && !settled(key);
+    return outcome(s, key, changed, { waitedMs: now() - start, reads, cost, ...(error ? { error } : {}), ...(opts.follower ? { follower: opts.follower } : {}) });
+  };
   try {
     for (;;) {
       s = find();
       const key = stopKey(s);
-      if (key !== opts.since && key !== 'ok') return done(key, true);
+      // An alert no follower handed on yet (raised while none followed, or not acknowledged by the last one) goes out at once.
+      if ((key !== opts.since && key !== 'ok') || s.unacked?.length) return done(key, true);
       if (settled(key) || now() - start >= opts.maxMs) return done(key, false);
       const t = now();
       // The lease says this wait follows the session from its first look, not only from its first read.
-      const holds = takeLease(paths, id, t);
+      const holds = takeLease(paths, id, t, process.pid, opts.follower ?? 'agent');
       leased ||= holds;
       const lastRead = s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
@@ -333,7 +364,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       await sleep(Math.max(0, Math.min(t >= dueAt ? SLICE_MS : dueAt - t, SLICE_MS, left)));
     }
   } finally {
-    if (leased) releaseLease(paths, id);
+    if (leased) releaseLease(paths, id, process.pid, handover ? now() : null);
   }
 }
 
@@ -377,6 +408,26 @@ export function followersToStart(paths: Paths, ref: string | null, now: number):
   if (targets.busy.length) lines.push(`a live follower already reads ${targets.busy.join(', ')}.`);
   if (targets.start.length === 0) return lines.join('\n');
   lines.push('Start one kharos:follow agent for each line below, in the background (Agent tool, subagent_type "kharos:follow", run_in_background true), with the line as its whole prompt:');
-  for (const id of targets.start) lines.push(followerPrompt(id, null));
+  for (const id of targets.start) {
+    // The agent takes a few seconds to start: until then the session counts as followed, so nothing starts a second follower.
+    expectFollower(paths, id, now);
+    lines.push(followerPrompt(id, null));
+  }
   return lines.join('\n');
+}
+
+/**
+ * Marks the alerts of a printed outcome as acknowledged: they leave the session's list, and the journal
+ * gets one mark each. Only the ones the outcome carried, so an alert raised since goes to the next one.
+ */
+export function acknowledge(paths: Paths, o: WaitOutcome, by: Follower, now: number): void {
+  const ids = new Set((o.alerts ?? []).map((a) => a.id));
+  if (ids.size === 0) return;
+  const session = updateRegistry(paths, (reg) => {
+    const s = reg.sessions[o.id];
+    if (s?.unacked) s.unacked = s.unacked.filter((a) => !ids.has(a.id));
+    return s?.id ?? o.id;
+  });
+  const at = new Date(now).toISOString();
+  for (const event of ids) appendMark(paths, { mark: 'acknowledged', event, session, at, by });
 }

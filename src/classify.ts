@@ -1,11 +1,12 @@
 // The classifier: code, not the model, decides what state a session is in, from the events of its log.
 // Rules are evaluated in order and the first match wins. Times come from the log events; `now` is the
 // clock of the machine that reads. Reasons are fixed texts: no part of the log is ever copied into them,
-// except the name of the tool a permission prompt is for, which the log format limits to a tool name.
+// except the name of the tool a permission prompt is for, which the log format limits to a tool name,
+// with the fixed category of why it asks.
 
 import type { WatchConfig } from './config.ts';
 import type { LogEvent } from './logparse.ts';
-import { describePermission, type PermissionRequest } from './permission-request.ts';
+import { categoryText, describePermission, NO_RULES, type AskRules, type PermissionRequest } from './permission-request.ts';
 import type { State } from './registry.ts';
 import { isSystemUser, latestMarks, sinceLastUser } from './track.ts';
 
@@ -42,6 +43,8 @@ export interface ClassifyInput {
   deadlineMin: number;
   now: number;
   watch: WatchConfig;
+  /** The ask rules an open permission prompt is compared with, to tell why it asks; read only when one is open. */
+  rules?: () => AskRules;
 }
 
 /** States that need to be seen on two reads in a row before they count. */
@@ -152,8 +155,8 @@ export function classify(input: ClassifyInput): Verdict {
   if (pending >= 0) {
     const prompt = events[pending] as LogEvent;
     const ago = Math.round((now - prompt.t) / MIN);
-    const permission = describePermission(prompt);
-    return { state: 'waiting_permission', notice: 'waiting_permission', reason: `permission request for ${permission.tool} with no answer for ${ago} min`, permission };
+    const permission = describePermission(events, pending, input.rules?.() ?? NO_RULES);
+    return { state: 'waiting_permission', notice: 'waiting_permission', reason: `permission request for ${permission.tool} (${categoryText(permission.category)}) with no answer for ${ago} min`, permission };
   }
 
   // waiting for an answer

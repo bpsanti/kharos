@@ -104,17 +104,34 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "class":"needs_you","session":"k-0007","title":"fix the panel limit","state":"waiting_permission",
  "previous_state":"running","since":"2026-11-25T18:40:00Z","at":"2026-11-25T18:44:10Z",
  "url":"https://claude.ai/code/session_...","repo":"owner/repo","pr":null,"branch":null,
- "reason":"permission request for Bash with no answer for 4 min","open_notice":null,
- "permission":{"tool":"Bash"}}
+ "reason":"permission request for Bash (an ask rule of the organization) with no answer for 4 min","open_notice":null,
+ "permission":{"tool":"Bash","category":"org_ask_rule"}}
 ```
 
-- `class` is `progress` (`session.opened`, `session.back`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
+- `class` is `progress` (`session.opened`, `session.back`, `session.queued`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
+- `session.queued` (`progress`) says a launch made with `--queue` waits for a slot; `session.not_fired` (`needs_you`) says kharos did not fire a queued launch by itself (another account is logged in, a refusal, or fires that did not go through) and the person decides.
 - `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.
-- `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for.
+- `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for, with the fixed text of its category.
   Only `session.waiting_answer` carries `question`, and only `session.finished` carries `summary`, both cleaned of control characters and cut.
-- Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for.
+- Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for, and a fixed `category` of why it asks ([permissions.md](permissions.md#why-a-prompt-asks)).
   The tool's input (the command, the file, the URL, the query) is never copied into an event; the person reads it on the session's page.
 - `url` is the direct link to the session, `https://claude.ai/code/session_<id>`.
 - An event is emitted when a notice opens, again every `renotify_min` while it lasts, and `session.back` once when the session returns to normal.
   A permission prompt that a different one replaces is reported again as soon as it counts (at once without the permission hook); the same prompt is not reported again before `renotify_min`.
 - Delivery is at least once; `id` lets a receiver drop a repeat.
+
+### The journal: delivered and acknowledged
+
+`events.jsonl` in the state folder is kharos's journal: every event is written there when it is queued, whatever the outputs are, and later lines mark what became of it, `kharos.mark.v1`:
+
+```json
+{"schema":"kharos.mark.v1","mark":"delivered","event":"k-0007:waiting_permission:1795632264","session":"k-0007","at":"2026-11-25T18:44:11Z","outputs":["config:0:notification"],"gave_up":[]}
+{"schema":"kharos.mark.v1","mark":"acknowledged","event":"k-0007:waiting_permission:1795632264","session":"k-0007","at":"2026-11-25T18:44:12Z","by":"agent"}
+```
+
+- `delivered`: every output the event was meant for got it, or was given up on after five tries (`gave_up`).
+- `acknowledged`: a follower handed the alert on, to your session in a follower agent's report (`by: "agent"`), or to the log of a follower process (`by: "shell"`).
+- An alert is a `needs_you` or `terminal` event, except `session.unfollowed`.
+  Until a follower acknowledges it, it stays on the session in the registry (the last 20), so a follower that starts again sends it first, even when the notice has cleared since: a prompt answered or a silence that ended while nobody followed still reaches the person, once, with its time and reason, in the next report.
+- A follower process also delivers, when it starts, what a follower that stopped left in the queue.
+- A reader of the journal tells lines apart by `schema`; a `file` output on the journal's own path writes nothing more, since the journal has every event already.

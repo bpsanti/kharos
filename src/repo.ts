@@ -151,3 +151,44 @@ export function initialCommit(repo: string, env: NodeJS.ProcessEnv = process.env
   if (r.status !== 0) return { ok: false, detail: (r.stderr || '').trim().slice(0, 300) || 'gh api failed' };
   return { ok: true, detail: `README.md committed (${r.stdout.trim().slice(0, 12)})` };
 }
+
+/** The ask rules of a repository's .claude/settings.json on one branch, as a launch preflight read them. */
+export interface RepoRules {
+  ask: string[];
+  read_at: string;
+}
+
+/** How long a reading of a branch's ask rules is used for the launches that follow it. */
+export const REPO_RULES_TTL_MS = 24 * 3600_000;
+
+function rulesKey(repo: string, revision: string): string {
+  return `${repoSlug(repo)}@${revision}`;
+}
+
+function loadRepoRules(paths: Paths): Record<string, RepoRules> {
+  return readState<Record<string, RepoRules>>(paths.repoRules, (v) => isObject(v) && Object.values(v).every((x) => isObject(x) && Array.isArray(x.ask)), 'an object of ask rules by branch') ?? {};
+}
+
+/** Keeps what the launch preflight read, so a launch can tell a prompt of the repository's ask rules from the rest. */
+export function recordRepoRules(paths: Paths, repo: string, revision: string, ask: readonly string[], now: number): void {
+  withLock(paths.repoRules, () => {
+    let book: Record<string, RepoRules>;
+    try {
+      book = loadRepoRules(paths);
+    } catch {
+      book = {};
+    }
+    book[rulesKey(repo, revision)] = { ask: [...ask], read_at: new Date(now).toISOString() };
+    writeJsonAtomic(paths.repoRules, book);
+  });
+}
+
+/** The ask rules a preflight read for this branch within REPO_RULES_TTL_MS, or null when none is known. */
+export function recentRepoRules(paths: Paths, repo: string, revision: string, now: number): string[] | null {
+  try {
+    const r = loadRepoRules(paths)[rulesKey(repo, revision)];
+    return r && now - Date.parse(r.read_at) < REPO_RULES_TTL_MS ? r.ask : null;
+  } catch {
+    return null;
+  }
+}

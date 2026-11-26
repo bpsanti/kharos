@@ -73,13 +73,13 @@ npm install -g kharos
 | `/kharos:setup [owner/repo]` | Takes this Claude account from zero to ready for a repository, once, then writes its launch profile |
 | `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits, the watcher and policy counts |
 | `/kharos:permissions [default\|standard\|hook\|preflight\|unblock] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; never commits or pushes |
-| `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session, records it, and starts its follower in the background |
+| `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path] [--no-push] [--queue]` | Launches one cloud session, records it, and starts its follower in the background; `--no-push` leaves out the footer line that asks the session to push work in progress; `--queue` queues a launch that finds every slot taken |
 | `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again (a follower process of its own in a headless Claude Code) |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log; `kharos log <id> [lines] --cached` prints the lines already stored, from a shell, with no model |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
 | `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
-| `/kharos:close <id>` | Stops following a session, and shows where to delete its routine |
+| `/kharos:close <id>` | Stops following a session, and shows where to delete its routine; cancels a queued launch |
 | `/kharos:watch` | One watcher pass, the advanced mode; run it as `/loop 10m /kharos:watch` in a session of its own |
 
 Commands that spend plan usage or change state can only be started by you, not by the model.
@@ -101,11 +101,27 @@ If `list_runs` shows no session, kharos never fires again by itself, because a `
 The person checks the routine page, and when it shows no run and no Claude Code window is still asking to approve the run, `/kharos:run --rearm <id>` re-arms the launch.
 The re-arm is accepted only within 10 minutes of an empty `list_runs`, asks for its own approval, and fires nothing; `/kharos:run --resume <id>` then fires it once.
 
+### Queued launches
+
+A launch refused because every `watch.max_open` slot is taken can wait instead: `/kharos:run --queue "<instruction>"` runs every check and the permission preflight as usual, stores the routine body, and records the launch as `queued`, with nothing created.
+When a slot frees (a session ends, is closed or is refused), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
+
+- The fire is a paid action with nobody present: a minimal headless Claude Code in auto mode makes the same RemoteTrigger calls `/kharos:run --resume` names, so Claude Code's classifier approves the `run`, and the hook allows one `run` per launch, as always.
+- Only the Claude account that queued a launch fires it; under another login it stays queued, and an event says so.
+- The session it opens gets a follower process, and its events go to the outputs.
+- A fire that does not go through is tried again 10 minutes later, 3 times in all; then a `session.not_fired` event asks the person, and `/kharos:run --resume <id>` fires it with the person present.
+  A launch left to the person no longer holds up the queue or a new launch; resuming it while every slot is taken puts it back in line, and it fires by itself again.
+- `/kharos:run --resume <id>` takes a launch out of the queue: from then on the person fires it, and the dispatcher no longer does.
+- A queued launch holds no slot, and is ahead of any new launch: a slot that frees is the queue's first.
+- `kharos list` and `/kharos:doctor` show the queue, and `/kharos:close <id>` cancels a queued launch, with nothing created and nothing spent.
+- When the organization disabled auto mode, `--queue` is refused, since nobody could approve the fire.
+
 The one-run guard covers only launches kharos knows.
 Calling RemoteTrigger `run` by hand on a routine id read elsewhere (the routine page, /schedule) starts another paid session, and the service has no fire-once flag.
 While the registry file cannot be read, every `run`, `list_runs` and `get_run_log` answer is hidden behind one line that names the file, because kharos cannot tell its own launches from others.
 
 The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}` line when it is truly finished, or a `KHAROS-QUESTION {...}` line when it needs an answer, and pushes work in progress every 30 minutes.
+`--no-push` leaves that last line out, for work that should reach the remote only when the session decides it is done.
 
 ## Following sessions
 
@@ -114,12 +130,14 @@ The follower is a small Haiku agent that sits inside `kharos wait <id>`, which r
 Its report reaches your session like the result of any background subagent:
 
 - a question from the session, which you answer with `/kharos:send <id> "<answer>"`;
-- a permission prompt, with the tool's name and the link to the session page, where you answer it;
+- a permission prompt, with the tool's name, a fixed category of why it asks, and the link to the session page, where you answer it;
 - the end, with the status, the summary, the pull request and the branch;
 - a failure, a usage limit, or another notice, with the link.
 
 After a report that is not the end, your session starts the follower again at once, and an answer you send does not wake it before the next real change.
 Closing Claude Code stops its followers; the cloud session goes on, and `/kharos:follow` picks the open sessions up again.
+At the end of every turn of a Claude Code session with kharos, its Stop hook starts a follower process (the one `kharos follow <id> --detach` starts) for each open session that no follower reads, so a follower that died is replaced without anyone asking.
+It reads only local files and calls nothing unless a follower is missing, starts nothing while the watcher runs, and never starts a second follower for a session.
 
 ### Headless launches
 
@@ -159,8 +177,10 @@ claude --model haiku
 Both modes share the registry, the rules and the outputs, and can run together: each event is emitted once, whichever process read, and the watcher leaves a session to its live follower.
 Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
 A closed turn is never taken for the end: only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
-A session waiting at a permission prompt raises a notice that names the tool, with the link to the session, where a person answers it; what the tool would run never leaves the machine.
+A session waiting at a permission prompt raises a notice that names the tool and a fixed category of why it asks (an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell), with the link to the session, where a person answers it.
+Only the tool name and a fixed category leave the machine: what the tool would run never does.
 `kharos health` exits with 1 when an open session has no live follower and the watcher stopped, for launchd, cron or any other check.
+`/kharos:list` shows each follower's heartbeat, and `/kharos:list` and `/kharos:doctor` flag a follower whose heartbeat stopped for more than 3 minutes: stuck while its process still runs, or stopped without handing over.
 See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, and the event format.
 
 ## Permission prompts
@@ -182,6 +202,7 @@ The watcher logs each of the hook's decisions, and `kharos permissions approvals
 
 Events go to the outputs of the configuration: desktop notification, a JSON-lines file, Slack (the webhook URL is kept in the keychain as the plugin's `slack_webhook` option), any command, and the firstmate adapter.
 By default you get a notification when a session needs you or ends, and every event in `~/.local/state/kharos/events.jsonl`.
+That file is kharos's journal: it holds every event whatever the outputs are, with a `delivered` mark once the outputs got it and an `acknowledged` mark once a follower handed it on; a follower that starts again first sends the alerts no follower acknowledged.
 See [docs/outputs.md](docs/outputs.md).
 
 ## Files
@@ -190,8 +211,10 @@ See [docs/outputs.md](docs/outputs.md).
 |---|---|
 | `~/.config/kharos/config.json` | Profiles, watcher thresholds and outputs ([schema](schema/config.schema.json)) |
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
+| `~/.local/state/kharos/events.jsonl` | The journal: every event, with its `delivered` and `acknowledged` marks |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
-| `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id and a heartbeat |
+| `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id, its kind (agent or process) and a heartbeat, or a handover while the next follower starts |
+| `~/.local/state/kharos/repo-rules.json` | The ask rules of each launch branch's `.claude/settings.json`, as the last launch preflight read them, to tell a repository prompt from the rest |
 | `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account, repository and revision |
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
@@ -206,7 +229,7 @@ Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/
 |---|---|
 | Runs started by hand, per routine | 30 per hour |
 | Runs started by hand, per account | 100 per hour |
-| Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 10 by default, that `/kharos:setup` asks once) |
+| Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 10 by default, that `/kharos:setup` asks once; `--queue` waits for a slot instead of being refused) |
 | Session cost | not readable: the run log the tool returns carries no token usage or cost, so kharos cannot show what a session spent; the usage page of claude.ai does, and `--deadline` raises an overdue notice past a set time |
 | Message length in the log | each message is cut to about two thousand characters; `/kharos:result` says when the last one was cut, and the session page has the whole text |
 | Cloud machine | 4 vCPU, 16 GB, 30 GB of disk |

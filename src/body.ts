@@ -21,7 +21,11 @@ export function parkedRunAt(now: number): string {
   return d.toISOString().replace('.000Z', 'Z');
 }
 
-export function footer(extraLines: readonly string[] = []): string {
+/** The footer line a `--no-push` launch leaves out. */
+export const PUSH_LINE = '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.';
+
+/** The protocol footer; `push` false leaves out the line that asks the session to push work in progress. */
+export function footer(extraLines: readonly string[] = [], push = true): string {
   return [
     '',
     '---',
@@ -30,7 +34,7 @@ export function footer(extraLines: readonly string[] = []): string {
     `${DONE_MARK} {"status":"ok|failed","pr":"<url or null>","branch":"<name or null>","summary":"<up to 200 characters>"}`,
     `- If you need an answer to go on, send one last message that contains only this line, then stop and wait for the reply:`,
     `${QUESTION_MARK} {"question":"<up to 300 characters>"}`,
-    '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.',
+    ...(push ? [PUSH_LINE] : []),
     ...extraLines,
   ].join('\n');
 }
@@ -54,6 +58,8 @@ export interface BodyInput {
   model: string;
   /** Extra protocol lines, such as the session sheet a dedicated firstmate task needs. */
   footerLines?: readonly string[];
+  /** false leaves out the footer line that asks the session to push work in progress (`--no-push`). */
+  push?: boolean;
   uuid?: string;
   now: number;
 }
@@ -79,7 +85,7 @@ export function buildCreateBody(input: BodyInput): Record<string, unknown> {
               session_id: '',
               type: 'user',
               parent_tool_use_id: null,
-              message: { role: 'user', content: input.instruction + '\n' + footer(input.footerLines ?? []) },
+              message: { role: 'user', content: input.instruction + '\n' + footer(input.footerLines ?? [], input.push ?? true) },
             },
           },
         ],

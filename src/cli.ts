@@ -19,7 +19,8 @@ import {
   openBrowser,
   waitForEnvironment,
 } from './environment.ts';
-import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
+import { kick, KICKS_QUEUE, postToolUse, postToolUseFailure, preToolUse, sessionStart, stop, type Ctx, type HookInput } from './hook.ts';
+import { dispatchQueued, kickQueue } from './queue.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
@@ -37,9 +38,9 @@ import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 import { detachFollower, followLoop, startFollowers } from './follow.ts';
-import { wait, WAIT_DEFAULTS } from './wait.ts';
+import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach', 'cached', 'no-push', 'queue']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -111,7 +112,7 @@ function need(args: Args, i: number, what: string): string {
 }
 
 const USAGE = `usage: kharos <command>
-  prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--session id]   (instruction on stdin)
+  prepare [--profile p] [--model m] [--title t] [--deadline min] [--file f] [--no-push] [--queue] [--session id]   (instruction on stdin)
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id | log <id> [lines] --cached
   send <id>   (text on stdin) | result <id> | close <id>
@@ -135,7 +136,7 @@ const USAGE = `usage: kharos <command>
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
   follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
-  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
+  hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start|stop>`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
   const paths = resolvePaths(env);
@@ -153,6 +154,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         const s = prepare(paths, {
           extra_outputs: extra.outputs,
           footer_lines: extra.footer,
+          ...(args.flags['no-push'] === true ? { no_push: true } : {}),
+          ...(args.flags.queue === true ? { queue: true } : {}),
           instruction: readInstruction(flag(args, 'file'), stdin),
           ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
           ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
@@ -163,7 +166,13 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           env,
         });
         const pre = preflightLine(s);
-        out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min.${pre ? `\n${pre}` : ''}\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
+        if (s.step === 'queued') {
+          out(
+            `${s.id} queued: every watch.max_open slot is taken. It fires by itself when one frees: kharos then creates and runs it from a headless Claude Code in auto mode, a paid action with nobody present, and a follower process follows it.${pre ? `\n${pre}` : ''}\nkharos list shows its place; /kharos:close ${s.id} cancels it. Do not call RemoteTrigger for it now.`,
+          );
+          return 0;
+        }
+        out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min${s.no_push ? ', no push asked' : ''}.${pre ? `\n${pre}` : ''}\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
         return 0;
       }
       case 'action':
@@ -199,6 +208,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         return 0;
       case 'close':
         out(cmd.close(paths, need(args, 0, 'session id'), now, ghForge(realGh(env))));
+        // A slot may be free now for a queued launch.
+        kickQueue(paths, now, env);
+        return 0;
+      case 'dispatch':
+        // Started detached by kharos itself when a queued launch fits in a free slot.
+        out((await dispatchQueued(paths, { env })).join('\n') || 'dispatch: nothing to fire');
         return 0;
       case 'environments':
         addIntent(paths, { kind: 'environments', claude_session: flag(args, 'session') ?? '', account: readAuthStatus(env)?.account ?? null, repo: flag(args, 'repo') ?? null }, now);
@@ -316,6 +331,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'pass-end': {
         const report = await deliver({ paths, env, now, platform: process.platform, inHook: false });
         const line = passEnd(paths, { watcher: flag(args, 'watcher') ?? null, now });
+        kickQueue(paths, now, env);
         const extraLine = deliveryLine(report);
         out(extraLine ? `${line}; ${extraLine}` : line);
         return 0;
@@ -331,6 +347,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           env,
         });
         out(JSON.stringify(o));
+        // Printed to the agent, which ends with its report: the alerts in it are handed on.
+        acknowledge(paths, o, 'agent', Date.now());
         return 0;
       }
       case 'followers':
@@ -445,6 +463,7 @@ const HOOKS: Record<string, (ctx: Ctx, input: HookInput) => Record<string, unkno
   'post-tool-use': postToolUse,
   'post-tool-use-failure': postToolUseFailure,
   'session-start': sessionStart,
+  stop,
 };
 
 /**
@@ -479,6 +498,7 @@ export async function runHook(event: string, ctx: Ctx, stdin: () => string = rea
     if (budget !== undefined && readOutbox(ctx.paths).length) {
       await deliver({ paths: ctx.paths, env: ctx.env, now: ctx.now, platform: process.platform, inHook: true, deadline: Date.now() + (ctx.deliveryBudgetMs ?? budget) });
     }
+    if (KICKS_QUEUE.has(event)) kick(ctx);
   } catch (err) {
     try {
       appendLine(`${ctx.paths.state}/hook-errors.log`, `${new Date(ctx.now).toISOString()} ${event}: ${(err as Error).stack ?? String(err)}`);

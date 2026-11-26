@@ -25,6 +25,9 @@ import { loadSetups, saveEnvironments, setupsFor, takeIntent } from './state.ts'
 import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
 import { health, isActiveWatcher } from './watch.ts';
+import { rearmFollowers, ROLE_ENV, type Spawner } from './follow.ts';
+import { kickQueue } from './queue.ts';
+import { nextCall } from './commands.ts';
 
 export interface HookInput {
   hook_event_name: string;
@@ -42,6 +45,8 @@ export interface Ctx {
   deliveryBudgetMs?: number;
   /** Test seam: who owns a repository, for the access fix. Defaults to gh. */
   ownerType?: (repo: string) => OwnerType;
+  /** Test seam: how the Stop hook starts a follower process. */
+  spawner?: Spawner;
 }
 
 export type HookOutput = Record<string, unknown> | null;
@@ -130,6 +135,7 @@ export function preToolUse(ctx: Ctx, input: HookInput): HookOutput {
       if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return WATCHER_DENIED(action);
       const s = reg.sessions[launch];
       if (!s) return deny(`kharos: there is no prepared launch ${launch}. Run /kharos:run again.`);
+      if (s.step === 'queued') return deny(`kharos: launch ${nextCall(s)}`);
       if (s.step !== 'prepared') return deny(`kharos: launch ${launch} is past creation (step ${s.step}); do not create it again.`);
       let body: unknown;
       try {
@@ -387,4 +393,29 @@ export function sessionStart(ctx: Ctx, input: HookInput): HookOutput {
   void input;
   const h = health(ctx.paths, ctx.now);
   return h.ok ? null : { systemMessage: h.line };
+}
+
+/**
+ * At every turn end: an open session that no follower reads gets a follower process of its own, which
+ * goes on after this Claude Code exits. Nothing happens in kharos's own sessions (a reader, a follower
+ * process, a queued launch's fire, the watcher), and nothing reaches the network unless a follower is
+ * missing; the hook never holds the turn.
+ */
+export function stop(ctx: Ctx, input: HookInput): HookOutput {
+  if (ctx.env[ROLE_ENV]) return null;
+  if (isActiveWatcher(ctx.paths, input.session_id, ctx.now)) return null;
+  const r = rearmFollowers(ctx.paths, ctx.now, ctx.env, ctx.spawner);
+  return r.lines.length ? { systemMessage: r.lines.join('\n') } : null;
+}
+
+/** The hooks after which a queued launch may fit in a slot that just freed: a read, and a turn end. */
+export const KICKS_QUEUE: ReadonlySet<string> = new Set(['post-tool-use', 'stop']);
+
+/** Starts the dispatcher of queued launches when one fits in a free slot; a hook never fails on it. */
+export function kick(ctx: Ctx): void {
+  try {
+    kickQueue(ctx.paths, ctx.now, ctx.env, ctx.spawner);
+  } catch {
+    // the next hook or command tries again
+  }
 }

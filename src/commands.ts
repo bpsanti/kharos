@@ -6,8 +6,8 @@ import { claudeBin } from './account.ts';
 import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError, type PermissionChoice } from './config.ts';
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
-import { followerMayBeStarting, liveFollowers } from './lease.ts';
-import { activeCount, findSession, isFollowed, loadRegistry, logPath, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
+import { activeCount, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { readStoredEvents, storedLogView } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent, loadWatch } from './state.ts';
@@ -24,6 +24,7 @@ export function minutes(ms: number): string {
 function stateLabel(s: Session): string {
   if (s.step === 'closed') return 'closed';
   if (s.step === 'refused') return 'refused';
+  if (s.step === 'queued') return 'queued';
   if (s.step === 'prepared' || s.step === 'routine_created' || s.step === 'firing') return `launch ${s.step}`;
   return s.state.replace(/_/g, ' ');
 }
@@ -45,15 +46,59 @@ export function watcherLine(paths: Paths, now: number): string {
   return `watcher: heartbeat ${minutes(ago)} ago (every ${every} min)${stale ? '. It looks stopped: start /loop ' + every + 'm /kharos:watch again.' : ''}`;
 }
 
-/** Who reads the open sessions now: live followers, and the open sessions that nobody follows. */
+function seconds(ms: number): string {
+  return ms < 120_000 ? `${Math.max(0, Math.round(ms / 1000))} s` : minutes(ms);
+}
+
+function whoFollows(f: FollowerInfo): string {
+  return f.kind === 'shell' ? `process ${f.pid}` : f.kind === 'agent' ? 'agent' : `pid ${f.pid}`;
+}
+
+/** A follower of an open session whose heartbeat stopped: its process is stuck, or it ended without handing over. */
+export interface FollowerProblem {
+  id: string;
+  state: 'stale' | 'gone';
+  detail: string;
+  fix: string;
+}
+
+/** The open sessions' followers whose heartbeat is older than LEASE_STALE_MS. */
+export function followerProblems(paths: Paths, now: number): FollowerProblem[] {
+  const open = new Set(Object.values(loadRegistry(paths).sessions).filter(isFollowed).map((s) => s.id));
+  return followerReport(paths, now)
+    .filter((f): f is FollowerInfo & { state: 'stale' | 'gone' } => open.has(f.id) && (f.state === 'stale' || f.state === 'gone'))
+    .map((f) => {
+      const ago = minutes(now - Date.parse(f.beat));
+      return f.state === 'stale'
+        ? {
+            id: f.id,
+            state: f.state,
+            detail: `the follower of ${f.id} (${whoFollows(f)}) has not beaten for ${ago} while its process still runs: it looks stuck`,
+            fix: `Stop it (kill ${f.pid}); the next turn end of a Claude Code session with kharos starts another, or kharos follow ${f.id} --detach does now.`,
+          }
+        : {
+            id: f.id,
+            state: f.state,
+            detail: `the follower of ${f.id} (${whoFollows(f)}) stopped ${ago} ago without handing over: nobody reads the session`,
+            fix: `The next turn end of a Claude Code session with kharos starts another; /kharos:follow ${f.id}, or kharos follow ${f.id} --detach, does now.`,
+          };
+    });
+}
+
+/** Who reads the open sessions now, each with its heartbeat; the followers that look stuck or stopped; and the open sessions that nobody follows. */
 export function followerLines(paths: Paths, now: number): string[] {
   const sessions = Object.values(loadRegistry(paths).sessions)
     .filter(isFollowed)
     .sort((a, b) => a.id.localeCompare(b.id));
-  const live = liveFollowers(paths, now);
+  const open = new Set(sessions.map((s) => s.id));
+  const report = followerReport(paths, now).filter((f) => open.has(f.id));
+  const live = new Set(report.filter((f) => f.state === 'live' || f.state === 'handover').map((f) => f.id));
   const lines: string[] = [];
-  const followed = sessions.filter((s) => live.has(s.id)).map((s) => s.id);
+  const followed = report
+    .filter((f) => live.has(f.id))
+    .map((f) => (f.state === 'handover' ? `${f.id} (starting again)` : `${f.id} (${whoFollows(f)}, heartbeat ${seconds(now - Date.parse(f.beat))} ago)`));
   if (followed.length) lines.push(`followers: ${followed.join(', ')}`);
+  for (const p of followerProblems(paths, now)) lines.push(`follower heartbeat ${p.state === 'stale' ? 'stale' : 'stopped'}: ${p.detail}. ${p.fix}`);
   const w = loadWatch(paths);
   const watcherLive = w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
   const nobody = sessions.filter((s) => !live.has(s.id) && !followerMayBeStarting(s, now)).map((s) => s.id);
@@ -70,6 +115,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   if (lines.length === 0) lines.push(opts.all ? 'no sessions yet' : 'no open sessions (--all shows closed ones)');
   const used = activeCount(reg);
   if (used) lines.push(`slots: ${used} of watch.max_open ${watchConfig(paths).max_open} in use: ${slotHolders(reg, opts.now)}`);
+  lines.push(...queueLines(paths, opts.now));
   lines.push(...followerLines(paths, opts.now));
   lines.push(watcherLine(paths, opts.now));
   const lost = loadUndelivered(paths);
@@ -82,7 +128,7 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
 export function show(paths: Paths, ref: string): string {
   const s = need(paths, ref);
   const lines = [
-    `${s.id} ${stateLabel(s)}  ${s.profile} (${repoSlug(s.repo)}@${s.revision})  ${s.model}  deadline ${s.deadline_min} min`,
+    `${s.id} ${stateLabel(s)}  ${s.profile} (${repoSlug(s.repo)}@${s.revision})  ${s.model}  deadline ${s.deadline_min} min${s.no_push ? '  no push asked' : ''}`,
     s.url ?? (s.trigger_id ? routineUrl(s.trigger_id) : 'no link yet'),
   ];
   if (s.error) lines.push(`error: ${s.error}`);
@@ -100,10 +146,38 @@ function need(paths: Paths, ref: string): Session {
   return s;
 }
 
-/** What the model must call next to finish or check a launch that stopped midway. */
+/**
+ * What a person must call next to finish or check a launch that stopped midway. A queued launch takes a
+ * free slot, if one is free, and otherwise stays in the queue. A launch the person goes on with leaves the
+ * queue: the dispatcher no longer fires or retries it.
+ */
 export function resume(paths: Paths, ref: string): string {
-  const s = need(paths, ref);
+  const id = need(paths, ref).id;
+  const max = watchConfig(paths).max_open;
+  return updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id] as Session;
+    if (s.step === 'queued') {
+      if (activeCount(reg) >= max) {
+        if (s.queue && leftToPerson(s)) s.queue = { ...s.queue, tries: 0, blocked: null, next_try_at: null };
+        const place = queuedLaunches(Object.values(reg.sessions)).findIndex((x) => x.id === id) + 1;
+        return `${id} is still queued (${place} in line): every watch.max_open slot is taken (${slotHolders(reg, Date.now())}). It fires by itself when one frees; /kharos:close ${id} cancels it.`;
+      }
+      s.step = 'prepared';
+      delete s.queue;
+      return `${id}: a slot is free. Call RemoteTrigger with action "create" and body {"kharos_launch":"${id}"}.`;
+    }
+    delete s.queue;
+    return nextCall(s);
+  });
+}
+
+/** The RemoteTrigger call that finishes or checks a launch that stopped midway, as its step says. */
+export function nextCall(s: Session): string {
   switch (s.step) {
+    case 'queued':
+      return leftToPerson(s)
+        ? `${s.id} waits for you: its queued fires did not go through (${s.queue?.blocked ?? 'no detail'}), and it no longer fires by itself. /kharos:run --resume ${s.id} fires it with you present, or puts it back in line while every slot is taken.`
+        : `${s.id} is queued for a free slot, and kharos creates it when one frees; /kharos:run --resume ${s.id} takes a slot now if one is free.`;
     case 'prepared':
       return `${s.id}: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`;
     case 'routine_created':
@@ -274,6 +348,12 @@ export function close(paths: Paths, ref: string, now: number, forge: Forge | nul
     cur.closed_at = new Date(now).toISOString();
     cur.notice = null;
   });
+  if (s.step === 'queued') {
+    const lines = [`${s.id} was queued, and is cancelled: no routine was created and nothing was spent.`];
+    const side = closeSideBranch(paths, s, forge, now);
+    if (side) lines.push(`${side[0]?.toUpperCase()}${side.slice(1)}.`);
+    return lines.join('\n');
+  }
   const lines = [`${s.id} is no longer followed.`];
   if (s.state !== 'finished' && s.state !== 'failed' && s.step === 'open') {
     lines.push(`The cloud session itself was not stopped (the tool has no stop action): ask it to stop with /kharos:send ${s.id}, or stop it at ${s.url}`);
@@ -326,4 +406,24 @@ export function writeProfile(paths: Paths, input: SetupInput): string {
   if (input.makeDefault || config.default_profile === null) config.default_profile = input.name;
   saveConfig(paths, config);
   return `${prev ? 'updated' : 'wrote'} profile ${input.name}: ${repoSlug(profile.repo)}@${profile.revision}, ${profile.environment}, ${profile.model}, deadline ${profile.deadline_min} min${config.default_profile === input.name ? ' (default)' : ''}\nconfig: ${paths.config}`;
+}
+
+/** The queued launches in line, for `kharos list` and the doctor; an empty list when there are none. */
+export function queueLines(paths: Paths, now: number): string[] {
+  const sessions = Object.values(loadRegistry(paths).sessions);
+  const queued = queuedLaunches(sessions);
+  const waiting = sessions.filter((s) => s.step === 'queued' && leftToPerson(s)).sort((a, b) => a.id.localeCompare(b.id));
+  const stalled = sessions.filter((s) => s.queue && s.step === 'routine_created' && s.queue.blocked);
+  if (queued.length === 0 && waiting.length === 0 && stalled.length === 0) return [];
+  const lines: string[] = [];
+  if (queued.length) {
+    const rows = queued.map((s, i) => {
+      const since = Math.max(0, Math.round((now - Date.parse(s.queue?.queued_at ?? s.created_at)) / 60_000));
+      return `${s.id} (${i + 1}${['st', 'nd', 'rd'][i] ?? 'th'} in line, queued ${since} min ago${s.queue?.blocked ? `; not fired: ${s.queue.blocked}` : ''})`;
+    });
+    lines.push(`queue: ${rows.join(', ')}. Each fires by itself when a slot frees, a paid action with nobody present; /kharos:close <id> cancels one.`);
+  }
+  for (const s of waiting) lines.push(`queue: ${s.id} waits for you, not fired: ${s.queue?.blocked}; it no longer fires by itself. /kharos:run --resume ${s.id} fires it with you present, or puts it back in line while every slot is taken; /kharos:close ${s.id} cancels it.`);
+  for (const s of stalled) lines.push(`queue: ${s.id} was created but not fired: ${s.queue?.blocked}; /kharos:run --resume ${s.id} fires it once, /kharos:close ${s.id} cancels it.`);
+  return lines;
 }
