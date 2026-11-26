@@ -12,7 +12,8 @@ It owns exactly one thing: the launch-and-follow loop of a cloud session, from t
 
 kharos works only through the `RemoteTrigger` tool and the unmodified `claude` binary.
 It never reads, stores, or relays a claude.ai login or token, and it never calls an undocumented endpoint.
-When no official surface can do something, kharos says so and does not build a workaround; that is why it does not answer a cloud permission prompt.
+When no official surface can do something, kharos says so and does not build a workaround; that is why, by default, it does not answer a cloud permission prompt.
+The one exception is the opt-in permission hook, a documented `PermissionRequest` hook that runs inside the session from the repository's own settings.
 Formats the service does not document are isolated behind recorded fixtures, so a change in them shows as `invisible`, never as `running` or `finished`.
 
 ### One fire, by a person
@@ -42,13 +43,15 @@ No model reads a session's text by default; a model-written digest of a finished
 ### The person decides
 
 kharos alerts; it does not decide for the person.
-It never answers a permission prompt or a session's question, not even from answers written in advance, and it never merges or deletes a routine or a session.
+By default it never answers a permission prompt, it never answers a session's question, not even from answers written in advance, and it never merges or deletes a routine or a session.
+The only exception is the permission hook: opt-in, off by default, installed per repository through a diff the person approved, and deciding only in cloud sessions.
+It allows a call only when it is one simple Bash command that matches a rule the person approved: an allow pattern, or an organization ask rule the person chose to mirror, which kharos offers only when the organization has not disabled bypass mode and the person confirms.
+It denies every other call in a cloud session with a message the agent can act on, naming the allowed forms when a rule names the program, and logs every decision.
+Accepted direction, not built yet: its rules may grow from the person's own clicks on the session page: kharos proposes that exact command as a diff and adds it only after the person approves it.
+Rules stay with the repository they were approved for; kharos never offers one repository's rule to another.
 It changes a repository only with the person's explicit yes: a settings diff they approved, which it never commits or pushes, or the initial commit an empty repository needs.
 Accepted direction, not built yet: when a session is silent, looping, or past its deadline, the watcher may send it one fixed nudge per notice (push the work, then end with a mark), says so in the event, and a profile can turn it off.
 In that same direction, and only when a profile opts in (off by default), the nudge may tell a session waiting on its own question to pick the safest option and record which one and why in its end mark; kharos still supplies no answer.
-Accepted direction, not built yet: an opt-in, per-repository, cloud-only permission hook, off by default, that answers prompts only from narrow rules the person approved, refuses the rest with a message the agent can act on, and logs every approval.
-Its rules may grow from the person's own clicks on the session page: kharos proposes that exact command as a diff and adds it only after the person approves it.
-Rules stay with the repository they were approved for; kharos never offers one repository's rule to another.
 
 ### One core, any output
 
