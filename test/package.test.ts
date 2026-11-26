@@ -27,6 +27,7 @@ test('package: the packed tarball installs a working `kharos` command', () => {
     const hook = 'cloud/kharos-permission.mjs';
     assert.equal(fs.readFileSync(path.join(installed, 'dist', hook), 'utf8'), fs.readFileSync(path.join(ROOT, hook), 'utf8'));
 
+    assert.ok(fs.existsSync(path.join(installed, 'agents', 'follow.md')), 'the follower agent ships with the skills that start it');
     assert.ok(!fs.existsSync(path.join(installed, 'src')), 'sources are not shipped');
     assert.ok(!fs.existsSync(path.join(installed, 'test')), 'tests are not shipped');
   } finally {
