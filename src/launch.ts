@@ -15,8 +15,8 @@ import { confirmationState, describeConfirmation, loadConfirmation } from './org
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
 import { SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
 import { EMPTY_CHANGE, readRemoteHookFiles, type RemoteHookFiles } from './permissions.ts';
-import { applicable, buildPreflight, hookFilesOf, readHistory, selectFiles } from './preflight.ts';
-import { loadRepos, readRemoteHeads, type RemoteHeads } from './repo.ts';
+import { applicable, buildPreflight, hookFilesOf, readHistory, selectFiles, snapshotAsk } from './preflight.ts';
+import { loadRepos, readRemoteHeads, recentRepoRules, recordRepoRules, type RemoteHeads } from './repo.ts';
 
 export interface PrepareOptions {
   instruction: string;
@@ -124,7 +124,8 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
     hookRules = found.status === 'found' ? hookSnapshot(found.files) : null;
   }
   const forge = opts.forge ?? ghForge(realGh(env));
-  const auto = config.preflight_auto && policy ? planAuto(paths, config, profile, instruction, policy, forge) : null;
+  const auto = config.preflight_auto && policy ? planAuto(paths, config, profile, instruction, policy, forge, opts.now) : null;
+  const repoAsk = recentRepoRules(paths, profile.repo, profile.revision, opts.now);
 
   const prepared = updateRegistry(paths, (reg) => {
     if (activeCount(reg) >= config.watch.max_open) {
@@ -176,6 +177,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
       closed_at: null,
       error: null,
       permission_hook: hookRules,
+      repo_ask: repoAsk,
       ...(opts.no_push ? { no_push: true } : {}),
       preflight: auto === null ? null : 'skipped' in auto ? { status: 'skipped', reason: auto.skipped } : { status: 'creating', branch: `kharos/${id}`, base: profile.revision, applied: auto.patterns },
     };
@@ -220,13 +222,15 @@ type AutoPlan = { patterns: string[]; mirrored: string[]; unblock: boolean; note
  * the same plan and filters as `kharos permissions hook diff`, with no broad pattern of its own; the
  * organization's ask rules are mirrored while a remembered mirror confirmation matches the managed settings.
  */
-function planAuto(paths: Paths, config: Config, profile: Profile, instruction: string, policy: ManagedPolicy, forge: Forge): AutoPlan {
+function planAuto(paths: Paths, config: Config, profile: Profile, instruction: string, policy: ManagedPolicy, forge: Forge, now: number): AutoPlan {
   if (!config.permission_hook) return { skipped: 'preflight_auto is on, but permission_hook is off, so nothing was applied' };
   const blocked = hooksBlocked(policy);
   if (blocked) return { skipped: `${blocked}; nothing was applied` };
   const read = forge.snapshot(profile.repo, profile.revision, selectFiles);
   if (!read.ok) return { skipped: `${repoSlug(profile.repo)}@${profile.revision} could not be read with gh (${read.error}); nothing was applied` };
   const snap = read.snapshot;
+  const ask = snapshotAsk(snap);
+  if (ask) recordRepoRules(paths, profile.repo, profile.revision, ask, now);
   if (!snap.base) return { skipped: `${snap.label} has no commit to start a side branch from; nothing was applied` };
   const unreadable = [SETTINGS_PATH, HOOK_SCRIPT_PATH, HOOK_RULES_PATH].filter((p) => snap.unreadable.has(p));
   if (unreadable.length) return { skipped: `${unreadable.join(', ')} could not be read as text; nothing was applied` };

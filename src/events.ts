@@ -7,6 +7,7 @@ import type { NoticeKind, Verdict } from './classify.ts';
 import { repoSlug } from './config.ts';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { Paths } from './paths.ts';
+import type { PermissionCategory } from './permission-request.ts';
 import type { Session } from './registry.ts';
 
 export const EVENT_SCHEMA = 'kharos.event.v1';
@@ -39,8 +40,8 @@ export interface KharosEvent {
   summary?: string;
   /** Only on session.finished of a launch reported to a dedicated firstmate task. */
   sheet?: string;
-  /** Only on session.waiting_permission: the tool the open prompt is for. */
-  permission?: { tool: string };
+  /** Only on session.waiting_permission: the tool the open prompt is for, and the fixed category of why it asks. */
+  permission?: { tool: string; category: PermissionCategory };
 }
 
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
@@ -80,7 +81,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
   if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
-  if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool };
+  if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool, category: s.permission.category ?? 'unknown' };
   return ev;
 }
 

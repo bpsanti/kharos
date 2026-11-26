@@ -28,7 +28,8 @@ import {
   type HookState,
 } from './permission-hook.ts';
 import type { Paths } from './paths.ts';
-import { buildPreflight, formatPreflight, localSnapshot, readHistory, selectFiles, type FormatOptions } from './preflight.ts';
+import { buildPreflight, formatPreflight, localSnapshot, readHistory, selectFiles, snapshotAsk, type FormatOptions } from './preflight.ts';
+import { recordRepoRules } from './repo.ts';
 import {
   applyProfile,
   assess,
@@ -406,6 +407,7 @@ export interface PreflightRequest {
   /** The launch instruction, if known: a program it names comes first. */
   instruction: string;
   forge?: Forge;
+  now?: number;
 }
 
 function loaded(paths: Paths): Config {
@@ -451,8 +453,12 @@ export function preflight(paths: Paths, req: PreflightRequest, env: NodeJS.Proce
     const slug = repoSlug(profile.repo);
     repo = profile.repo;
     const read = (req.forge ?? ghForge(realGh(env))).snapshot(profile.repo, profile.revision, selectFiles);
-    if (read.ok) snapshot = read.snapshot;
-    else {
+    if (read.ok) {
+      snapshot = read.snapshot;
+      // The launch that follows tells a prompt of these ask rules from the rest.
+      const ask = snapshotAsk(snapshot);
+      if (ask) recordRepoRules(paths, profile.repo, profile.revision, ask, req.now ?? Date.now());
+    } else {
       snapshot = { label: `${slug}@${profile.revision}`, paths: [], files: new Map(), unreadable: new Set(), base: null };
       notes.push(`${slug}@${profile.revision} could not be read with gh (${read.error}): only the ask rules of the organization and earlier sessions are used`);
     }

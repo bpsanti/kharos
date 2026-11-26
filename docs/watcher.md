@@ -104,15 +104,15 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "class":"needs_you","session":"k-0007","title":"fix the panel limit","state":"waiting_permission",
  "previous_state":"running","since":"2026-11-25T18:40:00Z","at":"2026-11-25T18:44:10Z",
  "url":"https://claude.ai/code/session_...","repo":"owner/repo","pr":null,"branch":null,
- "reason":"permission request for Bash with no answer for 4 min","open_notice":null,
- "permission":{"tool":"Bash"}}
+ "reason":"permission request for Bash (an ask rule of the organization) with no answer for 4 min","open_notice":null,
+ "permission":{"tool":"Bash","category":"org_ask_rule"}}
 ```
 
 - `class` is `progress` (`session.opened`, `session.back`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
 - `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.
-- `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for.
+- `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for, with the fixed text of its category.
   Only `session.waiting_answer` carries `question`, and only `session.finished` carries `summary`, both cleaned of control characters and cut.
-- Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for.
+- Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for, and a fixed `category` of why it asks ([permissions.md](permissions.md#why-a-prompt-asks)).
   The tool's input (the command, the file, the URL, the query) is never copied into an event; the person reads it on the session's page.
 - `url` is the direct link to the session, `https://claude.ai/code/session_<id>`.
 - An event is emitted when a notice opens, again every `renotify_min` while it lasts, and `session.back` once when the session returns to normal.

@@ -159,10 +159,10 @@ test('wait: a permission prompt returns the tool and the link, never the command
   const o = await c.run();
   assert.equal(o.changed, true);
   assert.equal(o.state, 'waiting_permission');
-  assert.deepEqual(o.permission, { tool: 'Bash' });
+  assert.deepEqual(o.permission, { tool: 'Bash', category: 'unknown' });
   assert.equal(o.url, 'https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA');
   assert.doesNotMatch(JSON.stringify(o), /kharos-probe|ask\.txt/);
-  assert.match(o.report, /^k-0001 waits on a permission prompt for Bash\. Only a person answers it, on the session page: https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
+  assert.match(o.report, /^k-0001 waits on a permission prompt for Bash, from a reason kharos cannot tell\. Only a person answers it, on the session page: https:\/\/claude\.ai\/code\/session_01TESTSESSIONAAAAAAAAAAA$/m);
   assert.ok(o.report.includes(`with this prompt: The kharos command is: ${KHAROS}. The session id is k-0001. The key is '${o.key}'.`));
   // The same prompt, still open, does not wake the next follower.
   const still = await clocked(sb, c.now(), reader(sb, () => page), { since: o.key, maxMs: 120_000 }).run();

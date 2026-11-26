@@ -103,6 +103,11 @@ export interface Session {
    * on; null when the hook would not answer there. The watcher attributes the hook's decisions with them.
    */
   permission_hook?: HookRules | null;
+  /**
+   * The ask rules of the repository's .claude/settings.json on the launch branch, as the launch preflight
+   * read them; null or absent when unknown. They tell a prompt of the repository's rules from the rest.
+   */
+  repo_ask?: string[] | null;
   /** The launch left out the footer line that asks the session to push work in progress (`--no-push`). */
   no_push?: boolean;
   /** What automatic permission preflight did at launch; absent or null when it was off. */

@@ -17,6 +17,7 @@ import { findSession, isFollowed, loadRegistry, TERMINAL_STATES, updateRegistry,
 import { updateWatch } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { currentAccount, readsFor, type Read } from './watch.ts';
+import { categoryText, type PermissionCategory } from './permission-request.ts';
 
 /** The plugin's root folder, which holds `scripts/kharos` and is loaded into each reader. */
 export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,7 +99,7 @@ export interface WaitOutcome {
   notice: string | null;
   url: string | null;
   question?: string;
-  permission?: { tool: string };
+  permission?: { tool: string; category: PermissionCategory };
   result?: { status: string | null; pr: string | null; branch: string | null; summary: string | null };
   error?: string;
   waited_s: number;
@@ -156,7 +157,7 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
   }
   if (o.permission) {
     return [
-      `${s.id} waits on a permission prompt for ${o.permission.tool}. Only a person answers it, on the session page: ${o.url ?? 'no link'}`,
+      `${s.id} waits on a permission prompt for ${o.permission.tool}, from ${categoryText(o.permission.category)}. Only a person answers it, on the session page: ${o.url ?? 'no link'}`,
       ...again,
     ].join('\n');
   }
@@ -178,8 +179,8 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
   };
   if (extra.error) o.error = extra.error;
   if (changed && s.notice?.event === 'session.waiting_answer' && s.result.question) o.question = clean(s.result.question, 300);
-  // The tool's name only: what it would run stays on the session page.
-  if (changed && s.notice?.event === 'session.waiting_permission' && s.permission) o.permission = { tool: clean(s.permission.tool, 80) };
+  // The tool's name and a fixed category only: what it would run stays on the session page.
+  if (changed && s.notice?.event === 'session.waiting_permission' && s.permission) o.permission = { tool: clean(s.permission.tool, 80), category: s.permission.category ?? 'unknown' };
   if (key.startsWith('end:')) {
     const r = s.result;
     o.result = {

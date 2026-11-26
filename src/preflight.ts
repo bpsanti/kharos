@@ -355,6 +355,17 @@ export function readHistory(paths: Paths, repo: string, exclude: string | null =
   return { prompts, sessions };
 }
 
+/** The ask rules of the snapshot's .claude/settings.json (none when it has no such file), or null when it cannot be read. */
+export function snapshotAsk(snapshot: RepoSnapshot): string[] | null {
+  if (snapshot.unreadable.has(SETTINGS_PATH)) return null;
+  try {
+    return readRules(parseSettings(snapshot.files.get(SETTINGS_PATH) ?? null)).ask;
+  } catch (err) {
+    if (err instanceof SettingsError) return null;
+    throw err;
+  }
+}
+
 function bashAsk(rule: string): boolean {
   return rule === 'Bash' || /^Bash\(.+\)$/s.test(rule);
 }

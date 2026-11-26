@@ -9,6 +9,8 @@ import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
 import type { Session } from './registry.ts';
+import { readManagedPolicy } from './managed-policy.ts';
+import type { AskRules } from './permission-request.ts';
 
 export interface TrackCtx {
   paths: Paths;
@@ -99,6 +101,12 @@ export function failedRead(ctx: TrackCtx, s: Session, why: string): KharosEvent[
   return settle(ctx, s, { state: 'invisible', notice: 'invisible', reason: `${s.read_failures} reads in a row failed (${why})` });
 }
 
+/** The ask rules a prompt of this session is compared with: the organization's on this machine, the repository's from the launch. */
+export function askRulesOf(ctx: TrackCtx, s: Session): AskRules {
+  const policy = readManagedPolicy(ctx.env);
+  return { org: policy.status === 'found' ? policy.ask : null, repo: s.repo_ask ?? null };
+}
+
 export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header: LogHeader | null, fromCursor: boolean, page: LogPage): string {
   const events = merged.all;
   if (page.events.length === 0 && s.last_event_at) {
@@ -123,7 +131,7 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
   const decided = recordHookDecisions(ctx.paths, s, merged.added);
 
   const watch = watchConfig(ctx.paths);
-  const verdict = classify({ events, seenStart: s.seen_start === true, createdAt: Date.parse(s.created_at), deadlineMin: s.deadline_min, now: ctx.now, watch });
+  const verdict = classify({ events, seenStart: s.seen_start === true, createdAt: Date.parse(s.created_at), deadlineMin: s.deadline_min, now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
   // An older page says nothing new about an open prompt, so it is not the next read that confirms one.
   const emitted = fromCursor && hookMayAnswer(s, verdict) ? [] : settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';

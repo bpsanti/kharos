@@ -50,6 +50,23 @@ A repository `PermissionRequest` hook answered them with no person asked: it all
 No setting in the repository can allow everything: broad rules are dropped and no bypass mode exists.
 What helps is narrow allow rules for the commands the work needs, against repository ask rules and the classifier, and the opt-in permission hook, against ask rules of any level.
 
+## Why a prompt asks
+
+The run log says that a prompt waits, for which tool and with which input, but not why.
+kharos tells why on the machine that reads the log, and only a fixed category goes into the alert, next to the tool name; the input never leaves the machine.
+
+| Category | Text in the alert | How kharos tells it |
+|---|---|---|
+| `org_ask_rule` | an ask rule of the organization | an ask rule of the local copy of the organization's managed settings covers the call |
+| `repo_ask_rule` | an ask rule of the repository | an ask rule of the launch branch's `.claude/settings.json`, as the launch preflight read it within the last day, covers the call |
+| `classifier_block` | the auto mode classifier, after it blocked calls in a row | calls right before the prompt came back blocked by the auto mode classifier |
+| `claude_code_check` | a check of Claude Code itself that no rule can allow | the call holds text Claude Code cannot check (a substitution or expansion, quotes inside a flag name, an escaped blank, more than one line), or writes a file Claude Code protects (`.git/`, `.claude/settings*.json`, shell start-up files) |
+| `unknown` | a reason kharos cannot tell | none of the above, or a line the service cut before the command ended |
+
+They are tried in that order, as Claude Code resolves them: ask rules first, the organization's above the repository's.
+A Bash ask rule covers a call when it matches the whole command or one of its simple commands, past the variable assignments in front; a rule of another tool covers every call of that tool.
+The category is a reading of what kharos knows on this machine, not a reason Claude Code wrote: a rule added on the branch after the launch, or managed settings this machine has not fetched, show as another category.
+
 Not tested yet:
 
 - Whether allow rules wait for folder trust in a cloud session, as they do on a person's machine.

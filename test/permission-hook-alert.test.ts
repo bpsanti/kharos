@@ -174,7 +174,7 @@ test('hook alert: a follower is woken by a prompt the next read still finds open
   const o = await follow(sb, [pageAt(FIRST_OPEN)]);
   assert.equal(o.changed, true);
   assert.equal(o.state, 'waiting_permission');
-  assert.deepEqual(o.permission, { tool: 'Bash' });
+  assert.deepEqual(o.permission, { tool: 'Bash', category: 'unknown' });
   assert.equal(o.reads, 2);
   assert.equal(o.waited_s, 15);
 });
