@@ -13,7 +13,7 @@
 - `kharos log <id> [lines]` in a shell prints the events already stored for a session, with no model (`--cached` does the same anywhere), and `--full` prints each event's whole stored text instead of its start. `kharos show` names the session's last message and its time, which tells a turn closed on the session's own build from one that stopped.
 - `/kharos:result` says the last message is cut only when the message itself is, not when only the result line that repeats it is.
 - `/kharos:close <id> --ask-stop` sends the session a request to stop (start nothing new, commit and push what is worth keeping unless the launch was `--no-push`, end the turn) before it is released; when the request cannot be sent, the session stays followed. Without it, the output of `/kharos:close` on a running session says how to ask.
-- The deadline counts from the moment the cloud session opened, not from the preparation of the launch: the wait for an approval, a refused fire or a place in the queue no longer count. `session.overdue` is raised once per session, and not again at once when a message reopens a session past its deadline; such a session is then still told when it loops, goes silent or closes a turn without an end mark.
+- The deadline counts from the moment the cloud session opened, not from the preparation of the launch: the wait for an approval, a refused fire or a place in the queue no longer count. `session.overdue` is raised once per session, and not again at once when a message reopens a session past its deadline; such a session is then still told when it loops, goes silent or closes a turn without an end mark, also while the overdue notice is still open.
 
 ## 0.2.0
 

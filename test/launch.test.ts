@@ -499,6 +499,34 @@ test('launch: the deadline counts from the open of the session, not from the lau
   assert.equal(s.overdue_at ?? null, null);
 });
 
+test('launch: an open overdue notice gives way to a turn closed without an end mark, and overdue is not raised again', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.deadline_min = 30;
+  });
+  const line = (min: number, text: string) => `[${new Date(T0 + min * 60_000).toISOString()}] ${text}`;
+  const opened = [line(0.1, 'user: Fix the typo.'), line(0.2, 'init: model=claude-sonnet-5-5 cwd=/home/user'), line(39, 'tool_use Bash: {"command":"npm test"}')];
+  const read = (now: number, lines: string[]) => postToolUse(sb.ctx(T0 + now * 60_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, lines.join('\n'))));
+  read(40, opened);
+  let s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'overdue');
+  assert.equal(s.notice?.event, 'session.overdue');
+  // The overdue notice is still open; the turn then closes with no end mark and nothing to wake it.
+  const closed = [...opened, line(45, 'tool_result: ok'), line(49, 'assistant: Tests pass.'), line(50, 'result: success is_error=false turns=2 duration=600s')];
+  read(58, closed);
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'turn_closed');
+  assert.equal(s.notice?.event, 'session.quiet_unmarked');
+  // A message wakes it and it runs again: nobody is told of the deadline a second time.
+  read(70, [...closed, line(65, 'user: Also update the changelog.'), line(69, 'tool_use Edit: {"file_path":"CHANGELOG.md"}')]);
+  s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'running');
+  const raised = fs.readFileSync(sb.paths.events, 'utf8').trim().split('\n').map((l) => JSON.parse(l).event).filter((e) => e !== undefined);
+  assert.deepEqual(raised.filter((e: string) => e !== 'session.opened'), ['session.overdue', 'session.quiet_unmarked', 'session.back']);
+});
+
 test('close: --ask-stop sends a stop request before closing a running session, and changes nothing when the send fails', async () => {
   const sb = sandbox();
   const id = prepared(sb);

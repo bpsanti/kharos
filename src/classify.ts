@@ -42,8 +42,10 @@ export interface ClassifyInput {
   /** When the session started: the deadline and the slow-provisioning notice count from it. */
   startedAt: number;
   deadlineMin: number;
-  /** The deadline notice was raised already and is no longer open: the deadline passes once, so later checks apply. */
+  /** The deadline notice was raised already: the deadline passes once, so later checks apply. */
   overdueRaised?: boolean;
+  /** That notice is still open: it stays (and is repeated) while no later check has a notice to raise. */
+  overdueOpen?: boolean;
   now: number;
   watch: WatchConfig;
   /** The ask rules an open permission prompt is compared with, to tell why it asks; read only when one is open. */
@@ -198,10 +200,17 @@ export function classify(input: ClassifyInput): Verdict {
   // a turn that ended with an error: a warning, since a message can wake the session again
   if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
-  // past the deadline
+  // past the deadline: raised once; while that notice is open, a later notice replaces it
   const ageMin = (now - input.startedAt) / MIN;
-  if (!input.overdueRaised && ageMin > input.deadlineMin) return { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
+  const overdue: Verdict = { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
+  if (!input.overdueRaised && ageMin > input.deadlineMin) return overdue;
+  const later = afterDeadline(input, turn, last, idleMin);
+  return input.overdueOpen && later.notice === null ? overdue : later;
+}
 
+/** The checks below the deadline. */
+function afterDeadline(input: ClassifyInput, turn: readonly LogEvent[], last: LogEvent, idleMin: number): Verdict {
+  const { events, now, watch } = input;
   // the same failure over and over
   const run = sameErrorRun(turn);
   if (run >= watch.loop_failures) return { state: 'looping', notice: 'looping', reason: `${run} calls in a row failed with the same tool and the same error` };
