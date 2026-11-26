@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Headless launches stay followed: a headless Claude Code stops its background agents 10 minutes after its last turn, so there `/kharos:run` and `/kharos:follow` start a follower process of its own (`kharos follow <id>`, the follower's loop without a model), which outlives `claude -p` and feeds the outputs; `claude -p` ends right after the launch and says how to answer from a shell. `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`, when the person sets it, keeps the follower agent (`docs/follow.md`).
+- `kharos follow <id> [--detach]` follows a session from a shell or another orchestrator, one JSON line per change until it ends.
+- Right after a fire, `kharos list` and the session start no longer report the session as unfollowed while its follower starts.
 - A `KHAROS-QUESTION` or `KHAROS-DONE` stands when a repository's Stop hook answers right after it: the feedback of a hook, and a background task's notification, are text Claude Code writes as a `user` event, not a message from a person, so they no longer hide the mark.
 - `/kharos:setup` is one guided flow, once per Claude account: one list of everything a launch needs (account and plan, GitHub connection, repository access, cloud environment, commit identity, permission prompts, profile), in the order each depends on the one before, each with its state and the one action that fixes it, checked again after each fix; then a summary of at most six lines with the next action (`docs/setup.md`).
 - The cloud environment is picked by name from the account's environments, which the bundled `/schedule` skill lists with no routine needed; no `env_...` id is pasted by hand. The profile keeps the name (`environment_name`).

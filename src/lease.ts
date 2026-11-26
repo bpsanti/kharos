@@ -72,6 +72,16 @@ export function releaseLease(paths: Paths, id: string, pid = process.pid): void 
   });
 }
 
+/**
+ * A session fired less than this long ago may have its follower still starting: it is not reported as
+ * unfollowed yet, so nobody starts a second one.
+ */
+export const FOLLOWER_GRACE_MS = 60_000;
+
+export function followerMayBeStarting(s: { fired_at: string | null }, now: number): boolean {
+  return s.fired_at !== null && now - Date.parse(s.fired_at) < FOLLOWER_GRACE_MS;
+}
+
 /** The sessions a live follower reads now. */
 export function liveFollowers(paths: Paths, now: number): Set<string> {
   let names: string[];

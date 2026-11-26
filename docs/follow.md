@@ -66,6 +66,23 @@ The cloud session goes on, and the registry keeps the last state it read.
 After you open Claude Code again, the session start says which open sessions nobody follows, and `/kharos:follow` (or `/kharos:follow <id>`) starts a new follower for each.
 A new follower first reads the current state: a question asked or an end reached while nobody followed is reported at once.
 
+## Headless launches
+
+In a headless Claude Code, `CLAUDE_CODE_ENTRYPOINT` starts with `sdk` (`claude -p` says `sdk-cli`), and its background agents are stopped 10 minutes after its last turn.
+A follower agent started there would stop with them, and the cloud session would go on with nobody reading it; its report would also have nowhere to go, since `claude -p` takes no input.
+So in a headless Claude Code, `kharos followers` (the command behind the last step of `/kharos:run` and behind `/kharos:follow`) prints no agent prompt:
+
+1. It starts `kharos follow <id>` for each session, detached in a session of its own, so it outlives `claude -p` and its process group.
+2. That process runs the follower's loop without a model: `kharos wait` again and again, with the key it reached, until the session ends, it is closed, or three reads in a row fail.
+   It writes one JSON line per change to `logs/<id>.follower.log` in the state folder, the same line as `kharos wait`, and holds the follower lease, so `kharos list` and `kharos health` count it as following.
+3. Each read goes through the same hook as any read, so every change reaches the outputs: the desktop notification, `events.jsonl`, Slack, a command, or firstmate.
+4. `claude -p` ends right after the launch, with the lines that say where the follower writes and how to answer: `claude -p '/kharos:send <id> <answer>'` for a question, the session page for a permission prompt.
+
+A person who wants the report inside the headless run instead (in its `stream-json` output, say) starts it with `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`; kharos then starts the follower agent as in an interactive session, and `claude -p` stays running until the cloud session ends.
+kharos never sets that variable itself.
+
+`kharos follow <id>` runs the same loop in the foreground, for a shell script or another orchestrator; `kharos follow <id> --detach` starts it detached by hand.
+
 ## Limits
 
 - A change reaches you up to about a minute after it happens (the longest interval plus one read), and then only when your session takes its next turn.
@@ -74,7 +91,8 @@ A new follower first reads the current state: a question asked or an end reached
 - Permission prompts are as before: kharos alerts with the tool and the link, and a person answers on the session page (unless the opt-in permission hook answers it, see [permissions.md](permissions.md)).
   Where the branch had the hook at launch, the alert waits for a second read to find the same prompt open, so a prompt the hook resolves between reads wakes nobody ([watcher.md](watcher.md#states)).
 - The work comes back as a branch or a pull request, as with any cloud session, not as files changed in your checkout.
-- A follower lives as long as the Claude Code session that started it.
-  A headless `claude -p` launch stays running until its followers finish, that is until the cloud session ends; for unattended or many launches, the watcher fits better.
+- A follower agent lives as long as the Claude Code session that started it.
+  A headless Claude Code (`claude -p`, the Agent SDK) stops its background agents 10 minutes after its last turn (`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`), so there kharos starts no agent and follows each session with a process of its own (see [Headless launches](#headless-launches)).
+  For many launches with no terminal open, the watcher fits better.
 - In the `default` permission mode, the first `kharos wait` asks for approval in your session, because a plugin agent cannot carry its own permission mode; approve it for the session, or add an allow rule for `Bash(/bin/sh <plugin folder>/scripts/kharos wait:*)` (the folder changes when the plugin is updated).
-- Each open session has its own follower; `watch.max_open` (5 by default) still caps the open sessions.
+- Each open session has its own follower; `watch.max_open` still caps the open sessions.

@@ -36,9 +36,10 @@ import { deliver, deliveryLine } from './outputs/index.ts';
 import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
-import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
+import { detachFollower, followLoop, startFollowers } from './follow.ts';
+import { wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open', 'detach']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -133,6 +134,7 @@ const USAGE = `usage: kharos <command>
   permissions unblock [dir]   (the same as permissions hook diff --unblock [dir]; --no-unblock turns it off)
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
+  follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
@@ -327,8 +329,16 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         return 0;
       }
       case 'followers':
-        out(followersToStart(paths, args.positional[0] ?? null, now));
+        out(startFollowers(paths, args.positional[0] ?? null, now, env));
         return 0;
+      case 'follow': {
+        const id = need(args, 0, 'session id');
+        if (args.flags.detach === true) {
+          out(detachFollower(paths, id, now, env));
+          return 0;
+        }
+        return await followLoop(paths, { id, env, write: out });
+      }
       case 'health': {
         const h = health(paths, now);
         out(h.line);

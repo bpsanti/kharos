@@ -174,6 +174,7 @@ export function collectGarbage(paths: Paths, reg: Registry, now: number): void {
   for (const s of Object.values(reg.sessions)) {
     if (!s.closed_at || now - Date.parse(s.closed_at) < LOG_RETENTION_MS) continue;
     fs.rmSync(logPath(paths, s.id), { force: true });
+    fs.rmSync(path.join(paths.logs, `${s.id}.follower.log`), { force: true });
     fs.rmSync(bodyPath(paths, s.id), { force: true });
   }
 }

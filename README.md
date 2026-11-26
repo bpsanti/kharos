@@ -74,7 +74,7 @@ npm install -g kharos
 | `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits, the watcher and policy counts |
 | `/kharos:permissions [default\|standard\|hook\|preflight\|unblock] [folder]` | Shows the permission rules a repository gives its cloud sessions, writes narrow allow rules to its `.claude/settings.json`, or installs the opt-in permission hook, each after you approve the diff; lists the prompts a launch is likely to hit; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session, records it, and starts its follower in the background |
-| `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again |
+| `/kharos:follow [id]` | Starts a follower again for each open session nobody follows, after Claude Code was closed and opened again (a follower process of its own in a headless Claude Code) |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
@@ -120,6 +120,22 @@ Its report reaches your session like the result of any background subagent:
 
 After a report that is not the end, your session starts the follower again at once, and an answer you send does not wake it before the next real change.
 Closing Claude Code stops its followers; the cloud session goes on, and `/kharos:follow` picks the open sessions up again.
+
+### Headless launches
+
+A headless Claude Code (`claude -p "/kharos:run ..."`, or the Agent SDK) stops its background agents 10 minutes after its last turn, so a follower agent there would stop long before the session ends.
+There, `/kharos:run` and `/kharos:follow` start no agent: each session is followed by a process of its own, `kharos follow <id>`, the follower's loop without a model, which goes on after `claude -p` exits.
+`claude -p` then ends right after the launch, and says where the follower writes and how to answer.
+What it sees reaches your outputs (desktop notification, `events.jsonl`, Slack, a command, firstmate), and `kharos list` shows the state.
+Answer a question with `claude -p '/kharos:send <id> <answer>'`, and a permission prompt on the session page.
+To keep a follower agent inside the headless launch instead, start it with `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`: `claude -p` then stays running until the session ends.
+
+Two more things a headless launch needs:
+
+- The `run` step needs an approval that `--allowedTools` does not give: start `claude -p` with `--permission-mode auto`, or let `/kharos:setup` start the account's sessions in auto mode, so the classifier reviews the launch.
+- Give it an empty stdin (`< /dev/null`) when nothing is piped in, or `claude -p` waits for input before it starts.
+
+`kharos follow <id>` also runs in your own shell or from another orchestrator: it prints one JSON line per change, the same line as `kharos wait`, until the session ends.
 
 What to expect:
 

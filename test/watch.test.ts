@@ -194,8 +194,10 @@ test('health: fails with open sessions and a stale heartbeat, and the session st
   const sb = sandbox();
   assert.equal(health(sb.paths, T0).ok, true);
   openOne(sb);
-  assert.match(health(sb.paths, T0).line, /never ran/);
-  assert.match((sessionStart(sb.ctx(T0), { hook_event_name: 'SessionStart' }) as any).systemMessage, /watcher never ran/);
+  // Right after the fire, its follower may still be starting.
+  assert.equal(health(sb.paths, T0 + 30_000).ok, true);
+  assert.match(health(sb.paths, T0 + MIN).line, /never ran/);
+  assert.match((sessionStart(sb.ctx(T0 + MIN), { hook_event_name: 'SessionStart' }) as any).systemMessage, /watcher never ran/);
   due(sb.paths, { watcher: 'w', all: false, now: T0, env: sb.env, account });
   assert.equal(health(sb.paths, T0 + 20 * MIN).ok, true);
   assert.equal(sessionStart(sb.ctx(T0 + 20 * MIN), { hook_event_name: 'SessionStart' }), null);

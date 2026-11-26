@@ -6,7 +6,7 @@ import { claudeBin } from './account.ts';
 import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError, type PermissionChoice } from './config.ts';
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
-import { liveFollowers } from './lease.ts';
+import { followerMayBeStarting, liveFollowers } from './lease.ts';
 import { findSession, isFollowed, loadRegistry, routineUrl, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { addIntent, loadWatch } from './state.ts';
 import { readOutbox } from './events.ts';
@@ -44,17 +44,16 @@ export function watcherLine(paths: Paths, now: number): string {
 
 /** Who reads the open sessions now: live followers, and the open sessions that nobody follows. */
 export function followerLines(paths: Paths, now: number): string[] {
-  const open = Object.values(loadRegistry(paths).sessions)
+  const sessions = Object.values(loadRegistry(paths).sessions)
     .filter(isFollowed)
-    .map((s) => s.id)
-    .sort();
+    .sort((a, b) => a.id.localeCompare(b.id));
   const live = liveFollowers(paths, now);
   const lines: string[] = [];
-  const followed = open.filter((id) => live.has(id));
+  const followed = sessions.filter((s) => live.has(s.id)).map((s) => s.id);
   if (followed.length) lines.push(`followers: ${followed.join(', ')}`);
   const w = loadWatch(paths);
   const watcherLive = w.last_beat !== null && now - Date.parse(w.last_beat) <= 3 * (w.interval_min ?? 10) * 60_000;
-  const nobody = open.filter((id) => !live.has(id));
+  const nobody = sessions.filter((s) => !live.has(s.id) && !followerMayBeStarting(s, now)).map((s) => s.id);
   if (nobody.length && !watcherLive) lines.push(`no follower reads ${nobody.join(', ')}: type /kharos:follow to follow them from this Claude Code session.`);
   return lines;
 }
