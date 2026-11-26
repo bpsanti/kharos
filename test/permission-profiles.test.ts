@@ -39,8 +39,8 @@ test('permission profiles: standard allows the build, test and dev commands the 
     'Bash(cargo clippy *)',
     'Bash(cargo fmt *)',
     'Bash(pytest *)',
-    'Bash(make build *)',
-    'Bash(make test *)',
+    'Bash(make build)',
+    'Bash(make test)',
   ]);
   assert.deepEqual(buildRules(readFacts(['package.json'], '{not json', null)), ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test)']);
   // Every rule the profile adds is narrow, so auto mode keeps it.
@@ -54,7 +54,13 @@ test('permission profiles: standard allows no build or test script whose name sa
   const pkg = JSON.stringify({ scripts: Object.fromEntries([...names, 'build:prod'].map((n) => [n, 'x'])) });
   const make = [...names.map((n) => n.replace(/:/g, '-')), 'build-release', 'test-unit'].map((t) => `${t}:\n\tx\n`).join('');
   const rules = buildRules(readFacts(['package.json', 'Makefile'], pkg, make));
-  assert.deepEqual(rules, ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test)', 'Bash(npm run build:prod)', 'Bash(make test-unit *)']);
+  assert.deepEqual(rules, ['Bash(npm ci)', 'Bash(npm install)', 'Bash(npm test)', 'Bash(npm run build:prod)', 'Bash(make test-unit)']);
+});
+
+test('permission profiles: make, gradle and maven rules are exact, so no deploy or publish goal can follow them', () => {
+  const rules = buildRules(readFacts(['Makefile', 'gradlew', 'pom.xml'], null, 'build:\n\tcc\n'));
+  assert.deepEqual(rules, ['Bash(make build)', 'Bash(./gradlew build)', 'Bash(./gradlew test)', 'Bash(./gradlew check)', 'Bash(mvn compile)', 'Bash(mvn test)', 'Bash(mvn verify)', 'Bash(mvn package)']);
+  assert.ok(rules.every((r) => !r.includes('*')), 'make build deploy, ./gradlew build publish and mvn package deploy match no rule');
 });
 
 test('permission profiles: standard adds allow rules after the existing ones and keeps ask, deny and every other key', () => {
@@ -154,7 +160,6 @@ test('kharos permissions: shows the rules, writes only the diff the person saw, 
   assert.match(shown.out, /warn: 1 ask rule\(s\)/);
   assert.match(shown.out, /warn: no narrow allow rule for Bash/);
   assert.match(shown.out, /kharos launch profiles on example\/demo: demo \(branch main\)/);
-  assert.match(shown.out, /CLAUDE\.md: no kharos cloud environment note/);
   assert.doesNotMatch(shown.out, /\bopen\b/);
 
   const diff = await run(sb, 'permissions', 'diff', 'standard', dir);
@@ -168,7 +173,10 @@ test('kharos permissions: shows the rules, writes only the diff the person saw, 
 
   // Without the token, with the token of another profile, or after the file changed: nothing is written.
   assert.match((await run(sb, 'permissions', 'write', 'standard', dir)).err, /--expect needs the change token/);
-  assert.match((await run(sb, 'permissions', 'write', 'environment', '--expect', token, dir)).err, /not what that diff was made from/);
+  assert.match((await run(sb, 'permissions', 'write', 'default', '--expect', token, dir)).out, /permission profile default: nothing to change/);
+  fs.writeFileSync(file, original.replace('Bash(git push *)', 'Bash(git push --force *)'));
+  assert.match((await run(sb, 'permissions', 'write', 'standard', '--expect', token, dir)).err, /not what that diff was made from/);
+  fs.writeFileSync(file, original);
   assert.equal(fs.readFileSync(file, 'utf8'), original);
 
   const wrote = await run(sb, 'permissions', 'write', 'standard', '--expect', token, dir);
@@ -186,39 +194,7 @@ test('kharos permissions: shows the rules, writes only the diff the person saw, 
   assert.match((await run(sb, 'permissions', 'diff', 'standard', dir)).out, /nothing to change/);
   assert.match((await run(sb, 'permissions', 'write', 'standard', '--expect', token, dir)).out, /nothing to change/);
   assert.match((await run(sb, 'permissions', 'diff', 'default', dir)).out, /permission profile default: nothing to change/);
-  assert.match((await run(sb, 'permissions', 'diff', 'open', dir)).err, /one of default, standard, environment/);
-});
-
-test('kharos permissions: the environment note goes into CLAUDE.md only through an approved diff, once', async () => {
-  const sb = sandbox();
-  const dir = gitRepo(sb);
-  const agents = path.join(dir, 'AGENTS.md');
-  fs.writeFileSync(agents, '# Demo\n\nRun npm test.\n');
-  fs.symlinkSync('AGENTS.md', path.join(dir, 'CLAUDE.md'));
-  const diff = await run(sb, 'permissions', 'diff', 'environment', dir);
-  assert.equal(diff.code, 0, diff.err);
-  assert.match(diff.out, /^--- a\/CLAUDE\.md$/m);
-  assert.match(diff.out, /^\+When this repository runs in a Claude Code cloud session, the session runs in an isolated, disposable cloud VM/m);
-  assert.match(diff.out, /^ Run npm test\.$/m);
-  const token = diff.out.match(/change ([0-9a-f]{12}):/)?.[1];
-  assert.ok(token);
-  assert.equal(fs.readFileSync(agents, 'utf8'), '# Demo\n\nRun npm test.\n', 'a diff writes nothing');
-  const wrote = await run(sb, 'permissions', 'write', 'environment', '--expect', token, dir);
-  assert.equal(wrote.code, 0, wrote.err);
-  assert.ok(fs.lstatSync(path.join(dir, 'CLAUDE.md')).isSymbolicLink(), 'the link stays a link');
-  const text = fs.readFileSync(agents, 'utf8');
-  assert.ok(text.startsWith('# Demo\n\nRun npm test.\n\n<!-- kharos:cloud-environment -->\n## Cloud session environment\n'));
-  assert.equal(spawnSync('git', ['-C', dir, 'log', '--oneline'], { encoding: 'utf8' }).stdout.trim().split('\n').length, 1, 'no commit was made');
-  assert.match((await run(sb, 'permissions', 'diff', 'environment', dir)).out, /has the note already; nothing to change/);
-  assert.match((await run(sb, 'permissions', 'show', dir)).out, /CLAUDE\.md: has the kharos cloud environment note/);
-  // A link that leads outside the checkout is never written through.
-  fs.rmSync(path.join(dir, 'CLAUDE.md'));
-  const elsewhere = path.join(sb.dir, 'elsewhere.md');
-  fs.writeFileSync(elsewhere, 'x\n');
-  fs.symlinkSync(elsewhere, path.join(dir, 'CLAUDE.md'));
-  const t2 = (await run(sb, 'permissions', 'diff', 'environment', dir)).out.match(/change ([0-9a-f]{12}):/)?.[1];
-  assert.match((await run(sb, 'permissions', 'write', 'environment', '--expect', t2 ?? '', dir)).err, /points outside the checkout/);
-  assert.equal(fs.readFileSync(elsewhere, 'utf8'), 'x\n');
+  assert.match((await run(sb, 'permissions', 'diff', 'open', dir)).err, /one of default, standard/);
 });
 
 test('kharos permissions: a settings file that is not valid JSON, or a folder outside git, is refused', async () => {

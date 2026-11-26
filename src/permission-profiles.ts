@@ -3,9 +3,8 @@
 // on the person's machine. A session that a routine starts begins in auto mode when it is available:
 // broad allow rules are dropped, narrow ones resolve before the classifier, ask rules always prompt, and
 // the classifier decides the rest, with a prompt after it blocks 3 actions in a row or 20 in the session.
-// The classifier also reads the repository's CLAUDE.md. A prompt waits for a person. The standard profile
-// adds narrow allow rules, which auto mode keeps, so fewer actions reach the classifier or a prompt; the
-// environment note tells the classifier where the session runs. Neither touches ask or deny rules.
+// A prompt waits for a person. The standard profile adds narrow allow rules, which auto mode keeps, so
+// fewer actions reach the classifier or a prompt. It never touches ask or deny rules.
 
 import crypto from 'node:crypto';
 
@@ -22,33 +21,6 @@ export const PROFILE_SUMMARY: Record<PermissionProfile, string> = {
   default: 'changes nothing',
   standard: 'allows file tools, read-only shell and git commands, and the build, test and dev commands of the repository, as narrow rules that auto mode keeps; keeps ask and deny rules',
 };
-
-export const CLAUDE_MD_PATH = 'CLAUDE.md';
-export const ENVIRONMENT_SUMMARY = 'adds a short paragraph to CLAUDE.md that tells the auto mode classifier the session runs in an isolated, disposable cloud VM with local development services';
-
-const ENVIRONMENT_MARK = '<!-- kharos:cloud-environment -->';
-
-/** The paragraph for CLAUDE.md. It states only what holds for every cloud session, never what the repository's data is. */
-export const ENVIRONMENT_NOTE = [
-  ENVIRONMENT_MARK,
-  '## Cloud session environment',
-  '',
-  'When this repository runs in a Claude Code cloud session, the session runs in an isolated, disposable cloud VM made for that task, and the VM is removed when the session ends.',
-  'Development services started in it (databases, caches, emulators) are local to that VM.',
-  "Running the repository's build, test and development commands there, and starting, seeding or resetting those local services, is expected work.",
-  '<!-- /kharos:cloud-environment -->',
-].join('\n');
-
-/** CLAUDE.md with the environment note at its end, or null when the note is there already. */
-export function withEnvironmentNote(text: string | null): string | null {
-  if (text?.includes(ENVIRONMENT_MARK)) return null;
-  if (text === null || text.trim() === '') return ENVIRONMENT_NOTE + '\n';
-  return `${text.replace(/\s*$/, '')}\n\n${ENVIRONMENT_NOTE}\n`;
-}
-
-export function hasEnvironmentNote(text: string | null): boolean {
-  return text?.includes(ENVIRONMENT_MARK) ?? false;
-}
 
 export class SettingsError extends Error {}
 
@@ -126,10 +98,10 @@ export function buildRules(facts: RepoFacts): string[] {
   if (has('go.mod')) out.push('Bash(go build *)', 'Bash(go test *)', 'Bash(go vet *)');
   if (['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'pytest.ini', 'tox.ini'].some(has)) out.push('Bash(pytest *)');
   if (has('Makefile') || has('makefile') || has('GNUmakefile')) {
-    for (const t of facts.makeTargets) if (BUILD_TEST_RE.test(t) && SAFE_NAME_RE.test(t)) out.push(`Bash(make ${t} *)`);
+    for (const t of facts.makeTargets) if (BUILD_TEST_RE.test(t) && SAFE_NAME_RE.test(t)) out.push(`Bash(make ${t})`);
   }
-  if (has('gradlew')) out.push('Bash(./gradlew build *)', 'Bash(./gradlew test *)', 'Bash(./gradlew check *)');
-  if (has('pom.xml')) out.push('Bash(mvn compile *)', 'Bash(mvn test *)', 'Bash(mvn verify *)', 'Bash(mvn package *)');
+  if (has('gradlew')) out.push('Bash(./gradlew build)', 'Bash(./gradlew test)', 'Bash(./gradlew check)');
+  if (has('pom.xml')) out.push('Bash(mvn compile)', 'Bash(mvn test)', 'Bash(mvn verify)', 'Bash(mvn package)');
   return [...new Set(out)];
 }
 

@@ -19,7 +19,6 @@ Each line below is from the Claude Code documentation, unless it says it comes f
   - On entering auto mode, broad allow rules that grant arbitrary code execution are dropped: `Bash(*)` (the same rule as `Bash`), rules that start with a wildcard, wildcarded interpreters such as `Bash(python*)`, a wrapper followed only by a wildcard such as `Bash(timeout *)`, package-manager run commands, and `Agent` and `Monitor` rules.
     Narrow rules such as `Bash(npm test)` stay, and resolve before the classifier.
   - After the classifier blocks 3 actions in a row, or 20 in the session, a prompt appears in the run's session and waits until someone answers it; these numbers are not configurable.
-  - The classifier reads the repository's `CLAUDE.md` ([auto mode configuration](https://code.claude.com/docs/en/auto-mode-config)).
   - `autoMode` settings are read only from user settings, managed settings or `--settings`, never from a repository's `.claude/settings.json`.
 - Cloud sessions have no bypass mode: the mode menu offers Accept edits, Plan and Auto, and `bypassPermissions` and `dontAsk` in settings files are ignored.
   `defaultMode: "auto"` does not take effect from a repository's settings either; cloud sessions honor `acceptEdits`, and they pre-approve file edits in any mode.
@@ -29,7 +28,8 @@ Each line below is from the Claude Code documentation, unless it says it comes f
 
 So, for a kharos launch, the prompts that wait for a person come from `ask` rules in the repository's `.claude/settings.json`, from repeated classifier blocks, from tools that always ask (such as `AskUserQuestion`, which the watcher reports as `waiting_answer`), and from every command not allowed by a rule when auto mode is not available.
 No setting in the repository can allow everything: broad rules are dropped and no bypass mode exists.
-What helps is narrow allow rules for the commands the work needs, and a `CLAUDE.md` that tells the classifier where the session runs, so it blocks less.
+What helps is narrow allow rules for the commands the work needs.
+In kharos cloud tests, commands that carried a credential inline (`PGPASSWORD=...`, or a password in a URL) raised permission prompts, while the same commands without it did not: keep credentials out of the command line.
 
 Not tested yet:
 
@@ -39,17 +39,16 @@ Not tested yet:
 
 ## Permission profiles
 
-`/kharos:permissions [default|standard|environment] [folder]` works on a local checkout of the repository.
+`/kharos:permissions [default|standard] [folder]` works on a local checkout of the repository.
 
-1. It shows the rules of `.claude/settings.json`, which profile they match, what in them would hold a session at a prompt or does nothing in a cloud session, and whether `CLAUDE.md` has the environment note.
-2. With a profile or `environment`, it shows the change as a diff.
+1. It shows the rules of `.claude/settings.json`, which profile they match, and what in them would hold a session at a prompt or does nothing in a cloud session.
+2. With a profile, it shows the change as a diff.
 3. It writes the file only after the person approves that exact diff, and never commits or pushes.
 
 | Change | What it does |
 |---|---|
 | `default` | Nothing |
 | `standard` | Adds narrow allow rules, which auto mode keeps, for the file tools, read-only shell commands, git commands that read, commit and create a branch, and the build, test and dev commands of the repository; keeps every `ask` and `deny` rule |
-| `environment` | Adds a short paragraph at the end of `CLAUDE.md` that tells the auto mode classifier the session runs in an isolated, disposable cloud VM with local development services; the rest of the file does not change |
 
 Rules the person already has stay first, and every other key of the file stays as it is.
 `standard` allows no `git push`: the auto mode classifier decides it, unless an `ask` rule asks for it.
@@ -68,24 +67,11 @@ It covers no connector (MCP) tools, and it never removes an `ask` rule: a person
 | `Cargo.toml` | `cargo build`, `test`, `check`, `clippy`, `fmt` |
 | `go.mod` | `go build`, `test`, `vet` |
 | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `pytest.ini`, `tox.ini` | `pytest *` |
-| `Makefile` | `make <target> *` for each target with one of the names above |
+| `Makefile` | `make <target>` for each target with one of the names above |
 | `gradlew` | `./gradlew build`, `test`, `check` |
 | `pom.xml` | `mvn compile`, `test`, `verify`, `package` |
 
-The environment note is:
-
-```markdown
-<!-- kharos:cloud-environment -->
-## Cloud session environment
-
-When this repository runs in a Claude Code cloud session, the session runs in an isolated, disposable cloud VM made for that task, and the VM is removed when the session ends.
-Development services started in it (databases, caches, emulators) are local to that VM.
-Running the repository's build, test and development commands there, and starting, seeding or resetting those local services, is expected work.
-<!-- /kharos:cloud-environment -->
-```
-
-It says nothing about the repository's data or about what the session may push, since kharos cannot know either.
-When `CLAUDE.md` is a link (to `AGENTS.md`, say), the note goes into the file it points to, which must be inside the checkout.
+The `make`, `./gradlew` and `mvn` rules are exact commands too: with a trailing wildcard, another target, task or phase after them (`make build deploy`, `mvn package deploy`) would run with no prompt.
 
 The settings file must be plain JSON; kharos refuses to edit a file it cannot parse.
 `write` takes the token that `diff` printed, and refuses when the file changed since, or when the token is for another change.

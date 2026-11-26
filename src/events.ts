@@ -97,7 +97,7 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
   }
   s.pending_state = null;
   const prompt = verdict.permission ?? null;
-  const newPrompt = prompt !== null && s.permission?.key !== prompt.key;
+  const newPrompt = prompt !== null && s.permission !== undefined && s.permission?.key !== prompt.key;
   s.permission = prompt;
   const previous = s.state;
   const iso = new Date(now).toISOString();

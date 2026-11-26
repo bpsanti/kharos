@@ -10,7 +10,7 @@ import { prepare } from '../src/launch.ts';
 import { parseLog } from '../src/logparse.ts';
 import { statusLine } from '../src/outputs/firstmate.ts';
 import { deliver } from '../src/outputs/index.ts';
-import { loadRegistry } from '../src/registry.ts';
+import { loadRegistry, updateRegistry } from '../src/registry.ts';
 import { fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const SID = 'cse_01TESTSESSIONAAAAAAAAAAA';
@@ -115,6 +115,20 @@ test('permission: a prompt still open after renotify_min is reported again', () 
   assert.equal(permissionEvents(sb).length, 1);
   read(sb, Date.parse('2026-11-25T22:05:00Z'), page);
   assert.equal(permissionEvents(sb).length, 2);
+});
+
+test('permission: an open prompt recorded before the permission field existed is not reported again before renotify_min', () => {
+  const sb = sandbox();
+  const id = openOne(sb, Date.parse('2026-11-25T21:00:00Z'));
+  const page = pageUntil('log-permission-two-prompts.txt', '2026-11-25T21:10:00Z');
+  read(sb, Date.parse('2026-11-25T21:04:00Z'), page);
+  assert.equal(permissionEvents(sb).length, 1);
+  updateRegistry(sb.paths, (reg) => {
+    delete reg.sessions[id]!.permission;
+  });
+  read(sb, Date.parse('2026-11-25T21:06:00Z'), page);
+  assert.equal(permissionEvents(sb).length, 1);
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.permission?.tool, 'Bash');
 });
 
 test('permission: the firstmate line and the Slack text name the tool and link the session', async () => {

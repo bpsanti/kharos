@@ -48,7 +48,7 @@ It writes a profile, checks the repository, and tells you exactly what to fix: s
 |---|---|
 | `/kharos:setup [owner/repo]` | Writes a launch profile and checks everything a launch needs |
 | `/kharos:doctor [--profile p]` | Checks login, plan, configuration, repository, Claude access, environment, permission rules and limits, with the fix for each gap |
-| `/kharos:permissions [default\|standard\|environment] [folder]` | Shows the permission rules a repository gives its cloud sessions, and writes narrow allow rules to its `.claude/settings.json` or an environment note to its `CLAUDE.md` after you approve the diff; never commits or pushes |
+| `/kharos:permissions [default\|standard] [folder]` | Shows the permission rules a repository gives its cloud sessions, and writes narrow allow rules to its `.claude/settings.json` after you approve the diff; never commits or pushes |
 | `/kharos:run "<instruction>" [--profile p] [--model m] [--title t] [--deadline min] [--file path]` | Launches one cloud session and records it |
 | `/kharos:list [--all] [--refresh]` | Lists followed sessions from the local registry; `--refresh` reads each open session first |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
@@ -99,9 +99,10 @@ See [docs/watcher.md](docs/watcher.md) for the rules, the numbers behind them, a
 
 A cloud session that a routine starts runs in auto mode ([scheduled tasks](https://code.claude.com/docs/en/routines)).
 It still stops at a prompt for `ask` rules in the repository's `.claude/settings.json`, and after the classifier blocks 3 actions in a row or 20 in the session ([permission modes](https://code.claude.com/docs/en/permission-modes)).
-Cloud sessions have no bypass mode, auto mode drops broad allow rules such as `Bash(*)`, and the classifier reads the repository's `CLAUDE.md` ([auto mode configuration](https://code.claude.com/docs/en/auto-mode-config)).
+Cloud sessions have no bypass mode, and auto mode drops broad allow rules such as `Bash(*)`.
 The routine's `allowed_tools` neither allows nor restricts anything there.
-`/kharos:permissions` shows a repository's rules, adds narrow allow rules for its own commands (the `standard` profile), and can add a short note to its `CLAUDE.md` saying the session runs in an isolated, disposable cloud VM.
+`/kharos:permissions` shows a repository's rules, and adds narrow allow rules for its own commands (the `standard` profile).
+In kharos cloud tests, commands that carried a credential inline (`PGPASSWORD=...`, or a password in a URL) raised permission prompts, while the same commands without it did not: keep credentials out of the command line.
 `/kharos:doctor` warns when a launch branch would likely stall, or relies on broad rules or modes that cloud sessions ignore: see [docs/permissions.md](docs/permissions.md).
 
 ## Outputs

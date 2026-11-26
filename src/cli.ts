@@ -89,7 +89,7 @@ const USAGE = `usage: kharos <command>
   doctor [--profile p] [--no-remote-tool] | environments --session id
   setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default]
   repo-init <owner/name>
-  permissions show [dir] | permissions diff <default|standard|environment> [dir] | permissions write <default|standard|environment> --expect <token> [dir]
+  permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
@@ -192,8 +192,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'permissions': {
         const sub = args.positional[0];
         if (sub === 'show') out(showPermissions(paths, args.positional[1] ?? '.', env));
-        else if (sub === 'diff') out(diffPermissions(args.positional[2] ?? '.', need(args, 1, 'default, standard or environment'), env));
-        else if (sub === 'write') out(writePermissions(paths, args.positional[2] ?? '.', need(args, 1, 'default, standard or environment'), flag(args, 'expect'), env));
+        else if (sub === 'diff') out(diffPermissions(args.positional[2] ?? '.', need(args, 1, 'default or standard'), env));
+        else if (sub === 'write') out(writePermissions(paths, args.positional[2] ?? '.', need(args, 1, 'default or standard'), flag(args, 'expect'), env));
         else throw new cmd.CommandError('permissions takes show, diff or write');
         return 0;
       }
