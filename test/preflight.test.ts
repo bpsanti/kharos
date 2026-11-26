@@ -125,6 +125,15 @@ test('permission hook: a prefix rule matches with the program\'s known global op
   const ask = (command: string) => decide({ tool_name: 'Bash', tool_input: { command } }, rules).behavior;
   for (const command of ['git log -1', 'git --no-pager log', 'git -C ../other log', 'kubectl -n prod get pods', 'kubectl get pods -A', 'docker compose -f x.yml exec db psql', 'npm --prefix web test']) assert.equal(ask(command), 'allow', command);
   for (const command of ['git -c core.pager=sh log', 'git --no-pager push', 'kubectl -n prod delete pods', 'npm exec x', 'docker run x']) assert.equal(ask(command), 'deny', command);
+  // Options that set what the program runs (git's --exec-path and --config-env, npm's script-shell and
+  // node-options, as their manuals describe them) are not global options to skip, so the rule does not match.
+  const more = { allow: [], mirror: [], prefix: ['Bash(git status:*)', 'Bash(npm test:*)', 'Bash(kubectl get:*)'] };
+  const ask2 = (command: string) => decide({ tool_name: 'Bash', tool_input: { command } }, more).behavior;
+  for (const command of ['git --exec-path=./dir status', 'git --config-env=core.fsmonitor=VAR status', 'npm --script-shell=./x test', 'npm --node-options=--require=./x.js test']) assert.equal(ask2(command), 'deny', command);
+  // A known option written --option=value is skipped like the spaced form.
+  assert.equal(ask2('git --git-dir=../other/.git status'), 'allow');
+  // The accepted trade-off: --kubeconfig may name a file whose credential plugin runs, and the rule still matches.
+  assert.equal(ask2('kubectl --kubeconfig f get pods'), 'allow');
 });
 
 test('preflight: a prefix rule that a deny rule covers, or whose program runs other code, is never suggested', () => {

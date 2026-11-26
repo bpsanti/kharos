@@ -284,7 +284,7 @@ const NPM_OPTIONS = { value: ['--prefix', '-C', '--dir', '-w', '--workspace', '-
 const DOCKER_OPTIONS = { value: ['-H', '--host', '--context', '--config', '-f', '--file', '-p', '--project-name', '--project-directory', '--env-file', '--profile'], flag: [] };
 /**
  * The global options a program takes before its subcommand: those that take a value, and those that
- * take none. None of them makes the program run another command.
+ * take none. Any other option before the subcommand stops a prefix rule from matching.
  * @type {Record<string, { value: string[], flag: string[] }>}
  */
 const GLOBAL_OPTIONS = {
@@ -304,8 +304,8 @@ const GLOBAL_OPTIONS = {
 const baseName = (program) => program.slice(program.lastIndexOf('/') + 1);
 
 /**
- * A command's words without the known global options (and their values) before its subcommand, and
- * after `docker compose`: `git --no-pager log -1` reads as `git log -1`. A null word is one whose value
+ * A command's words without the known global options (and their values, also as `--option=value`)
+ * before its subcommand, and after `docker compose`: `git --no-pager log -1` reads as `git log -1`. A null word is one whose value
  * is not known (a variable); it stays.
  * @param {(string | null)[]} words
  * @returns {(string | null)[]}
@@ -322,7 +322,9 @@ export function commandWords(words) {
     const w = /** @type {string | null} */ (words[i]);
     const seeking = out.length === 1 || (compose && out.length === 2 && out[1] === 'compose');
     if (seeking && typeof w === 'string' && w.startsWith('-')) {
-      if (/^--[^=]+=/.test(w) || options.flag.includes(w)) continue;
+      const eq = w.indexOf('=');
+      if (eq > 0 && w.startsWith('--') && (options.value.includes(w.slice(0, eq)) || options.flag.includes(w.slice(0, eq)))) continue;
+      if (options.flag.includes(w)) continue;
       if (options.value.includes(w)) {
         i++;
         continue;
