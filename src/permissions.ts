@@ -309,7 +309,7 @@ export function switchHook(paths: Paths, on: boolean): string {
     : `permission_hook is off in ${paths.config}. A repository that already has the hook keeps answering prompts in cloud sessions until you remove it: kharos permissions hook diff --uninstall.`;
 }
 
-export const EMPTY_CHANGE: HookChange = { allow: [], drop: [], mirror: false, unmirror: false, uninstall: false, broad: false, unblock: null };
+export const EMPTY_CHANGE: HookChange = { allow: [], prefix: [], drop: [], mirror: false, unmirror: false, uninstall: false, broad: false, unblock: null };
 
 function shellQuote(s: string): string {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -319,6 +319,7 @@ function shellQuote(s: string): string {
 export function changeFlags(c: HookChange): string[] {
   return [
     ...c.allow.flatMap((p) => ['--allow', shellQuote(p)]),
+    ...c.prefix.flatMap((p) => ['--allow-prefix', shellQuote(p)]),
     ...c.drop.flatMap((p) => ['--drop', shellQuote(p)]),
     ...(c.mirror ? ['--mirror'] : []),
     ...(c.unmirror ? ['--unmirror'] : []),
@@ -497,7 +498,7 @@ export function switchPreflightAuto(paths: Paths, on: boolean): string {
   }
   saveConfig(paths, { ...current.config, preflight_auto: on });
   return on
-    ? `preflight_auto is on in ${paths.config}. At each launch, kharos writes the narrow allow patterns the preflight suggests (never a broad one; a merged \`*\` can widen what is allowed), and mirrors the organization's ask rules while a mirror confirmation remembered from \`kharos permissions hook write --org-confirmed\` matches the managed settings, to a side branch kharos/<id>, made from the branch the profile launches from, and the session starts there. That branch is never changed; /kharos:close deletes the side branch, and kharos show <id> lists what was applied.`
+    ? `preflight_auto is on in ${paths.config}. At each launch, kharos writes the allow patterns and prefix rules the preflight suggests (never a broad one; a merged \`*\` and a prefix rule, which allows any arguments, can widen what is allowed), and mirrors the organization's ask rules while a mirror confirmation remembered from \`kharos permissions hook write --org-confirmed\` matches the managed settings, to a side branch kharos/<id>, made from the branch the profile launches from, and the session starts there. That branch is never changed; /kharos:close deletes the side branch, and kharos show <id> lists what was applied.`
     : `preflight_auto is off in ${paths.config}: /kharos:run lists the likely prompts and the rule for each, and applies nothing.`;
 }
 

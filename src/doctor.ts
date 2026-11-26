@@ -145,7 +145,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   } else if (!config.permission_hook) {
     add('warn', 'permission preflight', 'preflight_auto is on, but permission_hook is off, so automatic preflight applies nothing', ['Turn the hook on with `kharos permissions hook enable`, or automatic preflight off with `kharos permissions auto preflight off`.']);
   } else {
-    add('info', 'permission preflight', "automatic preflight is on: each launch writes the narrow allow patterns the preflight suggests to a side branch kharos/<id> and starts there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and /kharos:close deletes the side branch", [
+    add('info', 'permission preflight', "automatic preflight is on: each launch writes the allow patterns and prefix rules the preflight suggests to a side branch kharos/<id> and starts there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and /kharos:close deletes the side branch", [
       'Turn it off with `kharos permissions auto preflight off`.',
     ]);
   }
@@ -300,7 +300,7 @@ function checkHook(
   if (rules?.unblock) problems.push(`the unblock preset is on: ${UNBLOCK_RISK}`);
   const broad = rules ? broadRules(rules) : [];
   const what = rules
-    ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms${broad.length ? `; ${broad.length} broad rule(s), which ${BROAD_RISK}: ${broad.join(', ')}` : ''}`
+    ? `${rules.allow.length} allow pattern(s), ${rules.prefix?.length ? `${rules.prefix.length} prefix rule(s), ` : ''}${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms${broad.length ? `; ${broad.length} broad rule(s), which ${BROAD_RISK}: ${broad.join(', ')}` : ''}`
     : 'no usable rules';
   add(problems.length ? 'warn' : 'info', label, [`${where} has the kharos permission hook: ${what}`, ...problems].join('; '), [
     `/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the hook and changes it (or removes it with --uninstall); then commit and push to ${p.revision}.`,

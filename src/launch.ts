@@ -205,7 +205,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
 type AutoPlan = { patterns: string[]; mirrored: string[]; unblock: boolean; note: string | null; files: { path: string; content: string }[]; base: { commit: string; tree: string }; rules: HookRules | null } | { skipped: string };
 
 /**
- * What automatic permission preflight writes for this launch: the suggested narrow patterns, through
+ * What automatic permission preflight writes for this launch: the suggested allow patterns and prefix rules, through
  * the same plan and filters as `kharos permissions hook diff`, with no broad pattern of its own; the
  * organization's ask rules are mirrored while a remembered mirror confirmation matches the managed settings.
  */
@@ -222,7 +222,8 @@ function planAuto(paths: Paths, config: Config, profile: Profile, instruction: s
   const history = readHistory(paths, profile.repo);
   const confirmation = confirmationState(loadConfirmation(paths, 'mirror'), policy);
   const report = buildPreflight({ snapshot: snap, repo: profile.repo, policy, history: history.prompts, sessionsRead: history.sessions, instruction, confirmation, autoMirror: true });
-  const patterns = applicable(report);
+  const suggested = applicable(report);
+  const patterns = [...suggested.allow, ...suggested.prefix];
   // The organization's ask rules are mirrored only with the person's remembered confirmation, while
   // its managed settings still match it, and never as broad rules.
   // The unblock preset, with permission_unblock, only while its own remembered confirmation matches.
@@ -244,7 +245,7 @@ function planAuto(paths: Paths, config: Config, profile: Profile, instruction: s
   let changes: FileChange[];
   let mirrored: string[] = [];
   try {
-    const plan = planHook(hookFilesOf(snap), { ...EMPTY_CHANGE, allow: patterns, mirror, unblock: unblock ? 'on' : null }, policy);
+    const plan = planHook(hookFilesOf(snap), { ...EMPTY_CHANGE, allow: suggested.allow, prefix: suggested.prefix, mirror, unblock: unblock ? 'on' : null }, policy);
     if (!plan.token) return { skipped: `the suggested rules are on the branch already${note ? `; ${note}` : ''}` };
     changes = plan.changes;
     mirrored = plan.mirror?.converted ?? [];
@@ -277,7 +278,7 @@ export function preflightLine(s: Session): string | null {
       ? `, and mirrored ${p.mirrored.length} organization ask rule(s) with your remembered confirmation (${p.mirrored.join(', ')})`
       : '';
   const what = p.applied.length ? `: ${p.applied.join(' | ')}` : '';
-  return `permission preflight: wrote ${p.applied.length} narrow allow pattern(s) of the kharos permission hook${mirrored} to the side branch ${p.branch} (from ${p.base}), and the session starts there${what}. ${p.base} is not changed; /kharos:close deletes the branch.${p.note ? ` Note: ${p.note}.` : ''}`;
+  return `permission preflight: wrote ${p.applied.length} allow rule(s) of the kharos permission hook${mirrored} to the side branch ${p.branch} (from ${p.base}), and the session starts there${what}. ${p.base} is not changed; /kharos:close deletes the branch.${p.note ? ` Note: ${p.note}.` : ''}`;
 }
 
 export function readInstruction(file: string | undefined, stdin: () => string): string {

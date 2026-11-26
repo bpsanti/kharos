@@ -110,14 +110,14 @@ The change touches three files:
 |---|---|
 | `.claude/settings.json` | one `PermissionRequest` entry, matcher `*`, that runs the script only when `CLAUDE_CODE_REMOTE` is `true`; every other key and hook stays |
 | `.claude/hooks/kharos-permission.mjs` | the script, a copy of [`cloud/kharos-permission.mjs`](../cloud/kharos-permission.mjs); Node.js only, no dependency |
-| `.claude/kharos-permissions.json` | the rules: `allow` patterns, `mirror` (mirrored organization ask rules), and `broad: true` when it holds broad rules |
+| `.claude/kharos-permissions.json` | the rules: `allow` patterns, `prefix` rules, `mirror` (mirrored organization ask rules), and `broad: true` when it holds broad rules |
 
 The script decides only in a cloud session, where `CLAUDE_CODE_REMOTE` is `true`; on a person's machine it says nothing and the prompt shows as usual.
 In a cloud session it answers each prompt, in this order:
 
 1. A Bash call that is one simple command and matches an allow pattern word for word is allowed.
    An allow from the hook covers the whole call, so a command that is chained, piped, run in the background or redirected, that substitutes a command, expands a variable, has an unquoted wildcard, or sets a variable in front is never allowed, and neither is one over 600 characters.
-2. The same for a mirrored organization rule (see below).
+2. The same for a mirrored organization rule (see below), and then for a prefix rule.
 3. Anything else is denied, with a message that tells the session what to do instead.
    When an allow pattern names the program, the message names each allowed form, so the session sends the right command; in kharos tests the next call was the allowed form after every such denial.
    Otherwise it tells the session to go on without the call, or to stop and say what it needs.
@@ -131,7 +131,9 @@ kharos permissions hook diff --allow "psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc
 
 This allows `psql -h 127.0.0.1 -p 5432 -U dev -d app -Atc 'select 1'` and nothing longer, shorter or chained.
 kharos refuses a pattern that a deny rule of the managed settings or of the repository covers, since a hook cannot approve what a deny rule refuses.
-`--drop <pattern>` removes a pattern, and `--uninstall` removes the three files' kharos parts.
+A prefix rule, `--allow-prefix 'Bash(<program> <subcommands>:*)'`, allows that program, or that subcommand of it, with any arguments, still as one simple command: `Bash(psql:*)` allows `psql -h 127.0.0.1 -c 'select 1'`, and `Bash(git push:*)` allows any `git push`.
+Its words are literal (no wildcard), and kharos refuses it when its program runs other commands (unless `--broad`) or when a deny rule covers it.
+`--drop <pattern or prefix rule>` removes one, and `--uninstall` removes the three files' kharos parts.
 
 A broad pattern is one whose program is a wildcard (`* foo`), or a shell, an interpreter or a wrapper (`bash *`, `python3 *`, `env *`, `sudo *`, `xargs *` and the like).
 kharos refuses it unless the change has `--broad`, since it allows any command in this repository's cloud sessions with no person asked: auto mode drops such rules from settings, but a hook's allow counts whatever pattern produced it.
@@ -183,14 +185,15 @@ It lists the prompts the session is likely to hit, each as `likely prompt -> sug
 |---|---|
 | Ask rules | The ask rules of the organization's managed settings (the local copy the doctor reads) and of the repository's `.claude/settings.json`: each prompts in every cloud session |
 | The repository | Commands it runs that such an ask rule covers: `package.json` scripts, Makefile recipes, shell scripts (at the root, `scripts/`, `bin/`, up to two folders deep), the `docker compose` commands of a compose file, and shell blocks of `README.md`, `CONTRIBUTING.md` and `docs/` |
-| Earlier sessions | The Bash permission prompts in the stored logs of earlier sessions on the same repository (kharos keeps a log for 14 days after the session is closed) |
+| Earlier sessions | The Bash permission prompts in the stored logs of earlier sessions on the same repository (kharos keeps a log for 14 days after the session is closed), each as a prefix rule |
 
-A command becomes an allow pattern word by word: the program stays as written, a variable assignment in front goes, and each argument that expands a variable, needed quoting (free text such as a query) or is not a plain word becomes `*`.
-A word that holds a credential becomes `*` too, so no password reaches a pattern, a side branch or a log: a token with a known vendor prefix (`sk_live_`, `sk_test_`, `rk_live_`, `sk-ant-`, `sk-proj-`, `github_pat_`, `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `glpat-`, `xoxb-` and the other Slack prefixes, `AKIA` or `ASIA` access key ids), any userinfo in a URL (`https://<token>@host`, `postgresql://app:<password>@host`), `user:<password>@` userinfo, a `KEY=value` word whose key ends in `key`, `secret`, `token`, `password`, `passwd` or `pwd` (also after `env`), a JSON Web Token (`eyJ...`), the value after an option whose last `-` separated part is `token`, `password`, `passwd`, `pass`, `secret`, `apikey` or `auth` (`--db-password`, `--github-token`, `--auth`; not `--author` or `--passes`), or that ends in `api-key`, `auth-token`, `access-key` or `secret-key`, in the spaced form and as a whole `--option=value` word (a negation such as `--no-password`, `--with-token` and `--password-stdin` take no value), a `-H` header whose name holds `key`, `token`, `secret` or `auth`, `curl -u user:<password>` in any form (`-u user:<password>`, `-uuser:<password>`, `--user=user:<password>`), the value after `redis-cli -a` and `sshpass -p`, the value of `aws configure set` for `aws_secret_access_key`, `aws_session_token` and `aws_access_key_id`, the `-p<password>` of `mysql`, and an argument shaped like a generated token (20 characters or more, letters and digits mixed).
-A token shape never covers a subcommand, a `git` argument (a commit id, a branch), a database name, a path, a host name, an all-hex id, or a name of several `-` or `_` separated parts.
+A command of the repository becomes an allow pattern word by word, since its words are in the repository already: the program stays as written, a variable assignment in front goes, and each argument that expands a variable, needed quoting (free text such as a query) or is not a plain word becomes `*`.
 Commands with the same program, first argument and length merge into one pattern, where the words that differ become `*`.
-A merged rule can widen what is allowed: earlier prompts `git push origin feature-x` and `git push origin main` merge into `git push origin *`, which allows a push with any one argument there, such as another branch or `--force`.
-Read a merged rule before you add it; automatic preflight applies it as it is.
+A prompt of an earlier session never gives a rule its values: it is reduced to its program and the words that name its action, and suggested as a prefix rule, `Bash(<program> <subcommands>:*)`, so no password, token, host or path it was run with reaches a rule, a side branch or a log.
+The subcommand words are the leading lowercase words after the program (letters, digits and `-`): one for `git`, `npm`, `pnpm`, `yarn`, `bun`, `cargo`, `go`, `make`, `terraform`, `helm`, `brew`, `pip`, `poetry` and `uv` (`Bash(git push:*)`), two for `kubectl`, `gh`, `aws` and `gcloud` (`Bash(kubectl get pods:*)`, `Bash(gh pr view:*)`), and `compose` plus one for `docker` and `podman` (`Bash(docker compose exec:*)`); any other program keeps only its name (`Bash(psql:*)`, `Bash(redis-cli:*)`).
+Earlier prompts with the same prefix give one rule, and a repository pattern that a suggested prefix rule allows anyway is listed as covered by it.
+Merged and prefix rules can widen what is allowed: earlier prompts `git push origin feature-x` and `git push origin main` give `Bash(git push:*)`, which allows any push, such as to another branch or with `--force`, and repository commands `psql -d app -c x` and `psql -d shop -c x` merge into `psql -d * -c *`.
+Read such a rule before you add it; automatic preflight applies it as it is.
 A rule for every command (such as a bare `Bash` ask rule) does not make every line of every script a likely prompt: only earlier prompts count for it.
 Each pattern goes through the same filter as `kharos permissions hook diff`: a broad pattern (a shell, an interpreter, a wrapper) or one a deny rule covers is listed as not suggested, with why, and a pattern the hook on the branch allows already is listed as answered.
 An ask rule that nothing found runs is listed with no rule to suggest, and the form to add if the task needs it.
@@ -204,7 +207,7 @@ While it is off, the preflight only suggests.
 While it is on, each launch does this before the routine is created:
 
 1. It runs the preflight on the branch the profile launches from.
-2. It plans the change to the hook with the suggested narrow patterns, through the same plan as `kharos permissions hook diff`: never a broad pattern, never one a deny rule covers; a merged rule is applied as it is.
+2. It plans the change to the hook with the suggested allow patterns and prefix rules, through the same plan as `kharos permissions hook diff`: never a broad rule, never one a deny rule covers; a merged rule and a prefix rule are applied as they are.
    It mirrors the organization's ask rules only with a remembered confirmation that still matches the managed settings, and never broad ones.
 3. It writes that change as one commit on top of the launch branch, to a new branch `kharos/<id>` (`<id>` is the kharos session id), through the GitHub Git data API with your `gh`; no checkout is touched, and an existing branch is never overwritten.
 4. The routine starts the session on `kharos/<id>`, and the instruction tells the session that the branch is the launch branch plus one hook commit, to work on a branch of its own, and to take that commit out (`git rebase --onto FETCH_HEAD <commit>` after `git fetch origin <base>`) before it opens a pull request against the launch branch.

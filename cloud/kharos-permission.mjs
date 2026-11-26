@@ -11,7 +11,9 @@
 //   glob) and matches one of the rules file's allow patterns word by word is allowed.
 // - The same for a mirrored rule: an ask rule of the organization's managed settings that the person
 //   chose to turn into a cloud-only allow.
-// - A broad rule (an allow pattern or a mirrored rule for a shell, an interpreter, a wrapper or any
+// - The same for a prefix rule, `Bash(<program> <subcommands>:*)` with literal words: it allows that
+//   program, or that subcommand of it, with any arguments.
+// - A broad rule (an allow pattern, a mirrored rule or a prefix rule for a shell, an interpreter, a wrapper or any
 //   program) counts only when the rules file says `"broad": true`, which
 //   kharos writes only when the person asked for broad rules with --broad.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
@@ -42,10 +44,10 @@ export const UNBLOCK_RULE = 'unblock';
 export const REFUSAL_PREFIX = 'Refused by the kharos permission hook';
 
 /**
- * @typedef {{ allow: string[], mirror: string[], broad?: boolean, unblock?: boolean }} HookRules
+ * @typedef {{ allow: string[], mirror: string[], prefix?: string[], broad?: boolean, unblock?: boolean }} HookRules
  * @typedef {{ ok: true, words: string[] } | { ok: false, why: string }} Split
  * @typedef {{ ok: true, words: (string | null)[] } | { ok: false, why: string }} Pattern
- * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror' | 'unblock', broad: boolean }} Allow
+ * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror' | 'prefix' | 'unblock', broad: boolean }} Allow
  * @typedef {{ behavior: 'deny', message: string, program: string | null }} Deny
  * @typedef {Allow | Deny} Decision
  */
@@ -256,7 +258,29 @@ export function bashRuleMatches(rule, command) {
 }
 
 /**
- * The rules file's content, checked. Invalid allow patterns, non-Bash mirrored rules, and broad rules
+ * Why a prefix rule is not valid, or null when it is: it must be `Bash(<words>:*)`, its words literal
+ * (no wildcard), and, unless `broad`, its program must not run other commands.
+ * @param {string} rule
+ * @param {boolean} [broad]
+ */
+export function prefixRuleWhy(rule, broad = false) {
+  const m = /^Bash\((.+):\*\)$/s.exec(rule);
+  if (!m) return 'a prefix rule has the form Bash(<program> <subcommands>:*)';
+  const words = /** @type {string} */ (m[1]).split(' ');
+  if (words.some((w) => !/^[\w@%+=:,./-]+$/.test(w))) return 'its words must be literal: no wildcard, quote or extra space';
+  if (broad) return null;
+  const why = broadRuleWhy(rule);
+  return why ? `it is broad (${why})` : null;
+}
+
+/** The literal words a prefix rule starts a command with.
+ * @param {string} rule */
+export function prefixOf(rule) {
+  return rule.replace(/^Bash\(/, '').replace(/:\*\)$/, '');
+}
+
+/**
+ * The rules file's content, checked. Invalid allow patterns and prefix rules, non-Bash mirrored rules, and broad rules
  * without `"broad": true` are an error: kharos writes the file, and a hand edit that breaks it must
  * show, not half work.
  * @param {unknown} value
@@ -286,8 +310,14 @@ export function readHookRules(value) {
     const why = broad ? null : broadRuleWhy(r);
     if (why) throw new Error(`mirrored rule "${r}" is broad (${why}), and the rules file does not say "broad": true`);
   }
+  const prefix = list(o.prefix, 'prefix');
+  for (const r of prefix) {
+    const why = prefixRuleWhy(r, broad);
+    if (why) throw new Error(`prefix rule "${r}" is not valid: ${why}${why.startsWith('it is broad') ? ', and the rules file does not say "broad": true' : ''}`);
+  }
   /** @type {HookRules} */
   const out = broad ? { allow, mirror, broad } : { allow, mirror };
+  if (prefix.length) out.prefix = prefix;
   if (o.unblock === true) out.unblock = true;
   return out;
 }
@@ -345,14 +375,18 @@ export function decide(input, rules) {
     if (hit !== undefined) return { behavior: 'allow', rule: hit.text, source: 'allow', broad: broadPatternWhy(hit.words) !== null };
     // Only a broad rule, in a rules file that allows broad rules, covers a program that runs other commands.
     const others = runsOtherCommands(/** @type {string} */ (split.words[0]));
-    const mirrored = rules.mirror.find((r) => bashRuleMatches(r, command) && (!others || (broad && broadRuleWhy(r) !== null)));
+    /** @param {string} r */
+    const covers = (r) => bashRuleMatches(r, command) && (!others || (broad && broadRuleWhy(r) !== null));
+    const mirrored = rules.mirror.find(covers);
     if (mirrored !== undefined) return { behavior: 'allow', rule: mirrored, source: 'mirror', broad: broadRuleWhy(mirrored) !== null };
+    const prefixed = (rules.prefix ?? []).find(covers);
+    if (prefixed !== undefined) return { behavior: 'allow', rule: prefixed, source: 'prefix', broad: broadRuleWhy(prefixed) !== null };
   }
 
   const first = split.ok ? split.words[0] : undefined;
   const programs = namedPrograms(command, patterns.map((p) => p.words)).sort((a, b) => Number(b === first) - Number(a === first));
   if (programs.length === 0) {
-    if (why !== null && rules.mirror.length > 0) {
+    if (why !== null && (rules.mirror.length > 0 || (rules.prefix ?? []).length > 0)) {
       return {
         behavior: 'deny',
         program: null,
@@ -384,7 +418,7 @@ export function hookOutput(d) {
       systemMessage:
         d.source === 'unblock'
           ? 'kharos permission hook allowed this call by its unblock preset, which allows every prompt in cloud sessions on this repository'
-          : `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : 'rule'} ${d.rule}`,
+          : `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : d.source === 'prefix' ? 'prefix rule' : 'rule'} ${d.rule}`,
     };
   }
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: d.message } } };

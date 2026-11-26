@@ -1,11 +1,12 @@
 // The permission preflight: before a launch, the permission prompts its cloud session is likely to
-// hit, each with the narrow allow pattern of the kharos permission hook that answers it, and why.
+// hit, each with the narrow rule of the kharos permission hook that answers it, and why.
 // Three sources, each simple enough to explain in one line:
 //   1. the ask rules of the organization's managed settings (the local copy the doctor reads) and of the
 //      repository's .claude/settings.json: each one prompts in every cloud session;
 //   2. commands the repository itself runs that such an ask rule covers: package.json scripts, Makefile
 //      recipes, shell scripts, the docker compose commands of a compose file, and shell blocks of its docs;
-//   3. the Bash permission prompts kharos recorded in earlier sessions on the same repository.
+//   3. the Bash permission prompts kharos recorded in earlier sessions on the same repository, each
+//      reduced to a prefix rule of its program and subcommands, so none of its values reaches a rule.
 // A suggestion goes through the same safety filter as `kharos permissions hook diff`: never a broad
 // pattern, and never one a deny rule covers. Mirroring the organization's ask rules is separate: only
 // automatic preflight does it, while a remembered mirror confirmation matches the managed settings.
@@ -13,7 +14,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { bashRuleMatches, broadRuleWhy, decide, parsePattern, showPattern, type HookRules } from '../cloud/kharos-permission.mjs';
+import { bashRuleMatches, broadRuleWhy, decide, parsePattern, prefixOf, showPattern, type HookRules } from '../cloud/kharos-permission.mjs';
 import { promptCommand } from './approvals.ts';
 import { isPermissionPrompt } from './classify.ts';
 import { normalizeRepo } from './config.ts';
@@ -21,7 +22,7 @@ import type { RepoSnapshot } from './forge.ts';
 import { readStoredEvents } from './logparse.ts';
 import { hooksBlocked, mirrorRefusal, planMirror, type ManagedPolicy } from './managed-policy.ts';
 import { describeConfirmation, type ConfirmationState } from './org-confirmations.ts';
-import { allowRefusal, HOOK_RULES_PATH, HOOK_SCRIPT_PATH, hookState, type HookFiles } from './permission-hook.ts';
+import { allowRefusal, HOOK_RULES_PATH, HOOK_SCRIPT_PATH, hookState, prefixRefusal, type HookFiles } from './permission-hook.ts';
 import { parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
 import type { Paths } from './paths.ts';
 import { loadRegistry, logPath } from './registry.ts';
@@ -185,53 +186,6 @@ function tokenize(text: string): Token[] {
 /** A word that stands as itself in an allow pattern. */
 const PLAIN_RE = /^[\w@%+=:,./-]{1,120}$/;
 
-/** Userinfo in a URL (`://<userinfo>@`), user:password@ userinfo, or a key=value word whose key names a credential. */
-const SECRET_WORD_RE = /:\/\/[^/@]+@|:\/\/[^/@:]*:[^@]*@|[^/@:]*:[^/@]+@|(?:key|secret|token|passw(?:or)?d|pwd)=/i;
-/** A token of a known vendor, by its prefix: always a credential, whatever its shape or position. */
-const TOKEN_PREFIX_RE = /(?:^|[=:])(?:sk_live_|sk_test_|rk_live_|sk-ant-|sk-proj-|github_pat_|gh[pousr]_|glpat-|xox[abprs]-|(?:AKIA|ASIA)[A-Z0-9]{16})/;
-/** A JSON Web Token: base64url JSON, which starts with `eyJ`. */
-const JWT_RE = /^eyJ[\w-]{8,}/;
-/**
- * An option whose value is a credential: its last `-` separated part names one (--db-password,
- * --github-token, --auth), or it ends in api-key, auth-token, access-key or secret-key. A negation
- * (--no-password) and an option that reads the credential from stdin (--with-token, --password-stdin) take none.
- */
-function secretFlag(option: string): boolean {
-  const o = option.toLowerCase();
-  if (!o.startsWith('-') || o.includes('=') || o.startsWith('--no-') || o === '--with-token') return false;
-  const last = o.split('-').pop() as string;
-  return ['token', 'password', 'passwd', 'pass', 'secret', 'apikey', 'auth'].includes(last) || /(?:api|auth|access|secret)-(?:key|token)$/.test(o);
-}
-/** The `aws configure set` names whose value is a credential. */
-const AWS_SECRET_RE = /(?:^|\.)aws_(?:secret_access_key|session_token|access_key_id)$/;
-/** Options whose value is a database name. */
-const DATABASE_FLAGS = new Set(['-d', '--dbname', '--database']);
-
-/**
- * A word shaped like a generated credential: long, letters and digits mixed, and neither a path, a host
- * name, a hex commit id nor a name of several `-` or `_` separated parts.
- */
-function credentialShaped(w: string): boolean {
-  if (w.length < 20 || !/[a-z]/i.test(w) || !/\d/.test(w) || /[/.]/.test(w)) return false;
-  return !/^[0-9a-f]+$/i.test(w) && w.split(/[-_]/).length < 3;
-}
-
-/** A word that holds a credential (userinfo, a credential option or key=value, the value after one, or a token by its shape): never kept as written. */
-function secretAt(values: readonly string[], i: number): boolean {
-  const w = values[i] as string;
-  const program = path.posix.basename(values[0] as string);
-  const prev = i > 1 ? (values[i - 1] as string) : '';
-  if (TOKEN_PREFIX_RE.test(w) || SECRET_WORD_RE.test(w) || JWT_RE.test(w)) return true;
-  const inline = /^(-{1,2}[^=]+)=/.exec(w);
-  if (secretFlag(prev) || (inline !== null && secretFlag(inline[1] as string))) return true;
-  if ((prev === '-H' || prev === '--header') && /key|token|secret|auth/i.test(w.split(':')[0] as string)) return true;
-  if (program === 'curl' && (((prev === '-u' || prev === '--user') && w.includes(':')) || /^(?:-u|--user=).*:/.test(w))) return true;
-  if ((program === 'redis-cli' && prev === '-a') || (program === 'sshpass' && prev === '-p')) return true;
-  if (program === 'aws' && values[1] === 'configure' && values[2] === 'set' && i === 4) return AWS_SECRET_RE.test(values[3] as string);
-  if (/^(?:mysql|mysqldump|mysqladmin|mariadb)/.test(program) && /^-p.+/.test(w)) return true;
-  return i > 1 && program !== 'git' && !DATABASE_FLAGS.has(prev) && credentialShaped(w);
-}
-
 export interface Candidate {
   /** The pattern's words; null is a `*`, one argument of any content. */
   words: (string | null)[];
@@ -241,16 +195,39 @@ export interface Candidate {
 
 /**
  * A simple command as an allow pattern: the program stays as written, and every argument that expands
- * a variable, needed quoting (free text such as a query), is not a plain word or holds a credential becomes `*`.
+ * a variable, needed quoting (free text such as a query) or is not a plain word becomes `*`.
  */
 export function toCandidate(command: string): Candidate | null {
   const toks = tokenize(command);
   while (toks.length && !toks[0]?.raw.startsWith('=') && /^[A-Za-z_]\w*=/.test(toks[0]?.raw ?? '')) toks.shift();
   const first = toks[0];
   if (!first || first.dynamic || !PLAIN_RE.test(first.value) || first.value.startsWith('-')) return null;
-  const values = toks.map((t) => t.value);
-  const words = toks.map((t, i) => (!t.dynamic && PLAIN_RE.test(t.value) && (i === 0 || !secretAt(values, i)) ? t.value : null));
+  const words = toks.map((t) => (!t.dynamic && PLAIN_RE.test(t.value) ? t.value : null));
   return { words, text: toks.map((t) => t.raw).join(' ') };
+}
+
+/** Programs built on subcommands, with how many leading words name the action. */
+const SUBCOMMAND_WORDS: Record<string, number> = {
+  ...Object.fromEntries(['git', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go', 'make', 'terraform', 'helm', 'brew', 'pip', 'poetry', 'uv'].map((p) => [p, 1])),
+  ...Object.fromEntries(['kubectl', 'gh', 'aws', 'gcloud'].map((p) => [p, 2])),
+};
+const SUBCOMMAND_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * A command recorded in an earlier session as a prefix rule: its program and the subcommand words that
+ * name the action (`Bash(git push:*)`, `Bash(docker compose exec:*)`, `Bash(kubectl get pods:*)`), and
+ * nothing else of it, so no value, flag or path it was run with reaches a rule.
+ */
+export function prefixRule(c: Candidate): string {
+  const program = c.words[0] as string;
+  const name = path.posix.basename(program);
+  const count = (name === 'docker' || name === 'podman') && c.words[1] === 'compose' ? 2 : (SUBCOMMAND_WORDS[name] ?? 0);
+  const words = [program];
+  for (const w of c.words.slice(1, 1 + count)) {
+    if (w === null || !SUBCOMMAND_RE.test(w)) break;
+    words.push(w);
+  }
+  return `Bash(${words.join(' ')}:*)`;
 }
 
 /** The command lines a file of the repository holds, by what kind of file it is. */
@@ -306,7 +283,9 @@ export interface AskRule {
 export type Source = { kind: 'repo'; file: string } | { kind: 'history'; session: string };
 
 export interface Suggestion {
-  /** The allow pattern, as `--allow` takes it. */
+  /** An allow pattern, word by word, from the repository's files; or a prefix rule, from earlier sessions. */
+  kind: 'pattern' | 'prefix';
+  /** The allow pattern, as `--allow` takes it, or the prefix rule, as `--allow-prefix` takes it. */
   pattern: string;
   /** The likely prompt, as the session reads it: each `*` shows as <arg>. */
   prompt: string;
@@ -316,6 +295,8 @@ export interface Suggestion {
   /** The instruction names the program. */
   mentioned: boolean;
   status: 'suggested' | 'covered' | 'refused';
+  /** For status covered: the suggested prefix rule that covers it; null when the hook on the branch does. */
+  coveredBy: string | null;
   /** Why kharos does not suggest it, for status refused. */
   refusal: string | null;
 }
@@ -442,21 +423,31 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
   const asksOf = (text: string) => narrowAsks.filter((a) => bashRuleMatches(a.rule, text));
 
   interface Group {
-    words: (string | null)[];
+    /** The pattern's words, or null for a prefix rule. */
+    words: (string | null)[] | null;
+    /** The prefix rule, or null for a pattern. */
+    rule: string | null;
     texts: Set<string>;
     sources: Source[];
   }
   const groups = new Map<string, Group>();
-  const add = (c: Candidate, source: Source) => {
-    const key = groupKey(c.words);
+  const join = (key: string, fresh: Group, text: string, source: Source) => {
     const g = groups.get(key);
     if (!g) {
-      groups.set(key, { words: [...c.words], texts: new Set([c.text]), sources: [source] });
-      return;
+      groups.set(key, fresh);
+      return null;
     }
-    g.words = merge(g.words, c.words);
-    g.texts.add(c.text);
+    g.texts.add(text);
     if (!g.sources.some((s) => JSON.stringify(s) === JSON.stringify(source))) g.sources.push(source);
+    return g;
+  };
+  const add = (c: Candidate, source: Source) => {
+    const g = join(groupKey(c.words), { words: [...c.words], rule: null, texts: new Set([c.text]), sources: [source] }, c.text, source);
+    if (g?.words) g.words = merge(g.words, c.words);
+  };
+  const addPrefix = (c: Candidate, source: Source) => {
+    const rule = prefixRule(c);
+    join(`prefix\u0000${rule}`, { words: null, rule, texts: new Set([c.text]), sources: [source] }, c.text, source);
   };
 
   // 2. Commands the repository runs, when an ask rule covers them.
@@ -483,28 +474,46 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     const asked = parts.filter((c) => asksOf(c.text).length);
     const chosen = asked.length ? asked : parts.length === 1 && simpleCommands(h.command).length === 1 ? parts : [];
     if (chosen.length === 0) chained++;
-    for (const c of chosen) add(c, { kind: 'history', session: h.session });
+    for (const c of chosen) addPrefix(c, { kind: 'history', session: h.session });
   }
 
   const repoDeny = repoRules.deny;
   const suggestions: Suggestion[] = [];
+  const currentRules = current ? [...(current.prefix ?? []), ...current.mirror] : [];
   for (const g of groups.values()) {
-    const pattern = g.words.map((w) => (w === null ? '*' : w)).join(' ');
-    const program = g.words[0] as string;
-    const matched = narrowAsks.filter((a) => [...g.texts, sample(g.words)].some((t) => bashRuleMatches(a.rule, t)));
-    const refusal = allowRefusal(pattern, false, policy, repoDeny);
-    const covered = current !== null && decide({ tool_name: 'Bash', tool_input: { command: sample(g.words) } }, current).behavior === 'allow';
-    const p = parsePattern(pattern, true);
+    const head = g.rule === null ? null : prefixOf(g.rule);
+    const pattern = g.rule ?? (g.words as (string | null)[]).map((w) => (w === null ? '*' : w)).join(' ');
+    const shown = head ?? sample(g.words as (string | null)[]);
+    const program = shown.split(' ')[0] as string;
+    const matched = narrowAsks.filter((a) => [...g.texts, shown].some((t) => bashRuleMatches(a.rule, t)));
+    const refusal = g.rule ? prefixRefusal(g.rule, false, policy, repoDeny) : allowRefusal(pattern, false, policy, repoDeny);
+    const covered = g.rule
+      ? currentRules.some((r) => bashRuleMatches(r, shown) && bashRuleMatches(r, `${shown} x`))
+      : current !== null && decide({ tool_name: 'Bash', tool_input: { command: shown } }, current).behavior === 'allow';
+    const p = g.words ? parsePattern(pattern, true) : null;
     suggestions.push({
+      kind: g.rule ? 'prefix' : 'pattern',
       pattern,
-      prompt: p.ok ? showPattern(p.words) : pattern,
+      prompt: head ? `${head} <any arguments>` : p?.ok ? showPattern(p.words) : pattern,
       program,
       asks: matched,
       sources: g.sources,
       mentioned: mentions(instruction, program),
       status: refusal ? 'refused' : covered ? 'covered' : 'suggested',
+      coveredBy: null,
       refusal,
     });
+  }
+  // A pattern of the repository that a suggested prefix rule allows anyway is not suggested twice.
+  const prefixes = suggestions.filter((s) => s.kind === 'prefix' && s.status === 'suggested');
+  for (const s of suggestions) {
+    if (s.kind !== 'pattern' || s.status !== 'suggested') continue;
+    const p = parsePattern(s.pattern, true);
+    const by = p.ok ? prefixes.find((x) => bashRuleMatches(x.pattern, sample(p.words))) : undefined;
+    if (by) {
+      s.status = 'covered';
+      s.coveredBy = by.pattern;
+    }
   }
   suggestions.sort((a, b) => Number(b.mentioned) - Number(a.mentioned) || b.sources.length - a.sources.length || a.pattern.localeCompare(b.pattern));
 
@@ -519,10 +528,12 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
     if (suggestions.some((s) => s.status === 'suggested' && s.asks.some((x) => x.rule === a.rule && x.origin === a.origin))) return { ...a, state: 'suggested', mentioned };
     const byHook =
       current !== null &&
-      (current.mirror.includes(a.rule) || current.allow.some((p) => {
-        const w = parsePattern(p, true);
-        return w.ok && bashRuleMatches(a.rule, sample(w.words));
-      }));
+      (current.mirror.includes(a.rule) ||
+        (current.prefix ?? []).some((r) => bashRuleMatches(a.rule, prefixOf(r))) ||
+        current.allow.some((p) => {
+          const w = parsePattern(p, true);
+          return w.ok && bashRuleMatches(a.rule, sample(w.words));
+        }));
     if (byHook) return { ...a, state: 'hook', mentioned };
     return { ...a, state: a.origin === 'organization' && autoMirrors.includes(a.rule) ? 'mirror' : 'open', mentioned };
   });
@@ -548,10 +559,13 @@ export function buildPreflight(input: PreflightInput): PreflightReport {
   };
 }
 
-/** The patterns automatic preflight may apply: suggested ones only, which are narrow and pass every filter. */
-export function applicable(r: PreflightReport): string[] {
-  return r.suggestions.filter((s) => s.status === 'suggested').map((s) => s.pattern);
+/** The rules automatic preflight may apply: suggested ones only, which are narrow and pass every filter. */
+export function applicable(r: PreflightReport): { allow: string[]; prefix: string[] } {
+  const suggested = r.suggestions.filter((s) => s.status === 'suggested');
+  return { allow: suggested.filter((s) => s.kind === 'pattern').map((s) => s.pattern), prefix: suggested.filter((s) => s.kind === 'prefix').map((s) => s.pattern) };
 }
+
+const addFlag = (s: Suggestion) => `${s.kind === 'prefix' ? '--allow-prefix' : '--allow'} ${shellQuote(s.pattern)}`;
 
 function shellQuote(s: string): string {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -569,6 +583,7 @@ function why(s: Suggestion): string {
   if (files.length) out.push(`the repository runs it (${some(files)})`);
   if (sessions.length) out.push(`earlier sessions on this repository waited on it (${some(sessions)})`);
   if (s.mentioned) out.push(`the instruction mentions ${s.program}`);
+  if (s.kind === 'prefix') out.push(`it allows ${prefixOf(s.pattern)} with any arguments`);
   return out.join('; ');
 }
 
@@ -586,12 +601,12 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
   for (const n of r.notes) lines.push(`note: ${n}`);
   const suggested = r.suggestions.filter((s) => s.status === 'suggested');
   const open = r.asks.filter((a) => a.state === 'open');
-  if (suggested.length === 0 && open.length === 0) lines.push('no likely prompt found that a narrow allow pattern of the kharos permission hook would answer');
+  if (suggested.length === 0 && open.length === 0) lines.push('no likely prompt found that a narrow rule of the kharos permission hook would answer');
   let n = 0;
   if (suggested.length) {
     lines.push('likely prompt -> suggested narrow rule -> why:');
     for (const s of suggested) {
-      lines.push(`  ${++n}. ${s.prompt}`, `     -> --allow ${shellQuote(s.pattern)}`, `     -> ${why(s)}`);
+      lines.push(`  ${++n}. ${s.prompt}`, `     -> ${s.kind === 'prefix' ? s.pattern : `--allow ${shellQuote(s.pattern)}`}`, `     -> ${why(s)}`);
     }
   }
   for (const a of open) {
@@ -608,7 +623,8 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
   }
   const remembered = describeConfirmation(r.confirmation);
   if (remembered && r.mirrorRefusal === null && (open.some((a) => a.origin === 'organization') || r.confirmation.state === 'changed')) lines.push(`mirroring: ${remembered}`);
-  const covered = r.suggestions.filter((s) => s.status === 'covered');
+  const covered = r.suggestions.filter((s) => s.status === 'covered' && s.coveredBy === null);
+  for (const s of r.suggestions.filter((x) => x.status === 'covered' && x.coveredBy !== null)) lines.push(`covered by the suggested prefix rule ${s.coveredBy}: ${s.pattern}`);
   const byHook = r.asks.filter((a) => a.state === 'hook');
   if (covered.length || byHook.length) lines.push(`already answered by the kharos permission hook on this branch: ${some([...covered.map((s) => s.pattern), ...byHook.map((a) => a.rule)], 6)}`);
   for (const s of r.suggestions.filter((x) => x.status === 'refused')) lines.push(`not suggested: ${s.refusal}`);
@@ -620,7 +636,7 @@ export function formatPreflight(r: PreflightReport, o: FormatOptions): string {
   if (r.chained) lines.push(`${r.chained} earlier prompt(s) were for chained or piped commands that no ask rule explains; the hook allows only single simple commands`);
   if (r.repo) lines.push(`earlier sessions on this repository read: ${r.sessionsRead} (kharos keeps a session's log for 14 days after it is closed)`);
 
-  const flags = suggested.map((s) => `--allow ${shellQuote(s.pattern)}`);
+  const flags = suggested.map(addFlag);
   if (flags.length) {
     lines.push('to add them:');
     if (o.addCommand) {

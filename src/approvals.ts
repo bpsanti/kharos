@@ -18,9 +18,9 @@ export interface HookDecision {
   session_id: string | null;
   tool: string;
   decision: 'allow' | 'deny';
-  /** The allow pattern or mirrored organization rule that matched, or `unblock` for the unblock preset; null for a denial. */
+  /** The allow pattern, prefix rule or mirrored organization rule that matched, or `unblock` for the unblock preset; null for a denial. */
   rule: string | null;
-  source: 'allow' | 'mirror' | 'unblock' | null;
+  source: 'allow' | 'mirror' | 'prefix' | 'unblock' | null;
   /** For an approval: whether the rule that matched is broad (it allows any command it covers). Absent in lines from before kharos marked them. */
   broad?: boolean;
   /** For a denial: the program whose allowed forms the refusal named, if any. */
@@ -111,7 +111,7 @@ export function formatHookDecisions(paths: Paths, q: ApprovalQuery): string {
         ? `denied${d.program ? ` (refusal named the forms of ${d.program})` : ''}`
         : d.source === 'unblock'
           ? 'allowed by the unblock preset (no rule matched; every prompt is allowed)'
-          : `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : 'allow pattern'} ${d.rule}`;
+          : `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : d.source === 'prefix' ? 'prefix rule' : 'allow pattern'} ${d.rule}`;
     return `${d.at.slice(0, 19)}Z  ${d.kharos}  ${d.tool}  ${what}`;
   });
   const head = `${rows.length} ${q.all ? 'decision(s)' : 'approval(s)'} of the kharos permission hook, as the watcher read them from the session logs${shown.length < rows.length ? `; the last ${shown.length}` : ''}:`;

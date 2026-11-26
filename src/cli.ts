@@ -25,7 +25,7 @@ import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
 
 const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock']);
 /** Flags that may be given more than once; each value is kept, in order. */
-const LIST_FLAGS = new Set(['allow', 'drop']);
+const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
 export interface Args {
   positional: string[];
@@ -105,7 +105,7 @@ const USAGE = `usage: kharos <command>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
-  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
+  permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
   permissions preflight [dir] | permissions preflight --launch [--profile p]   [--stdin | --file f]: the launch instruction
@@ -315,6 +315,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
 export function hookChange(args: Args): HookChange {
   return {
     allow: args.lists.allow ?? [],
+    prefix: args.lists['allow-prefix'] ?? [],
     drop: args.lists.drop ?? [],
     mirror: args.flags.mirror === true,
     unmirror: args.flags.unmirror === true,

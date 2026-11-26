@@ -84,7 +84,7 @@ export function show(paths: Paths, ref: string): string {
   if (s.error) lines.push(`error: ${s.error}`);
   const p = s.preflight;
   if (p?.status === 'applied') {
-    lines.push(`permission preflight: ${p.applied.length} narrow allow pattern(s)${p.unblock ? ' and the unblock preset' : p.mirrored?.length ? ` and ${p.mirrored.length} mirrored organization ask rule(s)` : ''} on the side branch ${p.branch} (from ${p.base}, commit ${p.commit.slice(0, 12)})${p.deleted_at ? `; the branch was deleted at ${p.deleted_at}` : ''}: ${p.applied.join(' | ')}`);
+    lines.push(`permission preflight: ${p.applied.length} allow rule(s)${p.unblock ? ' and the unblock preset' : p.mirrored?.length ? ` and ${p.mirrored.length} mirrored organization ask rule(s)` : ''} on the side branch ${p.branch} (from ${p.base}, commit ${p.commit.slice(0, 12)})${p.deleted_at ? `; the branch was deleted at ${p.deleted_at}` : ''}: ${p.applied.join(' | ')}`);
   } else if (p?.status === 'skipped') lines.push(`permission preflight: ${p.reason}`);
   else if (p?.status === 'creating') lines.push(`permission preflight: the side branch ${p.branch} was not finished`);
   return lines.join('\n');

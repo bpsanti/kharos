@@ -24,9 +24,9 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
    1. Run `kharos permissions hook show <folder>` and show its output as it is.
    2. If it says `permission_hook` is off, explain in one or two sentences that the hook is opt-in and off by default, and that while it is on the hook answers permission prompts in cloud sessions of any repository that has it, with no person asked.
       Ask with AskUserQuestion whether to turn it on; only on an explicit yes run `kharos permissions hook enable` and show its output. On no, stop.
-   3. Ask the person what to change, in their own words: allow patterns to add (a command whose words must match exactly, where a `*` word stands for one argument, such as `psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc *`), patterns to drop, mirroring the organization's ask rules, or removing the hook.
+   3. Ask the person what to change, in their own words: allow patterns to add (a command whose words must match exactly, where a `*` word stands for one argument, such as `psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc *`), prefix rules to add (`Bash(<program> <subcommands>:*)`, which allow any arguments, such as `Bash(git push:*)`), patterns or prefix rules to drop, mirroring the organization's ask rules, or removing the hook.
       Offer mirroring only when the show output says it is available; when it says it is refused or unavailable, say why, in its words.
-   4. Build the flags: `--allow "<pattern>"` and `--drop "<pattern>"` once per pattern, `--mirror` or `--unmirror`, or `--uninstall` alone.
+   4. Build the flags: `--allow "<pattern>"`, `--allow-prefix "<prefix rule>"` and `--drop "<pattern or prefix rule>"` once per rule, `--mirror` or `--unmirror`, or `--uninstall` alone.
       Add `--broad` only when the person asked for a broad rule (a pattern for a shell, an interpreter, a wrapper or a wildcard program, or mirroring broad organization rules) after you told them that it allows any command in this repository's cloud sessions with no person asked.
       Run `kharos permissions hook diff <flags> <folder>` and show its whole output as it is. If it fails, show the error and stop. If it says there is nothing to change, stop.
    5. Ask the person with AskUserQuestion whether to write exactly this change, with the diff in the preview of the yes option.
@@ -36,7 +36,7 @@ Permission rules of a repository for its cloud sessions. Request: $ARGUMENTS
    7. Only on an explicit yes to every question, run the `kharos permissions hook write ...` command the diff names, exactly as written (with `--broad` and `--org-confirmed` only when the diff names them and the person said yes to each warning), and show its output.
       Never write the files yourself, never change the token or the flags, and never run it without those yeses.
 6. For `preflight`: run `kharos permissions preflight <folder>` and show its whole output as it is.
-   If the person wants the suggested rules, go on with `hook` (step 5) using exactly the `--allow` patterns it printed.
+   If the person wants the suggested rules, go on with `hook` (step 5) using exactly the `--allow` patterns and `--allow-prefix` rules it printed.
    To turn automatic preflight on or off, the person runs `kharos permissions auto preflight on|off` themselves; never run it for them.
 7. For `unblock`:
    1. Run `kharos permissions unblock show` and show its whole output as it is. If it says the preset is not available, say why in its words, and stop.

@@ -52,8 +52,8 @@ export interface Config {
    */
   permission_hook: boolean;
   /**
-   * Opt-in, off by default, and only while permission_hook is on: at each launch kharos writes the narrow
-   * allow patterns the permission preflight suggests to a side branch of its own, kharos/<id>, and the
+   * Opt-in, off by default, and only while permission_hook is on: at each launch kharos writes the allow
+   * patterns and prefix rules the permission preflight suggests to a side branch of its own, kharos/<id>, and the
    * session starts there; the organization's ask rules are also mirrored there while a remembered mirror
    * confirmation matches its managed settings. The branch it launches from is never changed. Off, the
    * preflight only suggests.

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { decide, readHookRules } from '../cloud/kharos-permission.mjs';
-import { main } from '../src/cli.ts';
+import { hookChange, main, parseArgs } from '../src/cli.ts';
 import { close, show } from '../src/commands.ts';
 import { parseConfig } from '../src/config.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
@@ -12,8 +12,8 @@ import { ghForge, type Forge, type Gh, type GhResult, type RepoSnapshot } from '
 import { preToolUse, postToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { parseManagedPolicy, type ManagedPolicy } from '../src/managed-policy.ts';
-import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, shippedScript } from '../src/permission-hook.ts';
-import { switchPreflightAuto, switchUnblockAuto } from '../src/permissions.ts';
+import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, planHook, shippedScript } from '../src/permission-hook.ts';
+import { changeFlags, EMPTY_CHANGE, switchPreflightAuto, switchUnblockAuto } from '../src/permissions.ts';
 import { applicable, buildPreflight, commandLines, formatPreflight, selectFiles, simpleCommands, toCandidate, type HistoryPrompt, type PreflightReport } from '../src/preflight.ts';
 import { loadRegistry, logPath, updateRegistry } from '../src/registry.ts';
 import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -60,100 +60,93 @@ test('preflight: an escaped quote inside double quotes stays in its word', () =>
   assert.deepEqual(toCandidate('echo "a \\$HOME b"')?.words, ['echo', null]);
 });
 
-test('preflight: a word that holds a credential is never kept as written', () => {
-  const cases: [string, (string | null)[]][] = [
-    ['psql postgresql://app:S3cr3t@db.example:5432/app -c x', ['psql', null, '-c', 'x']],
-    ['redis-cli -u redis://:S3cr3t@cache.example:6379 ping', ['redis-cli', '-u', null, 'ping']],
-    ['mysql -pS3cr3t -h db.example app', ['mysql', null, '-h', 'db.example', 'app']],
-    ['redis-cli -a S3cr3t -h cache.example ping', ['redis-cli', '-a', null, '-h', 'cache.example', 'ping']],
-    ['tool --password=S3cr3t run', ['tool', null, 'run']],
-    ['tool --password S3cr3t run', ['tool', '--password', null, 'run']],
-    ['tool api_token=S3cr3t run', ['tool', null, 'run']],
-    ['curl -u admin:S3cr3t https://api.example/health', ['curl', '-u', null, 'https://api.example/health']],
-    ['sshpass -p S3cr3t ssh host.example', ['sshpass', '-p', null, 'ssh', 'host.example']],
-    ['tool --api-key S3cr3t run', ['tool', '--api-key', null, 'run']],
-    ['tool --apikey S3cr3t run', ['tool', '--apikey', null, 'run']],
-    ['tool --access-key S3cr3t run', ['tool', '--access-key', null, 'run']],
-    ['tool --secret-access-key S3cr3t run', ['tool', '--secret-access-key', null, 'run']],
-    ['tool --client-secret S3cr3t run', ['tool', '--client-secret', null, 'run']],
-    ['tool --auth-token S3cr3t run', ['tool', '--auth-token', null, 'run']],
-    ['tool --auth S3cr3t run', ['tool', '--auth', null, 'run']],
-    ['mytool --db-password hunter2', ['mytool', '--db-password', null]],
-    ['tool --pass=hunter2abc run', ['tool', null, 'run']],
-    ['tool --auth=S3cr3tXYZ run', ['tool', null, 'run']],
-    ['tool --db-pass=abc123def456ghi789jkl run', ['tool', null, 'run']],
-    ['curl --user=admin:hunter2 https://api.example/health', ['curl', null, 'https://api.example/health']],
-    ['curl -uadmin:hunter2 https://api.example/health', ['curl', null, 'https://api.example/health']],
-    ['deploy --github-token ghp_abc', ['deploy', '--github-token', null]],
-    // Vendor tokens by their published prefixes, wherever they stand.
-    ['gh secret set K --body sk_live_51Habcd1234efgh5678', ['gh', 'secret', 'set', 'K', '--body', null]],
-    ['gh secret set K --body github_pat_11ABCDEFG_abcdefghijk', ['gh', 'secret', 'set', 'K', '--body', null]],
-    ['tool post xoxb-123456789012-456789012345-AbCdEfGhIjKl', ['tool', 'post', null]],
-    ['tool run sk-ant-api03-abcdefghij', ['tool', 'run', null]],
-    ['tool run sk-proj-abcdefghij', ['tool', 'run', null]],
-    ['tool run glpat-abcdefghij', ['tool', 'run', null]],
-    ['tool run AKIAIOSFODNN7EXAMPLE', ['tool', 'run', null]],
-    ['git push ghp_abcdefghijklmnop main', ['git', 'push', null, 'main']],
-    // Userinfo in a URL, with no colon in it: a token alone.
-    ['git clone https://ghp_abcdefghijklmnop@github.com/org/repo.git', ['git', 'clone', null]],
-    ['git clone https://x-access-token@github.com/org/repo.git', ['git', 'clone', null]],
-    ['tool --api-key=S3cr3t run', ['tool', null, 'run']],
-    ['env AWS_SECRET_ACCESS_KEY=S3cr3t aws s3 ls', ['env', null, 'aws', 's3', 'ls']],
-    ['env API_KEY=S3cr3t tool', ['env', null, 'tool']],
-    ['aws configure set aws_secret_access_key S3cr3t', ['aws', 'configure', 'set', 'aws_secret_access_key', null]],
-    ['git clone https://bot:S3cr3t@git.example/org/repo', ['git', 'clone', null]],
-    // A token by its shape alone: long, letters and digits mixed, no path or host name.
-    ['tool run ghp1A2b3C4d5E6f7G8h9I0jKlMn', ['tool', 'run', null]],
-    // A JSON Web Token, a credential header, and a URL password with a slash in it.
-    ['tool --jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl', ['tool', '--jwt', null]],
-    ['curl -H X-Api-Key:abc123def https://api.example/health', ['curl', '-H', null, 'https://api.example/health']],
-    ['curl -H Authorization:Bearer-abc123 https://api.example/health', ['curl', '-H', null, 'https://api.example/health']],
-    ['curl https://u:pa/ss@api.example/health', ['curl', null]],
-    ['aws configure set aws_session_token S3cr3t', ['aws', 'configure', 'set', 'aws_session_token', null]],
-    ['aws configure set aws_access_key_id AKIAEXAMPLE', ['aws', 'configure', 'set', 'aws_access_key_id', null]],
-  ];
-  for (const [command, words] of cases) assert.deepEqual(toCandidate(command)?.words, words, command);
-  // A URL with no userinfo, a port flag, an ssh remote, a long host name and a long path stay as written.
-  assert.deepEqual(toCandidate('psql postgresql://db.example/app -p 5432')?.words, ['psql', 'postgresql://db.example/app', '-p', '5432']);
-  assert.deepEqual(toCandidate('git clone git@github.com:org/repo.git')?.words, ['git', 'clone', 'git@github.com:org/repo.git']);
-  assert.deepEqual(toCandidate('redis-cli -h cache01.prod2.example.internal ping')?.words, ['redis-cli', '-h', 'cache01.prod2.example.internal', 'ping']);
-  assert.deepEqual(toCandidate('cat logs/2026/session01/output2.txt')?.words, ['cat', 'logs/2026/session01/output2.txt']);
-  // Ordinary identifiers stay as written: commit ids, branch and file names of several parts, database names, other options and headers.
-  const literal = [
-    'git checkout 1577522e2caac6214a9d58c8863c86556c38369c',
-    'git revert 1577522e2caac6214a9d58c8863c86556c38369c',
-    'git push origin release-2026-11-26-hotfix',
-    'rm -rf build_2024_artifacts_old',
-    'psql -d analytics_2024_warehouse',
-    'psql -d analytics2024warehouseprimary',
-    'git log --author someone',
-    'gpg --keyserver keys.example --recv-keys ABCD1234',
-    'tool --passes 3',
-    'tool --auth-type basic',
-    'psql --no-password -d mydb',
-    'tool --no-auth deploy',
-    'gh auth login --with-token',
-    'docker login --password-stdin registry.example',
-    'gh secret set K --body plain',
-    'aws configure set region us-east-1',
-    'curl -H Accept:application/json https://api.example/health',
-  ];
-  for (const command of literal) assert.deepEqual(toCandidate(command)?.words, command.split(' '), command);
+test('preflight: a prompt of an earlier session becomes a prefix rule of its program and subcommands, with none of its values', () => {
+  const bash = (command: string): HistoryPrompt => ({ session: 'k-0001', tool: 'Bash', command });
+  const r = report({}, {
+    history: [
+      bash(`psql postgresql://app:S3cr3t@db.x.rds.amazonaws.com:5432/app -c "select 1"`),
+      bash('git push origin main'),
+      bash('git push origin feature-x'),
+      bash('docker compose exec db psql -U dev'),
+      bash('redis-cli -a S3cr3t ping'),
+      bash('kubectl get pods -n prod'),
+      bash('gh pr view 12'),
+      bash('git --no-pager log'),
+    ],
+  });
+  assert.deepEqual(r.suggestions.map((s) => [s.kind, s.pattern]).sort(), [
+    ['prefix', 'Bash(docker compose exec:*)'],
+    ['prefix', 'Bash(gh pr view:*)'],
+    ['prefix', 'Bash(git push:*)'],
+    ['prefix', 'Bash(git:*)'],
+    ['prefix', 'Bash(kubectl get pods:*)'],
+    ['prefix', 'Bash(psql:*)'],
+    ['prefix', 'Bash(redis-cli:*)'],
+  ]);
+  assert.deepEqual(r.suggestions.find((s) => s.pattern === 'Bash(git push:*)')?.sources, [{ kind: 'history', session: 'k-0001' }], 'the same prefix from two prompts is one rule');
+  assert.deepEqual(applicable(r).allow, []);
+  const text = formatPreflight(r, { addCommand: 'kharos permissions hook diff {flags} /work/demo', after: [], hookOn: true, auto: false });
+  assert.match(text, /\d\. psql <any arguments>\n {5}-> Bash\(psql:\*\)\n {5}-> the organization's ask rule Bash\(psql:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows psql with any arguments/);
+  assert.match(text, /kharos permissions hook diff .*--allow-prefix 'Bash\(psql:\*\)'.* \/work\/demo/);
+  for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin', 'feature-x', '-n prod', 'view 12', '--no-pager']) assert.equal(text.includes(word), false, word);
 });
 
-test('automatic preflight: a credential typed in an earlier session never reaches the side branch', () => {
+test('preflight: a prefix rule that a deny rule covers, or whose program runs other code, is never suggested', () => {
+  const settings = JSON.stringify({ permissions: { deny: ['Bash(rm:*)'] } });
+  const r = report({ '.claude/settings.json': settings }, { history: [{ session: 'k-0001', tool: 'Bash', command: 'rm -rf build' }, { session: 'k-0001', tool: 'Bash', command: 'python3 manage.py check' }] });
+  const rm = r.suggestions.find((s) => s.pattern === 'Bash(rm:*)');
+  assert.equal(rm?.status, 'refused');
+  assert.match(rm?.refusal ?? '', /the deny rule Bash\(rm:\*\) covers it/);
+  assert.equal(r.suggestions.find((s) => s.pattern === 'Bash(python3:*)')?.status, 'refused');
+  assert.deepEqual(applicable(r), { allow: [], prefix: [] });
+});
+
+test('permission hook: prefix rules are planned with the same deny and broad checks, written to the rules file and read back by the hook', () => {
+  const empty = { settings: null, script: null, rules: null };
+  const plan = planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(psql:*)', 'Bash(git push:*)'] }, POLICY);
+  const written = plan.changes.find((c) => c.path === HOOK_RULES_PATH)?.after ?? '';
+  assert.deepEqual(JSON.parse(written), { version: 1, allow: [], prefix: ['Bash(psql:*)', 'Bash(git push:*)'], mirror: [] });
+  assert.match(plan.lines.join('\n'), /prefix rules, any arguments \(2\): Bash\(psql:\*\), Bash\(git push:\*\)/);
+  const rules = readHookRules(JSON.parse(written));
+  const ask = (command: string) => decide({ tool_name: 'Bash', tool_input: { command } }, rules);
+  assert.deepEqual(ask(`psql -h x -c 'select 1'`), { behavior: 'allow', rule: 'Bash(psql:*)', source: 'prefix', broad: false });
+  assert.equal(ask('git push --force origin other').behavior, 'allow');
+  assert.equal(ask('git pull').behavior, 'deny');
+  assert.equal(ask(`psql -h x -c 'select 1' && rm -rf /tmp/x`).behavior, 'deny', 'a chained command is never allowed');
+  assert.equal(ask('PGPASSWORD=x psql -h x').behavior, 'deny', 'nor one with a variable in front');
+  // The organization's deny rule Bash(psql -h prod.example:*) covers this prefix; a program that runs other commands is broad.
+  assert.throws(() => planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(psql -h prod.example:*)'] }, POLICY), /prefix rule "Bash\(psql -h prod\.example:\*\)" is refused: the deny rule Bash\(psql -h prod\.example:\*\) covers it/);
+  assert.throws(() => planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(bash:*)'] }, POLICY), /is refused: it is broad \(bash runs other commands/);
+  assert.throws(() => planHook(empty, { ...EMPTY_CHANGE, prefix: ['Bash(git *:*)'] }, POLICY), /its words must be literal/);
+  assert.throws(() => readHookRules({ version: 1, allow: [], prefix: ['Bash(sh:*)'], mirror: [] }), /prefix rule "Bash\(sh:\*\)" is not valid: it is broad/);
+  // The flags state the same change, word for word.
+  const change = hookChange(parseArgs(['--allow-prefix', 'Bash(git push:*)', '--drop', 'Bash(psql:*)']));
+  assert.deepEqual([change.prefix, change.drop], [['Bash(git push:*)'], ['Bash(psql:*)']]);
+  assert.deepEqual(changeFlags(change), ['--allow-prefix', `'Bash(git push:*)'`, '--drop', `'Bash(psql:*)'`]);
+  const dropped = planHook({ ...empty, rules: written }, { ...EMPTY_CHANGE, drop: ['Bash(psql:*)'] }, POLICY);
+  assert.deepEqual(JSON.parse(dropped.changes.find((c) => c.path === HOOK_RULES_PATH)?.after ?? '').prefix, ['Bash(git push:*)']);
+});
+
+test('automatic preflight: earlier prompts reach the side branch as prefix rules, and none of their words do', () => {
   const sb = sandbox();
   updateRegistry(sb.paths, (reg) => {
     reg.sessions['k-0090'] = { id: 'k-0090', repo: 'https://github.com/example/demo' } as never;
   });
-  const cmd = `psql postgresql://app:S3cr3t@db.example:5432/app -c 'select 1'`;
+  const cmds = [`psql postgresql://app:S3cr3t@db.x.rds.amazonaws.com:5432/app -c "select 1"`, 'redis-cli -a S3cr3t ping', 'git push origin main'];
+  const prompt = (cmd: string) => JSON.stringify({ t: T0, ts: '2026-11-25T18:57:41.000Z', kind: 'permission prompt', tool: 'Bash', text: JSON.stringify({ command: cmd }), truncated: false, key: cmd, seq: 0 });
   fs.mkdirSync(sb.paths.logs, { recursive: true });
-  fs.writeFileSync(logPath(sb.paths, 'k-0090'), JSON.stringify({ t: T0, ts: '2026-11-25T18:57:41.000Z', kind: 'permission prompt', tool: 'Bash', text: JSON.stringify({ command: cmd }), truncated: false, key: cmd, seq: 0 }) + '\n');
+  fs.writeFileSync(logPath(sb.paths, 'k-0090'), cmds.map(prompt).join('\n') + '\n');
   const forge = fakeForge({ 'README.md': 'nothing to run' });
   const s = autoPrepare(sb, forge);
-  assert.equal(s.preflight?.status === 'applied' && s.preflight.applied.includes('psql * -c *'), true);
-  for (const f of forge.created[0]?.files ?? []) assert.equal(f.content.includes('S3cr3t'), false, f.path);
-  assert.equal(fs.readFileSync(sb.paths.preflight, 'utf8').includes('S3cr3t'), false);
+  assert.equal(s.preflight?.status, 'applied');
+  assert.deepEqual(s.preflight?.status === 'applied' ? [...s.preflight.applied].sort() : [], ['Bash(git push:*)', 'Bash(psql:*)', 'Bash(redis-cli:*)']);
+  const rules = JSON.parse(forge.created[0]?.files.find((f) => f.path === HOOK_RULES_PATH)?.content ?? '{}');
+  assert.deepEqual([...rules.prefix].sort(), ['Bash(git push:*)', 'Bash(psql:*)', 'Bash(redis-cli:*)']);
+  for (const word of ['S3cr3t', 'rds.amazonaws.com', 'origin main']) {
+    for (const f of forge.created[0]?.files ?? []) assert.equal(f.content.includes(word), false, `${word} in ${f.path}`);
+    assert.equal(fs.readFileSync(sb.paths.preflight, 'utf8').includes(word), false, `${word} in preflight.jsonl`);
+  }
+  assert.equal(decide({ tool_name: 'Bash', tool_input: { command: `psql -h x -c 'select 1'` } }, s.permission_hook!).behavior, 'allow');
 });
 
 test('preflight: the command lines of package.json, a Makefile, shell docs and a compose file', () => {
@@ -189,12 +182,12 @@ test('preflight: a repository command an organization ask rule covers is a likel
   assert.equal(prod?.status, 'refused');
   assert.match(prod?.refusal ?? '', /deny rule Bash\(psql -h prod\.example:\*\) covers it/);
   assert.equal(r.suggestions.some((s) => s.program === 'node'), false, 'a bare Bash ask rule does not make every script line a likely prompt');
-  assert.deepEqual(applicable(r), ['psql -h 127.0.0.1 -U dev -d app -c *']);
+  assert.deepEqual(applicable(r), { allow: ['psql -h 127.0.0.1 -U dev -d app -c *'], prefix: [] });
   const states = Object.fromEntries(r.asks.map((a) => [a.rule, a.state]));
   assert.deepEqual(states, { 'Bash(psql:*)': 'suggested', 'Bash(pg_dump:*)': 'open', 'Bash(redis-cli:*)': 'open', Bash: 'every-command', 'WebFetch(domain:internal.example)': 'not-bash' });
 });
 
-test('preflight: earlier prompts on the same repository are suggestions, merged with the repository by the words that differ', () => {
+test('preflight: earlier prompts on the same repository are prefix suggestions, and a repository pattern one covers is not suggested twice', () => {
   const history: HistoryPrompt[] = [
     { session: 'k-0001', tool: 'Bash', command: `psql -h 127.0.0.1 -U dev -d shop -c 'select 2'` },
     { session: 'k-0002', tool: 'Bash', command: 'redis-cli -h 127.0.0.1 info memory' },
@@ -204,16 +197,19 @@ test('preflight: earlier prompts on the same repository are suggestions, merged 
     { session: 'k-0003', tool: 'WebFetch', command: null },
   ];
   const r = report({ 'package.json': PACKAGE }, { history, instruction: 'Profile the slow redis-cli calls.' });
-  const psql = r.suggestions.find((s) => s.program === 'psql');
-  assert.equal(psql?.pattern, 'psql -h 127.0.0.1 -U dev -d * -c *');
-  assert.deepEqual(psql?.sources, [{ kind: 'repo', file: 'package.json' }, { kind: 'history', session: 'k-0001' }]);
-  // Two literal words that differ merge into a `*` too, and automatic preflight applies it as it is.
-  const pushes = report({}, { history: ['feature-x', 'main'].map((b) => ({ session: 'k-0001', tool: 'Bash', command: `git push origin ${b}` })) });
-  assert.equal(applicable(pushes).includes('git push origin *'), true);
+  const psql = r.suggestions.find((s) => s.pattern === 'Bash(psql:*)');
+  assert.deepEqual([psql?.status, psql?.sources], ['suggested', [{ kind: 'history', session: 'k-0001' }]]);
+  const fromRepo = r.suggestions.find((s) => s.pattern === 'psql -h 127.0.0.1 -U dev -d app -c *');
+  assert.deepEqual([fromRepo?.status, fromRepo?.coveredBy], ['covered', 'Bash(psql:*)']);
+  assert.match(formatPreflight(r, { addCommand: null, after: [], hookOn: true, auto: false }), /covered by the suggested prefix rule Bash\(psql:\*\): psql -h 127\.0\.0\.1 -U dev -d app -c \*/);
   const redis = r.suggestions[0];
-  assert.equal(redis?.pattern, 'redis-cli -h 127.0.0.1 info memory', 'what the instruction names comes first');
+  assert.equal(redis?.pattern, 'Bash(redis-cli:*)', 'what the instruction names comes first');
   assert.equal(redis?.mentioned, true);
   assert.equal(r.suggestions.find((s) => s.program === 'python3')?.status, 'refused', 'a program that runs other code is broad, never suggested');
+  assert.deepEqual(applicable(r), { allow: [], prefix: ['Bash(redis-cli:*)', 'Bash(psql:*)'] });
+  // Commands of the repository merge word by word, where the words that differ become `*`.
+  const scripts = JSON.stringify({ scripts: { a: 'psql -h 127.0.0.1 -U dev -d app -c "select 1"', b: 'psql -h 127.0.0.1 -U dev -d shop -c "select 2"' } });
+  assert.deepEqual(applicable(report({ 'package.json': scripts })), { allow: ['psql -h 127.0.0.1 -U dev -d * -c *'], prefix: [] });
   assert.equal(r.chained, 1);
   assert.deepEqual(r.otherTools, [{ tool: 'WebFetch', count: 2 }]);
   assert.equal(r.asks.find((a) => a.rule === 'Bash(redis-cli:*)')?.state, 'suggested');
@@ -226,13 +222,13 @@ test('preflight: what the hook on the branch allows already is not suggested aga
   assert.equal(r.suggestions.find((s) => s.program === 'psql')?.status, 'covered');
   assert.equal(r.asks.find((a) => a.rule === 'Bash(pg_dump:*)')?.state, 'hook');
   assert.equal(r.asks.find((a) => a.rule === 'Bash(psql:*)')?.state, 'hook');
-  assert.deepEqual(applicable(r), []);
+  assert.deepEqual(applicable(r), { allow: [], prefix: [] });
 });
 
 test('preflight: the repository ask rules count too, and with no managed settings nothing is guessed', () => {
   const settings = JSON.stringify({ permissions: { ask: ['Bash(docker compose down:*)'] } });
   const r = report({ 'compose.yml': 'services: {}', '.claude/settings.json': settings }, { policy: NO_POLICY });
-  assert.deepEqual(applicable(r), ['docker compose down']);
+  assert.deepEqual(applicable(r), { allow: ['docker compose down'], prefix: [] });
   assert.match(r.notes.join('\n'), /no copy of the organization's managed settings/);
 });
 
@@ -289,11 +285,11 @@ test('preflight: `kharos permissions preflight <checkout>` reads the checkout, t
   fs.writeFileSync(logPath(sb.paths, 'k-0002'), prompt('pg_dump -h other') + '\n');
   const r = await captured(() => main(['permissions', 'preflight', dir], sb.env, () => 'Dump the orders table with pg_dump.'));
   assert.equal(r.value, 0, r.stderr);
-  assert.match(r.stdout, /1\. pg_dump -h 127\.0\.0\.1 -U dev app\n     -> --allow 'pg_dump -h 127\.0\.0\.1 -U dev app'\n     -> the organization's ask rule Bash\(pg_dump:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\)\n/);
+  assert.match(r.stdout, /1\. pg_dump <any arguments>\n     -> Bash\(pg_dump:\*\)\n     -> the organization's ask rule Bash\(pg_dump:\*\) prompts in every cloud session; earlier sessions on this repository waited on it \(k-0001\); it allows pg_dump with any arguments\n/);
   assert.match(r.stdout, /redis-cli -h 127\.0\.0\.1 ping[\s\S]*the repository runs it \(docs\/ops\.md\)/);
-  assert.doesNotMatch(r.stdout, /pg_dump -h other/, 'another repository\'s prompts are not read');
+  assert.doesNotMatch(r.stdout, /pg_dump -h/, 'no word of an earlier prompt is shown');
   assert.doesNotMatch(r.stdout, /the instruction mentions/, 'no instruction is read without --stdin or --file');
-  assert.match(r.stdout, new RegExp(`kharos permissions hook diff --allow 'pg_dump -h 127\\.0\\.0\\.1 -U dev app' --allow .* ${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`));
+  assert.match(r.stdout, new RegExp(`kharos permissions hook diff --allow-prefix 'Bash\\(pg_dump:\\*\\)' --allow .* ${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`));
   assert.doesNotMatch(r.stdout, /kharos permissions hook enable/, 'the hook is on already');
   const withTask = await captured(() => main(['permissions', 'preflight', dir, '--stdin'], sb.env, () => 'Dump the orders table with pg_dump.'));
   assert.match(withTask.stdout, /the instruction mentions pg_dump/);
@@ -454,7 +450,7 @@ test('automatic preflight: the narrow rules go to a side branch kharos/<id>, the
   const content: string = body.job_config.ccr.events[0].data.message.content;
   assert.match(content, new RegExp(`This session starts on branch kharos/k-0001: main plus one commit, ${N}, that only adds the kharos permission hook`));
   assert.match(content, new RegExp(`git fetch origin main\` and then \`git rebase --onto FETCH_HEAD ${N}\`.*open the pull request against main`));
-  assert.match(show(sb.paths, 'k-0001'), /permission preflight: 1 narrow allow pattern\(s\) on the side branch kharos\/k-0001 \(from main/);
+  assert.match(show(sb.paths, 'k-0001'), /permission preflight: 1 allow rule\(s\) on the side branch kharos\/k-0001 \(from main/);
 
   // Launch it, then close it: the side branch goes, and only once.
   postToolUse(sb.ctx(T0), hook({ action: 'create', body }, response(200, { trigger: { id: 'trig_01TESTROUTINEAAAAAAAAAAA' } })));

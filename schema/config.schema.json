@@ -43,7 +43,7 @@
     "preflight_auto": {
       "type": "boolean",
       "default": false,
-      "description": "Opt-in automatic permission preflight, effective only while permission_hook is on: at each launch kharos writes the narrow allow patterns the preflight suggests to a side branch kharos/<id> and starts the session there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and the side branch is deleted when the session is closed. See docs/permissions.md."
+      "description": "Opt-in automatic permission preflight, effective only while permission_hook is on: at each launch kharos writes the allow patterns and prefix rules the preflight suggests to a side branch kharos/<id> and starts the session there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and the side branch is deleted when the session is closed. See docs/permissions.md."
     },
     "permission_unblock": {
       "type": "boolean",
