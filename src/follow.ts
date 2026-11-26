@@ -12,10 +12,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { CommandError } from './commands.ts';
 import { loadConfig, type OutputConfig } from './config.ts';
 import { buildEvent, enqueue } from './events.ts';
-import { liveFollowers } from './lease.ts';
+import { LEASE_STALE_MS, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import { deliver, filePath } from './outputs/index.ts';
 import type { Paths } from './paths.ts';
-import { findSession, isFollowed, loadRegistry, type Session } from './registry.ts';
+import { findSession, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
 import { followersToStart, followTargets, wait, WAIT_DEFAULTS, type WaitOptions, type WaitOutcome } from './wait.ts';
 
 /** Claude Code runs without a terminal: `claude -p` says `sdk-cli`, the Agent SDK `sdk-ts` or `sdk-py`. */
@@ -47,47 +47,69 @@ export interface FollowLoopOptions {
 
 /** Nobody reads the session any more: says so to the outputs, since a detached follower has no one watching its log. */
 async function reportStopped(paths: Paths, opts: FollowLoopOptions): Promise<void> {
-  const s = findSession(loadRegistry(paths), opts.id);
-  if (!s) return;
   const now = Date.now();
-  enqueue(paths, [buildEvent(s, 'session.unfollowed', s.state, `its follower stopped because reads kept failing; kharos follow ${s.id} --detach starts it again`, now)]);
+  const ev = updateRegistry(paths, (reg) => {
+    const s = findSession(reg, opts.id);
+    if (!s) return null;
+    const ev = buildEvent(s, 'session.unfollowed', s.state, `its follower stopped because reads kept failing; kharos follow ${s.id} --detach starts it again`, now);
+    s.notice = { event: ev.event, at: ev.at };
+    s.last_notice = { event: ev.event, at: ev.at };
+    return ev;
+  });
+  if (!ev) return;
+  enqueue(paths, [ev]);
   await (opts.deliver ?? deliver)({ paths, env: opts.env, now, platform: process.platform, inHook: false });
+}
+
+/** Waits before the next try while holding the session's lease, so the follower still counts as following. */
+async function holdLease(paths: Paths, id: string, ms: number, sleep: (ms: number) => Promise<void>): Promise<void> {
+  const slice = LEASE_STALE_MS / 3;
+  for (let left = ms; left > 0; left -= slice) {
+    takeLease(paths, id, Date.now());
+    await sleep(Math.min(left, slice));
+  }
 }
 
 /**
  * The follower's loop, in the shell: waits on the session again and again, prints the JSON line of each
- * change, and returns at its end (0). A failed wait is tried again after a growing delay; when it still
- * fails, the loop tells the outputs that nobody follows the session and returns 1.
+ * change, and returns at its end (0). A failed wait is tried again after a growing delay, with the lease
+ * kept; when it still fails, the loop tells the outputs that nobody follows the session and returns 1.
  */
 export async function followLoop(paths: Paths, opts: FollowLoopOptions): Promise<number> {
   const run = opts.wait ?? wait;
   const sleep = opts.sleep ?? ((ms: number) => delay(ms));
   let since: string | null = null;
   let retries = 0;
-  for (;;) {
-    const o = await run(paths, {
-      id: opts.id,
-      since,
-      maxMs: WAIT_DEFAULTS.maxS * 1000,
-      minIntervalMs: WAIT_DEFAULTS.minIntervalS * 1000,
-      maxIntervalMs: WAIT_DEFAULTS.maxIntervalS * 1000,
-      env: opts.env,
-      follower: 'shell',
-      ...opts.waitOptions,
-    });
-    if (o.changed || o.error || settled(o)) opts.write(JSON.stringify(o));
-    if (settled(o)) return 0;
-    if (o.error) {
-      const next = RETRY_DELAYS_MS[retries++];
-      if (next === undefined) {
-        await reportStopped(paths, opts);
-        return 1;
+  let held: string | null = null;
+  try {
+    for (;;) {
+      const o = await run(paths, {
+        id: opts.id,
+        since,
+        maxMs: WAIT_DEFAULTS.maxS * 1000,
+        minIntervalMs: WAIT_DEFAULTS.minIntervalS * 1000,
+        maxIntervalMs: WAIT_DEFAULTS.maxIntervalS * 1000,
+        env: opts.env,
+        follower: 'shell',
+        ...opts.waitOptions,
+      });
+      if (o.changed || o.error || settled(o)) opts.write(JSON.stringify(o));
+      if (settled(o)) return 0;
+      if (o.error) {
+        const next = RETRY_DELAYS_MS[retries++];
+        if (next === undefined) {
+          await reportStopped(paths, opts);
+          return 1;
+        }
+        held = o.id;
+        await holdLease(paths, held, next, sleep);
+        continue;
       }
-      await sleep(next);
-      continue;
+      retries = 0;
+      since = o.key;
     }
-    retries = 0;
-    since = o.key;
+  } finally {
+    if (held) releaseLease(paths, held);
   }
 }
 

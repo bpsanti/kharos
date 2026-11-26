@@ -74,8 +74,9 @@ So in a headless Claude Code, `kharos followers` (the command behind the last st
 
 1. It starts `kharos follow <id>` for each session, detached in a session of its own, so it outlives `claude -p` and its process group.
 2. That process runs the follower's loop without a model: `kharos wait` again and again, with the key it reached, until the session ends or it is closed.
-   A wait that fails (three reads in a row did not reach the session) is tried again after 1, 2, 4 and 8 minutes.
+   A wait that fails (three reads in a row did not reach the session) is tried again after 1, 2, 4 and 8 minutes, and the process keeps the follower lease while it waits.
    When the last try fails too, the process sends a `session.unfollowed` event (`needs_you`) to the outputs, since nobody reads its log, and exits.
+   That notice stays open on the session, so the next follower that reads it running again sends `session.back`.
    It writes one JSON line per change to `logs/<id>.follower.log` in the state folder, the same line as `kharos wait`, and holds the follower lease, so `kharos list` and `kharos health` count it as following.
 3. Each read goes through the same hook as any read, so every change reaches the outputs: the desktop notification, `events.jsonl`, Slack, a command, or firstmate.
 4. `claude -p` ends right after the launch, with the lines that say where the follower writes and how to answer: `claude -p '/kharos:send <id> <answer>'` for a question, the session page for a permission prompt.
