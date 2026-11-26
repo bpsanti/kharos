@@ -110,7 +110,7 @@ The change touches three files:
 |---|---|
 | `.claude/settings.json` | one `PermissionRequest` entry, matcher `*`, that runs the script only when `CLAUDE_CODE_REMOTE` is `true`; every other key and hook stays |
 | `.claude/hooks/kharos-permission.mjs` | the script, a copy of [`cloud/kharos-permission.mjs`](../cloud/kharos-permission.mjs); Node.js only, no dependency |
-| `.claude/kharos-permissions.json` | the rules: `allow` patterns and `mirror` (mirrored organization ask rules) |
+| `.claude/kharos-permissions.json` | the rules: `allow` patterns, `mirror` (mirrored organization ask rules), and `broad: true` when it holds broad rules |
 
 The script decides only in a cloud session, where `CLAUDE_CODE_REMOTE` is `true`; on a person's machine it says nothing and the prompt shows as usual.
 In a cloud session it answers each prompt, in this order:
@@ -130,8 +130,12 @@ kharos permissions hook diff --allow "psql -h 127.0.0.1 -p 5432 -U dev -d * -Atc
 ```
 
 This allows `psql -h 127.0.0.1 -p 5432 -U dev -d app -Atc 'select 1'` and nothing longer, shorter or chained.
-kharos refuses a pattern whose program is a wildcard, or a shell, an interpreter or a wrapper (`bash`, `python3`, `env`, `sudo`, `xargs` and the like), since it would allow anything, and a pattern that a deny rule of the managed settings or of the repository covers, since a hook cannot approve what a deny rule refuses.
+kharos refuses a pattern that a deny rule of the managed settings or of the repository covers, since a hook cannot approve what a deny rule refuses.
 `--drop <pattern>` removes a pattern, and `--uninstall` removes the three files' kharos parts.
+
+A broad pattern is one whose program is a wildcard (`* foo`), or a shell, an interpreter or a wrapper (`bash *`, `python3 *`, `env *`, `sudo *`, `xargs *` and the like).
+kharos refuses it unless the change has `--broad`, since it allows any command in this repository's cloud sessions with no person asked: auto mode drops such rules from settings, but a hook's allow counts whatever pattern produced it.
+With `--broad` the diff warns about each broad rule it adds, the rules file says `"broad": true`, and `kharos permissions hook show`, `/kharos:doctor` and `kharos permissions approvals` mark each broad rule and each approval it gave.
 
 ### Mirroring the organization's ask rules
 
@@ -142,17 +146,18 @@ Members of an organization that has not disabled bypass mode can run past its as
 - With no copy, or one it cannot read, mirroring is unavailable and kharos says so: it never guesses the rules.
 - When the managed settings set `disableBypassPermissionsMode`, kharos refuses: the organization's ask rules then bind every session, on a person's machine too.
 - When the organization sets `disableBypassPermissionsMode` after rules were mirrored, kharos refuses every change to the hook but `--unmirror` and `--uninstall`, and `/kharos:doctor` and `kharos permissions hook show` warn until the mirrored rules are gone.
-- Otherwise the diff lists every ask rule it converts and every one it keeps as a prompt, with why: rules for other tools than Bash, a rule for every command, a rule whose program is a wildcard (such as `Bash(*.db.example.com*)`), and rules for a shell, an interpreter or a wrapper stay prompts.
+- Otherwise the diff lists every ask rule it converts and every one it keeps as a prompt, with why: rules for other tools than Bash always stay prompts, and so do broad rules (a rule for every command, a rule whose program is a wildcard such as `Bash(*.db.example.com*)`, and rules for a shell, an interpreter or a wrapper) unless the change has `--broad`.
 - The diff carries a warning to check with the organization's administrator first, and the write needs `--org-confirmed` besides the token.
 - Deny rules are never copied, converted or changed.
-- A mirrored rule allows only a single simple command, like an allow pattern, and never one whose program is a shell, an interpreter or a wrapper.
-- `--mirror` again refreshes the list from the current copy, and `--unmirror` removes it.
+- A mirrored rule allows only a single simple command, like an allow pattern, and never one whose program is a shell, an interpreter or a wrapper, unless the rule itself is broad and was mirrored with `--broad`.
+- With `--broad`, a bare `Bash` ask rule of the organization becomes an allow for every command in this repository's cloud sessions, still one single simple command per call.
+- `--mirror` again refreshes the list from the current copy (without `--broad`, broad rules go back to prompts), and `--unmirror` removes it.
 
 ### The log of the hook's decisions
 
 The hook runs in the cloud session, where kharos keeps no state, so the watcher writes the log on this machine.
 At launch, while `permission_hook` is on, kharos reads the hook's rules from the branch the session starts on.
-Each `permission prompt` line the watcher reads then goes through the same decision code the hook runs, and the decision goes to `~/.local/state/kharos/approvals.jsonl`: the time of the prompt, the kharos and cloud session ids, the tool, allow or deny, and the allow pattern or mirrored rule that matched.
+Each `permission prompt` line the watcher reads then goes through the same decision code the hook runs, and the decision goes to `~/.local/state/kharos/approvals.jsonl`: the time of the prompt, the kharos and cloud session ids, the tool, allow or deny, and the allow pattern or mirrored rule that matched, marked when it is broad.
 Never the command, nor any other input or output of the call.
 `kharos permissions approvals` lists the approvals; `--all` adds the denials, `--session k-0001` keeps one session.
 Sessions kharos does not follow (started on claude.ai, for example) are not in that log.

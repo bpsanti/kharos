@@ -112,7 +112,7 @@ It still stops at a prompt for `ask` rules, both the organization's managed ones
 Cloud sessions have no bypass mode, auto mode drops broad allow rules such as `Bash(*)`, and no allow rule outranks an ask rule.
 The routine's `allowed_tools` neither allows nor restricts anything there.
 `/kharos:permissions` shows a repository's rules, and adds narrow allow rules for its own commands (the `standard` profile).
-The opt-in permission hook (off by default) answers prompts in cloud sessions with your own narrow allow patterns, and denies the rest with a message that names the allowed form, so the session sends the right command instead of waiting.
+The opt-in permission hook (off by default) answers prompts in cloud sessions with your own allow patterns (narrow ones, unless you ask for broad ones with `--broad`), and denies the rest with a message that names the allowed form, so the session sends the right command instead of waiting.
 When the organization has not disabled bypass mode, it can also mirror the organization's ask rules as a cloud-only allow, after you confirm the list; deny rules are never touched.
 The watcher logs each of the hook's decisions, and `kharos permissions approvals` lists them.
 `/kharos:doctor` warns when a launch branch would likely stall, about managed ask rules that would stop a session, about broad rules or modes that cloud sessions ignore, and while the hook is on: see [docs/permissions.md](docs/permissions.md).

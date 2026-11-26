@@ -20,7 +20,7 @@ import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'drop']);
 
@@ -101,7 +101,7 @@ const USAGE = `usage: kharos <command>
   repo-init <owner/name>
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
-  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--mirror|--unmirror] [--uninstall] [dir]
+  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
   due [--watcher id] [--all] | pass-end [--watcher id] | health
@@ -272,6 +272,7 @@ export function hookChange(args: Args): HookChange {
     mirror: args.flags.mirror === true,
     unmirror: args.flags.unmirror === true,
     uninstall: args.flags.uninstall === true,
+    broad: args.flags.broad === true,
   };
 }
 

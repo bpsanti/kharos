@@ -304,7 +304,7 @@ export function switchHook(paths: Paths, on: boolean): string {
     : `permission_hook is off in ${paths.config}. A repository that already has the hook keeps answering prompts in cloud sessions until you remove it: kharos permissions hook diff --uninstall.`;
 }
 
-export const EMPTY_CHANGE: HookChange = { allow: [], drop: [], mirror: false, unmirror: false, uninstall: false };
+export const EMPTY_CHANGE: HookChange = { allow: [], drop: [], mirror: false, unmirror: false, uninstall: false, broad: false };
 
 function shellQuote(s: string): string {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -317,6 +317,7 @@ export function changeFlags(c: HookChange): string[] {
     ...c.drop.flatMap((p) => ['--drop', shellQuote(p)]),
     ...(c.mirror ? ['--mirror'] : []),
     ...(c.unmirror ? ['--unmirror'] : []),
+    ...(c.broad ? ['--broad'] : []),
     ...(c.uninstall ? ['--uninstall'] : []),
   ];
 }

@@ -7,7 +7,7 @@ import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
 import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
-import { hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
+import { BROAD_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
 import { readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
@@ -283,7 +283,10 @@ function checkHook(
   const rules = st.rules && !('error' in st.rules) ? st.rules : null;
   const stale = rules ? staleMirror(policy, rules.mirror) : null;
   if (stale) problems.push(stale);
-  const what = rules ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms` : 'no usable rules';
+  const broad = rules ? broadRules(rules) : [];
+  const what = rules
+    ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms${broad.length ? `; ${broad.length} broad rule(s), which ${BROAD_RISK}: ${broad.join(', ')}` : ''}`
+    : 'no usable rules';
   add(problems.length ? 'warn' : 'info', label, [`${where} has the kharos permission hook: ${what}`, ...problems].join('; '), [
     `/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the hook and changes it (or removes it with --uninstall); then commit and push to ${p.revision}.`,
   ]);

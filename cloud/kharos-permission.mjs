@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kharos permission hook, version 1. `kharos permissions hook` copies this file into a repository as
+// kharos permission hook, version 2. `kharos permissions hook` copies this file into a repository as
 // .claude/hooks/kharos-permission.mjs and rewrites it on every change: edit the rules in
 // .claude/kharos-permissions.json instead.
 //
@@ -10,7 +10,10 @@
 // - A Bash call that is one simple command (no chaining, pipe, substitution, redirection, variable or
 //   glob) and matches one of the rules file's allow patterns word by word is allowed.
 // - The same for a mirrored rule: an ask rule of the organization's managed settings that the person
-//   chose to turn into a cloud-only allow, never for a program that runs other commands.
+//   chose to turn into a cloud-only allow.
+// - A broad rule (an allow pattern or a mirrored rule for a shell, an interpreter, a wrapper or any
+//   program) counts only when the rules file says `"broad": true`, which
+//   kharos writes only when the person asked for broad rules with --broad.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
 //   right command or goes on without it instead of waiting.
 // A deny rule is never reached: Claude Code blocks those calls before any prompt.
@@ -22,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HOOK_VERSION = 1;
+export const HOOK_VERSION = 2;
 
 /** The rules file, next to the hooks folder this script is in. */
 export const RULES_FILE = 'kharos-permissions.json';
@@ -34,10 +37,10 @@ export const MAX_ALLOWED_LENGTH = 600;
 export const REFUSAL_PREFIX = 'Refused by the kharos permission hook';
 
 /**
- * @typedef {{ allow: string[], mirror: string[] }} HookRules
+ * @typedef {{ allow: string[], mirror: string[], broad?: boolean }} HookRules
  * @typedef {{ ok: true, words: string[] } | { ok: false, why: string }} Split
  * @typedef {{ ok: true, words: (string | null)[] } | { ok: false, why: string }} Pattern
- * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror' }} Allow
+ * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror', broad: boolean }} Allow
  * @typedef {{ behavior: 'deny', message: string, program: string | null }} Deny
  * @typedef {Allow | Deny} Decision
  */
@@ -158,21 +161,51 @@ export function runsOtherCommands(program) {
 }
 
 /**
+ * Why an allow pattern would allow any command, or null when it is narrow: its program (first word) is
+ * a wildcard, or runs other commands (a shell, an interpreter or a wrapper such as env, sudo or xargs).
+ * @param {(string | null)[]} words
+ */
+export function broadPatternWhy(words) {
+  const first = words[0];
+  if (first === null || first === undefined) return 'its program is a wildcard';
+  if (runsOtherCommands(first)) return `${first} runs other commands`;
+  return null;
+}
+
+/**
  * An allow pattern: a simple command whose words must match exactly, where a `*` word stands for
- * exactly one word of any content. The program (first word) must be literal and must not run other
- * commands (a shell, an interpreter or a wrapper such as env, sudo or xargs).
+ * exactly one word of any content. Unless `broad`, the program must be literal and must not run other
+ * commands (see broadPatternWhy).
  * @param {string} text
+ * @param {boolean} [broad]
  * @returns {Pattern}
  */
-export function parsePattern(text) {
+export function parsePattern(text, broad = false) {
   if (typeof text !== 'string' || text.trim() === '') return { ok: false, why: 'it is empty' };
   if (text.length > 300) return { ok: false, why: 'it is longer than 300 characters' };
   const r = lex(text, true);
-  if (!r.ok) return r;
+  if (!r.ok || broad) return r;
   const first = r.words[0];
   if (first === null || first === undefined) return { ok: false, why: 'the program must be written out, not a wildcard' };
   if (runsOtherCommands(first)) return { ok: false, why: `${first} runs other commands, so a rule for it would allow anything` };
   return r;
+}
+
+/**
+ * Why a Bash permission rule in Claude Code syntax would allow any command, or null when it names a
+ * program that does not run other commands. Null for a rule of another tool.
+ * @param {string} rule
+ */
+export function broadRuleWhy(rule) {
+  if (rule === 'Bash') return 'it covers every command';
+  const m = /^Bash\((.*)\)$/s.exec(rule);
+  if (!m) return null;
+  const body = /** @type {string} */ (m[1]).trim();
+  if (body.replace(/[*:\s]/g, '') === '') return 'it covers every command';
+  const program = /** @type {string} */ (body.split(/[\s:]/)[0]);
+  if (program.includes('*')) return 'it does not name its program';
+  if (runsOtherCommands(program)) return `${program} runs other commands, so an allow would cover anything`;
+  return null;
 }
 
 /**
@@ -197,6 +230,7 @@ export function showPattern(pattern) {
  * @param {string} command
  */
 export function bashRuleMatches(rule, command) {
+  if (rule === 'Bash') return command.trim() !== '';
   const m = /^Bash\((.*)\)$/s.exec(rule);
   if (!m) return false;
   let body = /** @type {string} */ (m[1]);
@@ -217,8 +251,9 @@ export function bashRuleMatches(rule, command) {
 }
 
 /**
- * The rules file's content, checked. Invalid allow patterns and non-Bash mirrored rules are an error:
- * kharos writes the file, and a hand edit that breaks it must show, not half work.
+ * The rules file's content, checked. Invalid allow patterns, non-Bash mirrored rules, and broad rules
+ * without `"broad": true` are an error: kharos writes the file, and a hand edit that breaks it must
+ * show, not half work.
  * @param {unknown} value
  * @returns {HookRules}
  */
@@ -232,14 +267,20 @@ export function readHookRules(value) {
     if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new Error(`"${where}" must be a list of strings`);
     return /** @type {string[]} */ (v);
   };
+  if (o.broad !== undefined && typeof o.broad !== 'boolean') throw new Error('"broad" must be true or false');
+  const broad = o.broad === true;
   const allow = list(o.allow, 'allow');
   for (const p of allow) {
-    const r = parsePattern(p);
+    const r = parsePattern(p, broad);
     if (!r.ok) throw new Error(`allow pattern "${p}" is not valid: ${r.why}`);
   }
   const mirror = list(o.mirror, 'mirror');
-  for (const r of mirror) if (!/^Bash\(.+\)$/s.test(r)) throw new Error(`mirrored rule "${r}" is not a Bash rule`);
-  return { allow, mirror };
+  for (const r of mirror) {
+    if (r !== 'Bash' && !/^Bash\(.+\)$/s.test(r)) throw new Error(`mirrored rule "${r}" is not a Bash rule`);
+    const why = broad ? null : broadRuleWhy(r);
+    if (why) throw new Error(`mirrored rule "${r}" is broad (${why}), and the rules file does not say "broad": true`);
+  }
+  return broad ? { allow, mirror, broad } : { allow, mirror };
 }
 
 /** @param {string} tool */
@@ -257,7 +298,8 @@ function generic(tool) {
  */
 function namedPrograms(command, patterns) {
   const rough = command.split(/[\s;&|()<>`$"']+/).filter(Boolean);
-  return [...new Set(patterns.map((p) => /** @type {string} */ (p[0])))].filter((prog) => rough.includes(prog));
+  const programs = patterns.flatMap((p) => (typeof p[0] === 'string' ? [p[0]] : []));
+  return [...new Set(programs)].filter((prog) => rough.includes(prog));
 }
 
 /**
@@ -275,9 +317,10 @@ export function decide(input, rules) {
   const command = typeof ti.command === 'string' ? ti.command : null;
   if (tool !== 'Bash' || command === null) return { behavior: 'deny', program: null, message: generic(tool) };
 
+  const broad = rules.broad === true;
   /** @type {{ text: string, words: (string | null)[] }[]} */
   const patterns = rules.allow.flatMap((text) => {
-    const r = parsePattern(text);
+    const r = parsePattern(text, broad);
     return r.ok ? [{ text, words: r.words }] : [];
   });
   const split = splitCommand(command);
@@ -285,9 +328,11 @@ export function decide(input, rules) {
   if (split.ok && command.length > MAX_ALLOWED_LENGTH) why = `it is longer than ${MAX_ALLOWED_LENGTH} characters`;
   if (split.ok && why === null) {
     const hit = patterns.find((p) => matchesPattern(split.words, p.words));
-    if (hit !== undefined) return { behavior: 'allow', rule: hit.text, source: 'allow' };
-    const mirrored = runsOtherCommands(/** @type {string} */ (split.words[0])) ? undefined : rules.mirror.find((r) => bashRuleMatches(r, command));
-    if (mirrored !== undefined) return { behavior: 'allow', rule: mirrored, source: 'mirror' };
+    if (hit !== undefined) return { behavior: 'allow', rule: hit.text, source: 'allow', broad: broadPatternWhy(hit.words) !== null };
+    // Only a broad rule, in a rules file that allows broad rules, covers a program that runs other commands.
+    const others = runsOtherCommands(/** @type {string} */ (split.words[0]));
+    const mirrored = rules.mirror.find((r) => bashRuleMatches(r, command) && (!others || (broad && broadRuleWhy(r) !== null)));
+    if (mirrored !== undefined) return { behavior: 'allow', rule: mirrored, source: 'mirror', broad: broadRuleWhy(mirrored) !== null };
   }
 
   const first = split.ok ? split.words[0] : undefined;
@@ -322,7 +367,7 @@ export function hookOutput(d) {
   if (d.behavior === 'allow') {
     return {
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
-      systemMessage: `kharos permission hook allowed this call by ${d.source === 'mirror' ? 'the mirrored organization rule' : 'the rule'} ${d.rule}`,
+      systemMessage: `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : 'rule'} ${d.rule}`,
     };
   }
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: d.message } } };
