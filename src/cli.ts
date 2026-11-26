@@ -23,7 +23,7 @@ import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, ty
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
-import { diffAccountMode, showAccountMode, writeAccountMode } from './account-mode.ts';
+import { diffAccountMode, writeAccountMode } from './account-mode.ts';
 import { readManagedPolicy } from './managed-policy.ts';
 import { formatSetup, parseScheduleView, runSetup, SetupError } from './setup.ts';
 import { formatHookDecisions } from './approvals.ts';
@@ -126,7 +126,7 @@ const USAGE = `usage: kharos <command>
   permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
-  permissions account-mode show | permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
+  permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
   permissions preflight [dir] | permissions preflight --launch [--profile p]   [--stdin | --file f]: the launch instruction
   permissions auto <preflight|unblock> <on|off>
   permissions unblock show | permissions unblock confirm --fingerprint <fp>
@@ -293,10 +293,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         } else if (sub === 'account-mode') {
           const [what, target] = [args.positional[1], args.positional[2]];
           const policy = readManagedPolicy(env);
-          if (what === 'show') out(showAccountMode(env, policy));
-          else if ((what === 'diff' || what === 'write') && (target === 'auto' || target === 'off')) {
+          if ((what === 'diff' || what === 'write') && (target === 'auto' || target === 'off')) {
             out(what === 'diff' ? diffAccountMode(paths, env, target, policy) : writeAccountMode(paths, env, target, flag(args, 'expect'), policy));
-          } else throw new cmd.CommandError('permissions account-mode takes show, or diff or write with auto or off');
+          } else throw new cmd.CommandError('permissions account-mode takes diff or write, then auto or off');
         } else if (sub === 'approvals') {
           out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
         } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto, account-mode or approvals');
@@ -394,6 +393,7 @@ function accountModeFlags(args: Args): { accountMode?: 'auto' | 'as-is'; account
   if (mode === undefined) return {};
   if (mode !== 'auto' && mode !== 'as-is') throw new cmd.CommandError('--account-mode takes auto or as-is');
   const expect = flag(args, 'account-expect');
+  if (mode === 'auto' && !expect) throw new cmd.CommandError('--account-mode auto needs --account-expect <token>, the change token setup printed with the diff');
   return { accountMode: mode, ...(expect !== undefined ? { accountExpect: expect } : {}) };
 }
 

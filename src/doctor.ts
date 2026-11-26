@@ -12,7 +12,7 @@ import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RUL
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { loadMarker, planMigration } from './accounts.ts';
-import { autoModeRefusal, readAccountMode } from './account-mode.ts';
+import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
@@ -377,7 +377,7 @@ function checkAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy, add: Ad
       'Ask the organization\'s administrator about auto mode, or take it out of your settings with `kharos permissions account-mode diff off`.',
     ]);
   } else if (cur.mode === 'auto') {
-    add('ok', 'launch approval', `this account starts its sessions in auto mode (${cur.file}): Claude Code's classifier reviews each launch, interactive or headless, with no approval prompt`);
+    add('ok', 'launch approval', `this account starts its sessions in auto mode (${cur.file}): Claude Code's classifier reviews each launch, interactive or headless, with no approval prompt, ${ACCOUNT_AUTO_CAVEAT}`);
   } else {
     add('ok', 'launch approval', `this account's sessions start in ${cur.mode ?? 'the default'} mode, so each launch asks for your approval, and a headless one needs \`claude -p --permission-mode auto\`${refusal ? '' : '; /kharos:setup can start the account in auto mode'}`);
   }

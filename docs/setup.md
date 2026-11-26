@@ -46,6 +46,7 @@ So there are two ways past the prompt, and kharos never bypasses it:
 
 - For the whole account: the first `/kharos:setup` asks once whether this Claude account should start its sessions in auto mode, with the diff of its user settings (`permissions.defaultMode: "auto"` in `CLAUDE_CONFIG_DIR/settings.json`, `~/.claude/settings.json` by default), and writes it only on your yes.
   Then launches need no approval prompt and headless ones need nothing extra; the side effect is that every session of that account starts in auto mode, not only launches.
+  A folder whose `.claude/settings.json` or `.claude/settings.local.json` sets another `permissions.defaultMode` overrides the account's, so launches from that folder ask again.
   `kharos permissions account-mode diff off` undoes it, back to the mode the file had; the option is unavailable when the organization turns auto mode off (`permissions.disableAutoMode`).
 - For one launch: `claude -p --permission-mode auto`.
 

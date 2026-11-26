@@ -239,6 +239,7 @@ test('accounts: this account takes its profiles and sessions out of the shared f
         unused: { repo: 'example/unused', environment: 'env_01U' },
       },
       outputs: [],
+      account_mode: 'auto',
     }),
   );
   updateRegistry(shared, (reg) => {
@@ -259,6 +260,7 @@ test('accounts: this account takes its profiles and sessions out of the shared f
   assert.deepEqual(Object.keys(own.profiles).sort(), ['stamped', 'work']);
   assert.equal(own.profiles.work?.account, ME);
   assert.equal(own.default_profile, 'work');
+  assert.equal(own.account_mode, undefined, "the default account's answer about its own settings is not this account's");
   const left = loadConfig(shared).config;
   assert.deepEqual(Object.keys(left.profiles).sort(), ['theirs', 'unused']);
   assert.equal(left.default_profile, null);
@@ -383,6 +385,7 @@ test('setup: asks once whether this account starts in auto mode, writes it only 
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.defaultMode, 'acceptEdits', 'nothing is written before the answer');
 
   assert.throws(() => ask({ accountMode: 'auto', accountExpect: '000000000000' }), /not what that diff was made from/);
+  assert.deepEqual(loadConfig(sb.paths).config.profiles, {}, 'a refused account change writes no profile either');
   const done = ask({ accountMode: 'auto', accountExpect: r.next.account.token });
   assert.equal(done.next.kind, 'ready');
   if (done.next.kind === 'ready') assert.match(done.next.summary.join('\n'), /launches need no approval prompt/);

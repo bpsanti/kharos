@@ -7,7 +7,7 @@
 
 import path from 'node:path';
 import { migrate } from './accounts.ts';
-import { ACCOUNT_AUTO_EFFECT, autoModeRefusal, diffAccountMode, readAccountMode, writeAccountMode } from './account-mode.ts';
+import { ACCOUNT_AUTO_CAVEAT, ACCOUNT_AUTO_EFFECT, applyAccountMode, approveAccountMode, autoModeRefusal, diffAccountMode, readAccountMode } from './account-mode.ts';
 import { scriptDigest, SETUP_SCRIPT_PATH } from './environment.ts';
 import { findSetup, loadSetups, recordSetup } from './state.ts';
 import { clean } from './body.ts';
@@ -529,7 +529,7 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     choice = picked.id;
   } else if (existing?.permissions) choice = existing.permissions;
   const launches = acctAuto
-    ? 'this account starts its sessions in auto mode, so launches need no approval prompt'
+    ? `this account starts its sessions in auto mode, so launches need no approval prompt, ${ACCOUNT_AUTO_CAVEAT}`
     : input.accountMode === 'auto'
       ? 'this account starts its sessions in auto mode once the approved change is written'
       : 'each launch asks for your approval (headless: claude -p --permission-mode auto)';
@@ -561,6 +561,7 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     return result({ kind: 'person', step: blockedAt + 1, action: s.action ?? s.detail });
   }
   const env = environment as Environment;
+  const acctChange = input.accountMode === 'auto' && !acctAuto ? approveAccountMode(paths, input.env, 'auto', input.accountExpect, policy) : null;
   const written = writeProfile(paths, {
     name,
     repo: url,
@@ -585,7 +586,7 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
       script_sha256: script?.status === 'found' ? scriptDigest(script.text) : null,
     });
   }
-  if (input.accountMode === 'auto' && !acctAuto) writeAccountMode(paths, input.env, 'auto', input.accountExpect, policy);
+  if (acctChange) applyAccountMode(paths, input.env, acctChange);
   if (input.accountMode !== undefined) {
     const cfg = loadConfig(paths).config;
     saveConfig(paths, { ...cfg, account_mode: input.accountMode });
@@ -610,7 +611,7 @@ export function runSetup(paths: Paths, input: SetupInput, deps: SetupDeps): Setu
     `Ready: profile ${name}${isDefault ? ' (default)' : ''} launches on ${where} in ${env.name ? `"${env.name}"` : env.id}.`,
     confirmed ? `GitHub: Claude reaches ${slug}.` : `GitHub: not confirmed for ${slug} yet; the first launch checks it before any session starts, at no cost.`,
     `Commits: authored as Claude <noreply@anthropic.com> unless ${envLabel} sets GIT_AUTHOR_* and GIT_COMMITTER_* (on claude.ai/code: the environment's settings, Environment variables).`,
-    `Permissions: ${choice ? CHOICE_TEXT[choice] : 'not chosen'}; ${input.accountMode === 'auto' || acctAuto ? 'this account starts its sessions in auto mode, so launches need no approval prompt' : launches}.`,
+    `Permissions: ${choice ? CHOICE_TEXT[choice] : 'not chosen'}; ${input.accountMode === 'auto' || acctAuto ? `this account starts its sessions in auto mode, so launches need no approval prompt, ${ACCOUNT_AUTO_CAVEAT}` : launches}.`,
     ...(input.confirmed && script?.status === 'unreadable'
       ? [`Setup script: ${SETUP_SCRIPT_PATH} could not be read (${clean(script.error, 120)}), so /kharos:doctor will ask you to paste it again, and to confirm once it can read it.`]
       : open.length

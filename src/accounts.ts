@@ -81,8 +81,10 @@ export function migrate(paths: Paths, shared: Paths | null, account: string | nu
   if (take.length) {
     const from = loadConfig(shared).config;
     const own = loadConfig(paths);
-    // Watcher thresholds and outputs are the machine's, so a first configuration starts from the shared one.
-    const to: Config = own.exists ? own.config : { ...defaultConfig(), ...from, profiles: {}, default_profile: null };
+    // Watcher thresholds and outputs are the machine's, so a first configuration starts from the shared one;
+    // account_mode is the answer about one account's own user settings, so it is not copied.
+    const { account_mode: _sharedAccountMode, ...machine } = from;
+    const to: Config = own.exists ? own.config : { ...defaultConfig(), ...machine, profiles: {}, default_profile: null };
     for (const name of take) {
       if (to.profiles[name]) continue; // this account's own profile of the same name wins
       to.profiles[name] = { ...(from.profiles[name] as Profile), account };

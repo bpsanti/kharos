@@ -51,6 +51,9 @@ export function autoModeRefusal(policy: ManagedPolicy): string | null {
   return null;
 }
 
+/** Claude Code lets a folder's project and local settings override the account's mode. */
+export const ACCOUNT_AUTO_CAVEAT = 'unless the folder you launch from sets another permissions.defaultMode in its .claude/settings.json or .claude/settings.local.json';
+
 export const ACCOUNT_AUTO_EFFECT =
   "every session of this Claude account starts in auto mode, not only kharos launches: Claude Code's classifier decides each action that no rule settles instead of asking you, and blocks what it judges risky";
 
@@ -68,7 +71,7 @@ function previous(paths: Paths): Previous | null {
   return readState<Previous>(statePath(paths), (v) => isObject(v) && typeof v.file === 'string', 'a kharos account mode record') ?? null;
 }
 
-interface Plan {
+export interface Plan {
   file: string;
   before: string | null;
   after: string | null;
@@ -111,11 +114,25 @@ export function diffAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: Ac
   ].join('\n');
 }
 
-export function writeAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, expect: string | undefined, policy: ManagedPolicy): string {
+export interface ApprovedChange {
+  target: AccountTarget;
+  plan: Plan;
+}
+
+/** The change an approved diff names, checked against the file as it is now; throws, having written nothing, when it no longer matches. */
+export function approveAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, expect: string | undefined, policy: ManagedPolicy): ApprovedChange {
   if (!expect) throw new CommandError('--expect needs the change token that `kharos permissions account-mode diff` printed, so only an approved diff is written');
   const p = plan(paths, env, target, policy);
-  if (!p.after || !p.token) return p.summary;
-  if (p.token !== expect) throw new CommandError(`${p.file} is not what that diff was made from (the file changed, or the diff was for another change); nothing was written. Show the diff again.`);
+  if (p.after && p.token !== expect) throw new CommandError(`${p.file} is not what that diff was made from (the file changed, or the diff was for another change); nothing was written. Show the diff again.`);
+  return { target, plan: p };
+}
+
+export function writeAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: AccountTarget, expect: string | undefined, policy: ManagedPolicy): string {
+  return applyAccountMode(paths, env, approveAccountMode(paths, env, target, expect, policy));
+}
+
+export function applyAccountMode(paths: Paths, env: NodeJS.ProcessEnv, { target, plan: p }: ApprovedChange): string {
+  if (!p.after) return p.summary;
   if (target === 'auto') {
     const cur = readAccountMode(env);
     writeJsonAtomic(statePath(paths), { file: p.file, mode: 'error' in cur ? null : cur.mode } satisfies Previous);
@@ -125,14 +142,6 @@ export function writeAccountMode(paths: Paths, env: NodeJS.ProcessEnv, target: A
   fs.writeFileSync(tmp, p.after, { mode: p.before === null ? 0o600 : fs.statSync(p.file).mode & 0o777 });
   fs.renameSync(tmp, p.file);
   return target === 'auto'
-    ? `wrote ${p.file}: this account starts its sessions in auto mode from the next session on. Undo with \`kharos permissions account-mode diff off\`.`
+    ? `wrote ${p.file}: this account starts its sessions in auto mode from the next session on, ${ACCOUNT_AUTO_CAVEAT}. Undo with \`kharos permissions account-mode diff off\`.`
     : `wrote ${p.file}: this account's sessions start as before; each kharos launch asks for your approval again.`;
-}
-
-export function showAccountMode(env: NodeJS.ProcessEnv, policy: ManagedPolicy): string {
-  const cur = readAccountMode(env);
-  if ('error' in cur) return `${cur.file} cannot be read (${cur.error})`;
-  const refusal = autoModeRefusal(policy);
-  if (cur.mode === 'auto') return `${cur.file}: this account starts its sessions in auto mode${refusal ? `, but ${refusal}, so it does not take effect` : ''}; launches need no approval prompt, the classifier reviews each one.`;
-  return `${cur.file}: defaultMode ${cur.mode ?? 'not set'}; each launch asks for approval, and a headless launch needs \`claude -p --permission-mode auto\`. ${refusal ? `Auto mode is not available: ${refusal}.` : 'Account-wide: `kharos permissions account-mode diff auto`.'}`;
 }
