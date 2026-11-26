@@ -22,6 +22,7 @@ function deps(over: Partial<DoctorDeps> = {}): DoctorDeps {
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
     managedPolicy: () => ({ status: 'absent', file: '/home/person/.claude/remote-settings.json' }),
     setupScript: () => ({ status: 'absent' }),
+    repoRole: () => 'admin',
     ...over,
   };
 }
@@ -32,10 +33,11 @@ test('doctor: a ready profile passes, with the Claude side still to be seen', ()
   saveEnvironments(sb.paths, [{ id: 'env_01TESTENVIRONMENT', routines: 2, last_used: null }], T0);
   const checks = runDoctor(sb.paths, { now: T0, env: sb.env }, deps());
   assert.equal(checks.filter((c) => c.level === 'fail').length, 0);
-  const text = formatChecks(checks);
+  const text = formatChecks(checks, { verbose: true });
   assert.match(text, /demo: claude access: not checked yet/);
   assert.match(text, /demo: environment: env_01TESTENVIRONMENT \(used by 2/);
-  assert.match(text, /Ready to launch/);
+  assert.match(text, /Ready to launch; Claude's GitHub access is not confirmed yet for demo/);
+  assert.doesNotMatch(formatChecks(checks), /^info/m, 'information lines show only with --verbose');
 });
 
 test('doctor: each gap comes with its fix', () => {

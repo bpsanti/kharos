@@ -1,6 +1,7 @@
 // The local CLI: `kharos <command>`. It never opens a network connection to Anthropic and never reads a
 // credential; the skills drive RemoteTrigger, and the hooks (`kharos hook <event>`) read its answers.
 
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { readAuthStatus } from './account.ts';
 import { action } from './actions.ts';
@@ -16,19 +17,20 @@ import {
   formatGuide,
   GuideError,
   openBrowser,
-  scriptDigest,
-  SETUP_SCRIPT_PATH,
   waitForEnvironment,
 } from './environment.ts';
 import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
-import { resolvePaths, type Paths } from './paths.ts';
+import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
+import { diffAccountMode, writeAccountMode } from './account-mode.ts';
+import { readManagedPolicy } from './managed-policy.ts';
+import { formatSetup, parseScheduleView, runSetup, SetupError } from './setup.ts';
 import { formatHookDecisions } from './approvals.ts';
 import { diffHook, diffPermissions, preflight, readRemoteFile, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
 import type { HookChange } from './permission-hook.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
-import { addIntent, recordSetup } from './state.ts';
+import { addIntent } from './state.ts';
 import { readOutbox } from './events.ts';
 import { deliver, deliveryLine } from './outputs/index.ts';
 import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
@@ -36,7 +38,7 @@ import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'from-schedule', 'verbose', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock', 'confirmed', 'copy', 'open']);
 /** Flags that may be given more than once; each value is kept, in order. */
 const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
@@ -112,10 +114,11 @@ const USAGE = `usage: kharos <command>
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] --session id
   send <id>   (text on stdin) | result <id> | close <id>
-  doctor [--profile p] [--no-remote-tool] | environments --session id [--repo url]
+  doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open]
   env-wait --since <env_...|none> [--timeout s]
-  setup --profile name --repo url --environment env_... [--revision r] [--model m] [--deadline min] [--default] [--confirmed]
+  setup --repo owner/name [--profile name] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
+        [--permissions <as-is|standard|hook|standard+hook|auto-preflight|unblock|auto-unblock>] [--adopt <profile,...|none>] [--account-mode <as-is|auto --account-expect token>] [--revision r] [--model m] [--deadline min] [--default] [--no-remote-tool] [--json]
   repo-init <owner/name>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
@@ -123,6 +126,7 @@ const USAGE = `usage: kharos <command>
   permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
+  permissions account-mode diff <auto|off> | permissions account-mode write <auto|off> --expect <token>
   permissions preflight [dir] | permissions preflight --launch [--profile p]   [--stdin | --file f]: the launch instruction
   permissions auto <preflight|unblock> <on|off>
   permissions unblock show | permissions unblock confirm --fingerprint <fp>
@@ -212,36 +216,43 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'doctor': {
         const checks = runDoctor(
           paths,
-          { ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), noRemoteTool: args.flags['no-remote-tool'] === true, now, env },
+          { ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), noRemoteTool: args.flags['no-remote-tool'] === true, shared: sharedPaths(env), now, env },
           realDeps(env),
         );
-        out(args.flags.json === true ? JSON.stringify(checks, null, 2) : formatChecks(checks));
+        out(args.flags.json === true ? JSON.stringify(checks, null, 2) : formatChecks(checks, { verbose: args.flags.verbose === true }));
         return checks.some((c) => c.level === 'fail') ? 1 : 0;
       }
       case 'setup': {
         const tools = flag(args, 'tools');
-        let revision = flag(args, 'revision');
-        if (revision === undefined && flag(args, 'repo')) {
-          // A new profile follows the repository's default branch when the person named none.
-          const known = loadConfig(paths).config.profiles[flag(args, 'profile') ?? ''];
-          if (!known) revision = readRemoteHeads(normalizeRepo(flag(args, 'repo') as string), 'HEAD', env).defaultBranch ?? undefined;
-        }
-        const name = flag(args, 'profile') ?? need(args, 0, '--profile');
-        out(
-          cmd.writeProfile(paths, {
-            name,
-            repo: flag(args, 'repo') ?? '',
-            environment: flag(args, 'environment') ?? '',
-            ...(revision !== undefined ? { revision } : {}),
+        const repo = flag(args, 'repo') ?? args.positional[0];
+        if (!repo) throw new cmd.CommandError('missing --repo (owner/name)');
+        const r = runSetup(
+          paths,
+          {
+            repo,
+            ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}),
+            ...(flag(args, 'revision') !== undefined ? { revision: flag(args, 'revision') as string } : {}),
             ...(flag(args, 'model') !== undefined ? { model: flag(args, 'model') as string } : {}),
             ...(intFlag(args, 'deadline') !== undefined ? { deadline_min: intFlag(args, 'deadline') as number } : {}),
+            ...(flag(args, 'environment') !== undefined ? { environment: flag(args, 'environment') as string } : {}),
+            ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
+            ...accountModeFlags(args),
             ...(tools !== undefined ? { allowed_tools: tools.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             ...(args.flags.connectors === true ? { connectors: true } : args.flags['no-connectors'] === true ? { connectors: false } : {}),
             makeDefault: args.flags.default === true,
-          }),
+            view: args.flags['from-schedule'] === true ? parseScheduleView(stdin()) : null,
+            here: currentRepo(env),
+            shared: sharedPaths(env),
+            confirmed: args.flags.confirmed === true,
+            adopt: flag(args, 'adopt') === undefined ? null : (flag(args, 'adopt') as string).split(',').map((n) => n.trim()).filter((n) => n && n !== 'none'),
+            noRemoteTool: args.flags['no-remote-tool'] === true,
+            now,
+            env,
+          },
+          realDeps(env),
         );
-        if (args.flags.confirmed === true) out(confirmEnvironment(paths, name, env, now));
-        return 0;
+        out(args.flags.json === true ? JSON.stringify(r, null, 2) : formatSetup(r));
+        return r.next.kind === 'not-ready' ? 1 : 0;
       }
       case 'repo-init': {
         const r = initialCommit(need(args, 0, 'repository'), env);
@@ -279,9 +290,15 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           const [what, v] = [args.positional[1], args.positional[2]];
           if ((what !== 'preflight' && what !== 'unblock') || (v !== 'on' && v !== 'off')) throw new cmd.CommandError('permissions auto takes preflight or unblock, then on or off');
           out(what === 'preflight' ? switchPreflightAuto(paths, v === 'on') : switchUnblockAuto(paths, v === 'on', env));
+        } else if (sub === 'account-mode') {
+          const [what, target] = [args.positional[1], args.positional[2]];
+          const policy = readManagedPolicy(env);
+          if ((what === 'diff' || what === 'write') && (target === 'auto' || target === 'off')) {
+            out(what === 'diff' ? diffAccountMode(paths, env, target, policy) : writeAccountMode(paths, env, target, flag(args, 'expect'), policy));
+          } else throw new cmd.CommandError('permissions account-mode takes diff or write, then auto or off');
         } else if (sub === 'approvals') {
           out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
-        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto or approvals');
+        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto, account-mode or approvals');
         return 0;
       }
       case 'due': {
@@ -335,7 +352,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       process.stderr.write(`${err.message}\n`);
       return 1;
     }
-    if (err instanceof cmd.CommandError || err instanceof ConfigError || err instanceof GuideError) {
+    if (err instanceof cmd.CommandError || err instanceof ConfigError || err instanceof GuideError || err instanceof SetupError) {
       process.stderr.write(`kharos: ${err.message}\n`);
       return 1;
     }
@@ -370,23 +387,22 @@ function envGuide(args: Args, paths: Paths, env: NodeJS.ProcessEnv): string {
   });
 }
 
-/** Records that the person said the profile's environment is set up for its repository, for this account. */
-function confirmEnvironment(paths: Paths, name: string, env: NodeJS.ProcessEnv, now: number): string {
-  const { profile } = pickProfile(loadConfig(paths).config, name);
-  const account = readAuthStatus(env)?.account;
-  if (!account) return 'not recorded as confirmed: Claude Code is not logged in with a claude.ai account.';
-  const script = readRemoteFile(profile.repo, profile.revision, SETUP_SCRIPT_PATH, env);
-  recordSetup(paths, {
-    account,
-    repo: repoSlug(profile.repo),
-    revision: profile.revision,
-    environment: profile.environment,
-    confirmed_at: new Date(now).toISOString(),
-    script_sha256: script.status === 'found' ? scriptDigest(script.text) : null,
-  });
-  const recorded = `recorded: ${profile.environment} is set up for ${repoSlug(profile.repo)}@${profile.revision} in this account.`;
-  if (script.status !== 'unreadable') return recorded;
-  return `${recorded}\n${SETUP_SCRIPT_PATH} could not be read (${script.error}), so /kharos:doctor will ask you to paste the setup script again and confirm once it can read it.`;
+/** --account-mode auto|as-is, with --account-expect <token> for auto: the person's answer about this account's mode. */
+function accountModeFlags(args: Args): { accountMode?: 'auto' | 'as-is'; accountExpect?: string } {
+  const mode = flag(args, 'account-mode');
+  if (mode === undefined) return {};
+  if (mode !== 'auto' && mode !== 'as-is') throw new cmd.CommandError('--account-mode takes auto or as-is');
+  const expect = flag(args, 'account-expect');
+  if (mode === 'auto' && !expect) throw new cmd.CommandError('--account-mode auto needs --account-expect <token>, the change token setup printed with the diff');
+  return { accountMode: mode, ...(expect !== undefined ? { accountExpect: expect } : {}) };
+}
+
+/** owner/name of the current folder's GitHub origin: the repository the /schedule skill checks Claude's access to. */
+function currentRepo(env: NodeJS.ProcessEnv): string | null {
+  const r = spawnSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8', timeout: 10_000, env: { ...env, GIT_TERMINAL_PROMPT: '0' } });
+  if (r.error || r.status !== 0) return null;
+  const url = normalizeRepo(r.stdout.trim());
+  return /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(url) ? repoSlug(url) : null;
 }
 
 /** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */

@@ -1,7 +1,7 @@
 ---
-description: Check everything a kharos cloud launch depends on - login, plan, configuration, repository, Claude access to it, environment, limits - and say how to fix each gap.
+description: Check everything a kharos cloud launch depends on for this Claude account - login, plan, configuration, repository, Claude access to it, environment, permissions - with the action for each gap; --verbose adds limits, the watcher and the organization's policy counts.
 disable-model-invocation: true
-argument-hint: '[--profile p]'
+argument-hint: '[--profile p] [--verbose]'
 allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" doctor:*), Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" environments:*)
 ---
 

@@ -3,7 +3,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { claudeBin } from './account.ts';
-import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError } from './config.ts';
+import { defaultConfig, loadConfig, parseProfile, saveConfig, isValidProfileName, repoSlug, ConfigError, type PermissionChoice } from './config.ts';
 import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { liveFollowers } from './lease.ts';
@@ -215,8 +215,10 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
     if (!v.error && v.status === 0) lines.push(`     ${v.stdout.trim().slice(0, 200)}`);
   }
   if (r.branch) {
-    lines.push(`branch: ${r.branch}`);
-    lines.push(`bring it here: git fetch origin '${r.branch}' && git switch '${r.branch}'`);
+    const slug = repoSlug(s.repo);
+    lines.push(`branch: ${r.branch} on ${slug}`);
+    // Named by its URL, never `origin`: the folder this runs in may be a checkout of another repository.
+    lines.push(`bring it here, in a checkout of ${slug}: git fetch https://github.com/${slug}.git '${r.branch}:${r.branch}' && git switch '${r.branch}'`);
   }
   if (s.session_id) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
   if (s.url) lines.push(`session: ${s.url}`);
@@ -227,9 +229,9 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
 function closeSideBranch(paths: Paths, s: Session, forge: Forge | null, now: number): string | null {
   const p = s.preflight;
   const slug = repoSlug(s.repo);
-  if (p?.status === 'creating') return `kharos may have created the side branch ${p.branch} of ${slug} before the launch stopped; if it exists, delete it: git push origin --delete ${p.branch}`;
+  if (p?.status === 'creating') return `kharos may have created the side branch ${p.branch} of ${slug} before the launch stopped; if it exists, delete it: git push https://github.com/${slug}.git --delete '${p.branch}'`;
   if (p?.status !== 'applied' || p.deleted_at) return null;
-  const byHand = `delete it yourself once nothing on it is needed: git push origin --delete ${p.branch}`;
+  const byHand = `delete it yourself once nothing on it is needed: git push https://github.com/${slug}.git --delete '${p.branch}'`;
   if (!forge) return `the side branch ${p.branch} of ${slug} stays; ${byHand}`;
   const tip = forge.branchTip(s.repo, p.branch);
   if (!tip.ok) return `the side branch ${p.branch} of ${slug} could not be checked with gh (${tip.error}); ${byHand}`;
@@ -277,6 +279,9 @@ export interface SetupInput {
   deadline_min?: number;
   allowed_tools?: string[];
   connectors?: boolean;
+  environment_name?: string;
+  permissions?: PermissionChoice;
+  account?: string;
   makeDefault: boolean;
 }
 
@@ -292,6 +297,10 @@ export function writeProfile(paths: Paths, input: SetupInput): string {
   if (input.deadline_min !== undefined) raw.deadline_min = input.deadline_min;
   if (input.allowed_tools !== undefined) raw.allowed_tools = input.allowed_tools;
   if (input.connectors !== undefined) raw.connectors = input.connectors;
+  if (input.environment_name !== undefined) raw.environment_name = input.environment_name;
+  else if (prev && prev.environment !== input.environment) delete raw.environment_name; // the name was the old environment's
+  if (input.permissions !== undefined) raw.permissions = input.permissions;
+  if (input.account !== undefined) raw.account = input.account;
   let profile;
   try {
     profile = parseProfile(raw, `profiles.${input.name}`);

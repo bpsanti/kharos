@@ -522,7 +522,7 @@ test('automatic preflight: a side branch with commits kharos did not make is kep
   const forge = fakeForge({ 'package.json': PACKAGE });
   autoPrepare(sb, forge);
   forge.tips.set('kharos/k-0001', 'f'.repeat(40));
-  assert.match(close(sb.paths, 'k-0001', T0, forge), /was kept: it has commits kharos did not make; delete it yourself .*git push origin --delete kharos\/k-0001/);
+  assert.match(close(sb.paths, 'k-0001', T0, forge), /was kept: it has commits kharos did not make; delete it yourself .*git push https:\/\/github\.com\/example\/demo\.git --delete 'kharos\/k-0001'/);
   assert.deepEqual(forge.deleted, []);
 });
 
@@ -569,11 +569,12 @@ test('doctor: says whether automatic preflight is on, and warns when it cannot a
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
     setupScript: () => ({ status: 'absent' }),
     managedPolicy: () => NO_POLICY,
+    repoRole: () => 'admin',
   };
   const run = (extra: Record<string, unknown>) => {
     const sb = sandbox();
     writeConfig(sb, extra);
-    return formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps));
+    return formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps), { verbose: true });
   };
   assert.match(run({}), /info  permission preflight: automatic preflight is off \(the default\)/);
   assert.match(run({ permission_hook: true, preflight_auto: true }), /info  permission preflight: automatic preflight is on: each launch writes/);
@@ -745,6 +746,7 @@ test('unblock: the automatic mode puts it on each side branch while the confirma
     hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
     setupScript: () => ({ status: 'absent' }),
     managedPolicy: () => POLICY,
+    repoRole: () => 'admin',
   };
   assert.match(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env }, deps)), /warn  unblock preset: permission_unblock is on: the side branch of each launch gets the unblock preset/);
 });

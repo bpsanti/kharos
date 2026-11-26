@@ -17,6 +17,27 @@ export interface Profile {
   /** false sends clear_mcp_connections, so the server does not attach every connector of the account. */
   connectors: boolean;
   deadline_min: number;
+  /** The environment's name, as the account lists it; /kharos:setup keeps it so people never see the id alone. */
+  environment_name?: string;
+  /** What the person chose for this profile's permission prompts in /kharos:setup, asked once. */
+  permissions?: PermissionChoice;
+  /**
+   * The Claude account that wrote the profile (the same hash as in the registry, never the login itself).
+   * The file is shared by every account on the machine, and an environment belongs to one account.
+   */
+  account?: string;
+}
+
+/**
+ * The permission modes /kharos:setup offers, asked once. Recording one changes nothing else: the repository's
+ * files change only through /kharos:permissions, after the person approves its diff, and the automatic modes
+ * only when the person turns them on.
+ */
+export const PERMISSION_CHOICES = ['as-is', 'standard', 'hook', 'standard+hook', 'auto-preflight', 'unblock', 'auto-unblock'] as const;
+export type PermissionChoice = (typeof PERMISSION_CHOICES)[number];
+
+export function isPermissionChoice(v: unknown): v is PermissionChoice {
+  return typeof v === 'string' && (PERMISSION_CHOICES as readonly string[]).includes(v);
 }
 
 export interface WatchConfig {
@@ -65,6 +86,11 @@ export interface Config {
    * allows every permission prompt in the cloud session.
    */
   permission_unblock: boolean;
+  /**
+   * What the person chose in /kharos:setup about starting this account's sessions in auto mode, asked once:
+   * "auto" (kharos wrote it to the account's user settings after they approved the diff) or "as-is".
+   */
+  account_mode?: 'auto' | 'as-is';
 }
 
 export const DEFAULT_WATCH: WatchConfig = {
@@ -147,7 +173,7 @@ function strList(v: unknown, where: string): string[] {
   return v as string[];
 }
 
-const KNOWN_PROFILE_KEYS = new Set(['repo', 'revision', 'environment', 'model', 'allowed_tools', 'connectors', 'deadline_min']);
+const KNOWN_PROFILE_KEYS = new Set(['repo', 'revision', 'environment', 'model', 'allowed_tools', 'connectors', 'deadline_min', 'environment_name', 'permissions', 'account']);
 
 export function parseProfile(v: unknown, where: string): Profile {
   const o = obj(v, where);
@@ -157,7 +183,8 @@ export function parseProfile(v: unknown, where: string): Profile {
   const environment = str(o.environment, `${where}.environment`);
   if (!ENV_RE.test(environment)) throw new ConfigError(`${where}.environment must be a cloud environment id (env_...)`);
   if (o.connectors !== undefined && typeof o.connectors !== 'boolean') throw new ConfigError(`${where}.connectors must be true or false`);
-  return {
+  if (o.permissions !== undefined && !isPermissionChoice(o.permissions)) throw new ConfigError(`${where}.permissions must be one of ${PERMISSION_CHOICES.join(', ')}`);
+  const profile: Profile = {
     repo,
     revision: o.revision === undefined ? DEFAULT_PROFILE_FIELDS.revision : str(o.revision, `${where}.revision`),
     environment,
@@ -166,6 +193,10 @@ export function parseProfile(v: unknown, where: string): Profile {
     connectors: o.connectors === undefined ? DEFAULT_PROFILE_FIELDS.connectors : (o.connectors as boolean),
     deadline_min: o.deadline_min === undefined ? DEFAULT_PROFILE_FIELDS.deadline_min : posInt(o.deadline_min, `${where}.deadline_min`),
   };
+  if (o.environment_name !== undefined) profile.environment_name = str(o.environment_name, `${where}.environment_name`);
+  if (o.permissions !== undefined) profile.permissions = o.permissions as PermissionChoice;
+  if (o.account !== undefined) profile.account = str(o.account, `${where}.account`);
+  return profile;
 }
 
 const OUTPUT_TYPES = ['notification', 'file', 'slack', 'command', 'firstmate'] as const;
@@ -226,6 +257,7 @@ export function parseConfig(v: unknown): Config {
   if (o.permission_hook !== undefined && typeof o.permission_hook !== 'boolean') throw new ConfigError('config.permission_hook must be true or false');
   if (o.preflight_auto !== undefined && typeof o.preflight_auto !== 'boolean') throw new ConfigError('config.preflight_auto must be true or false');
   if (o.permission_unblock !== undefined && typeof o.permission_unblock !== 'boolean') throw new ConfigError('config.permission_unblock must be true or false');
+  if (o.account_mode !== undefined && o.account_mode !== 'auto' && o.account_mode !== 'as-is') throw new ConfigError('config.account_mode must be auto or as-is');
   return {
     version: 1,
     default_profile: defaultProfile,
@@ -235,6 +267,7 @@ export function parseConfig(v: unknown): Config {
     permission_hook: o.permission_hook === true,
     preflight_auto: o.preflight_auto === true,
     permission_unblock: o.permission_unblock === true,
+    ...(o.account_mode !== undefined ? { account_mode: o.account_mode as 'auto' | 'as-is' } : {}),
   };
 }
 
@@ -260,8 +293,30 @@ export function saveConfig(paths: Paths, config: Config): void {
   writeJsonAtomic(paths.config, config, 0o600);
 }
 
-export function pickProfile(config: Config, name: string | undefined): { name: string; profile: Profile } {
-  const chosen = name ?? config.default_profile ?? undefined;
+/** Whether a profile was written by another Claude account than `account`; a profile with no account is anyone's. */
+export function otherAccount(p: Profile, account: string | null | undefined): boolean {
+  return !!p.account && !!account && p.account !== account;
+}
+
+/**
+ * The profile to launch with. With no name, the default profile, unless another account wrote it: then the
+ * only profile of this account, since one file serves every account on the machine.
+ */
+export function pickProfile(config: Config, name: string | undefined, account?: string | null): { name: string; profile: Profile } {
+  let chosen = name ?? config.default_profile ?? undefined;
+  if (name === undefined && account) {
+    const dflt = chosen ? config.profiles[chosen] : undefined;
+    if (dflt && otherAccount(dflt, account)) {
+      const mine = Object.keys(config.profiles).filter((n) => !otherAccount(config.profiles[n] as Profile, account));
+      if (mine.length !== 1) {
+        throw new ConfigError(
+          `the default profile "${chosen}" was set up on another Claude account, whose cloud environments this account cannot use; ` +
+            (mine.length ? `pass --profile (one of this account's: ${mine.join(', ')})` : 'run /kharos:setup <owner/repo> to set up a profile on this account'),
+        );
+      }
+      chosen = mine[0];
+    }
+  }
   if (!chosen) {
     const names = Object.keys(config.profiles);
     if (names.length === 0) throw new ConfigError('there is no profile yet: run /kharos:setup first');

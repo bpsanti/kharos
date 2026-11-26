@@ -1,18 +1,63 @@
 # Setting up a repository
 
-`/kharos:setup` writes a launch profile for one repository, and `/kharos:doctor` checks everything a launch depends on.
-Each check that fails comes with its fix, and every fix goes through an official path: kharos never works around a missing permission.
+`/kharos:setup` takes a Claude account from zero to ready for one repository, once.
+`/kharos:doctor` checks the same things later, and says the action for each gap.
+Every fix goes through an official path: kharos never works around a missing permission.
 
 ## What `/kharos:setup` does
 
-1. Picks the repository: the one you name, or the `origin` of the current folder when it is on GitHub.
-2. Picks the cloud environment.
-   The `RemoteTrigger` tool has no list of environments, so kharos reads your routines (`RemoteTrigger list`), offers the environment ids they use, most recent first, and says which one is known for the repository.
-   When none fits, it offers the [assisted path](#creating-a-cloud-environment).
-3. Writes the profile to `~/.config/kharos/config.json`.
-   Without `--revision`, the profile follows the repository's default branch.
-4. Runs `/kharos:doctor` for the profile.
-5. If the repository has no commit, it asks whether it may create an initial commit with a `README.md`, and only writes on an explicit yes.
+It shows one list of everything a launch needs, in the order each step depends on the one before, with its state and the one action that fixes it:
+
+1. Account and plan: Claude Code, a claude.ai login on a plan with cloud sessions, the `RemoteTrigger` tool, and which account this is.
+2. GitHub connection: whether your Claude account has GitHub connected; if not, `/web-setup` or https://claude.ai/connect-github.
+3. Repository access: a first commit (setup offers one, and writes it only on a yes), the branch, and whether Claude reaches the repository.
+4. Cloud environment: picked by name from the environments of your account.
+5. Commit identity: how commits are authored (see below).
+6. Permission prompts: every mode kharos has, each with what it does and its trade-off, the ones this account or organization rules out marked with why; you pick one, once.
+7. Profile: written only when the steps above are settled, as the default profile when it is the first one.
+
+It works on the first gap, checks again after you fix it, and asks only what it cannot settle itself.
+Run again, it asks nothing it already knows.
+It ends with a summary of at most six lines: ready or not, and the next action.
+
+The environments and the GitHub check come from Claude Code itself.
+Its bundled `/schedule` skill lists the account's cloud environments (with their names) when it loads, creates a first one when there is none, and says when Claude cannot reach the GitHub repository of the current folder.
+`/kharos:setup` loads that skill only to read those lines, and passes them to `kharos setup --from-schedule`; it never shows you an `env_...` id.
+Claude Code checks only the repository of the current folder, so for another repository the first launch is the access check (below), and the summary says so.
+
+The permission mode is only recorded in the profile.
+The repository's files change through `/kharos:permissions`, after you approve its diff, and the automatic modes only when you turn them on yourself; setup ends with that command as the next action.
+
+## Commit identity
+
+Cloud sessions push with the GitHub credential your Claude account has: the Claude GitHub App, or the `gh` token `/web-setup` sent.
+Commits are authored as `Claude <noreply@anthropic.com>` unless the environment sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`.
+To author them as you, open the environment selector on https://claude.ai/code, the settings of the environment, and add one `NAME=value` line for each under Environment variables, with an email of your GitHub account (or its noreply address).
+kharos cannot read those variables, so it says this instead of checking it.
+
+## Launch approval
+
+Each launch asks for your approval before its routine is created and run.
+Claude Code's `RemoteTrigger` tool asks on every create and run of a routine, ignores an allow rule for the whole tool on those calls (`--allowedTools RemoteTrigger` included), and offers no "always allow", so kharos cannot make that approval durable.
+In auto mode, Claude Code's classifier reviews each such call instead of a person ([permission modes](https://code.claude.com/docs/en/permission-modes)).
+In a kharos test, a headless `/kharos:run` in auto mode had both the create and the run approved by the classifier, and the session started; the classifier decides each call, so a launch it blocks stops there and says why.
+
+So there are two ways past the prompt, and kharos never bypasses it:
+
+- For the whole account: the first `/kharos:setup` asks once whether this Claude account should start its sessions in auto mode, with the diff of its user settings (`permissions.defaultMode: "auto"` in `CLAUDE_CONFIG_DIR/settings.json`, `~/.claude/settings.json` by default), and writes it only on your yes.
+  Then launches need no approval prompt and headless ones need nothing extra; the side effect is that every session of that account starts in auto mode, not only launches.
+  A folder whose `.claude/settings.json` or `.claude/settings.local.json` sets another `permissions.defaultMode` overrides the account's, so launches from that folder ask again.
+  `kharos permissions account-mode diff off` undoes it, back to the mode the file had; the option is unavailable when the organization turns auto mode off (`permissions.disableAutoMode`).
+- For one launch: `claude -p --permission-mode auto`.
+
+`/kharos:doctor` says which applies to the account in use.
+
+## One setup per Claude account
+
+Profiles, environments and sessions belong to one Claude account.
+With a `CLAUDE_CONFIG_DIR` other than `~/.claude`, kharos keeps that account's files under `accounts/<folder>-<hash>/` of its configuration and state folders; the default account keeps the folders kharos always used.
+The first `/kharos:setup` on such an account moves its profiles (the ones it wrote, or launched with) and its sessions out of the files every account shared before, and asks once about any profile whose account it cannot tell.
+Each profile also records a hash of the account that wrote it, so a launch or `/kharos:doctor` on another account says so plainly instead of firing at an environment that account cannot use.
 
 ## Creating a cloud environment
 
@@ -30,22 +75,22 @@ kharos reads these files with your own `gh`: the setup script, the scripts and M
 Variable names come from table rows that start with a name in backticks, sentences about environment variables, the example files, and variables the scripts read and never set.
 What follows `=` is never kept.
 
-Before creating one, look in the selector for an environment that already serves the repository: on Team and Enterprise, an owner can share one with the organization, under "Organization".
-kharos cannot list environments, so it cannot find a shared one for you.
+Before creating one, look in the list `/kharos:setup` shows for an environment that already serves the repository: on Team and Enterprise, an owner can share one with the organization.
 
-kharos opens the page, then learns the new id from the `remote.defaultEnvironmentId` user setting: run `/remote-env` in Claude Code and pick the new environment.
-That also makes it your default for `claude --cloud`.
-Or paste its id, which `/schedule` shows.
-The wait is bounded (10 minutes by default, `kharos env-wait --timeout`), and kharos writes the id into the profile only after you confirm it.
-
-The same from a shell: `kharos env-guide --repo owner/name --copy --open`, `kharos env-wait --since <printed default>`, then `kharos setup ... --environment env_... --confirmed`.
+When you pick "a new environment", `/kharos:setup` runs `kharos env-guide --repo owner/name --copy --open`, which opens the page and puts the script on the clipboard.
+Once you created it, setup lists your environments again, and you pick the new one by name.
+When the repository ships `tools/cloud/bootstrap.sh`, setup asks once whether the picked environment runs it, and records your answer (`--confirmed`).
+From a shell, `kharos env-wait --since <printed default>` waits for `/remote-env` to save a new default environment instead.
 
 ## What kharos knows about an environment
 
-Environments belong to one account, and nothing shows what one holds.
+Environments belong to one account, and nothing shows what one holds: the list `/schedule` gives has names, ids and kinds, never the setup script or the variables.
 An environment is known to fit a repository when you confirmed it (`--confirmed`, kept by account, repository and revision in `setups.json` of the state folder, with a digest of the setup script; when the script was absent or could not be read then, any script the repository ships later counts as changed) or when one of your routines used it on that repository.
 
 ## The checks
+
+Lines marked `info` show only with `--verbose`, so every warning is something you can act on.
+The last line says whether a launch is ready, and when Claude's access to a repository is not confirmed yet.
 
 | Check | Fails when | Fix |
 |---|---|---|
@@ -58,8 +103,12 @@ An environment is known to fit a repository when you confirmed it (`--confirmed`
 | `repo` | the repository has no commit (fail), or this machine's git cannot read it (warning only: the cloud does not use local credentials) | an initial commit, which setup offers |
 | `revision` | the branch or tag of the profile does not exist | set `revision` to an existing branch |
 | `claude access` | the service answered `repo_access_denied` | see below |
-| `environment` | warning, when you have not confirmed the environment for the repository and none of your routines uses it, or the repository ships `tools/cloud/bootstrap.sh` and your routines used the environment only on other repositories; or the setup script changed on the profile's revision since you confirmed ("the setup script changed on <revision>; paste it again") | check the id in `/schedule`; for a changed script, copy it with `kharos env-guide --profile <name> --copy`, paste it into the environment and confirm it with `/kharos:setup`; or take the [assisted path](#creating-a-cloud-environment) with `/kharos:setup` |
-| `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
+| `environment` | warning, when the environment was not confirmed for the repository and either the repository ships `tools/cloud/bootstrap.sh` while the environment was only picked by name or used on other repositories, or the account has routines, none use it, and it was not picked by name; or when the setup script changed on the profile's revision since you confirmed ("the setup script changed on <revision>; paste it again"). With no routine yet, information only | `/kharos:setup`, which picks it by name and asks about the setup script; for a changed script, `kharos env-guide --profile <name> --copy`, paste it into the environment, and confirm it with `/kharos:setup` |
+| `account files` | profiles or sessions of this account still sit in the files every account shared (warning) | `/kharos:setup` once on this account |
+| `profile <name>` | the profile was set up on another Claude account (information, or a failure when named with `--profile`) | `/kharos:setup` on this account |
+| `commits` | (information) how cloud commits are authored | see [Commit identity](#commit-identity) |
+| `launch approval` | whether this account starts its sessions in auto mode, so launches need no approval prompt; a warning when the settings ask for auto mode and the organization turns it off | `/kharos:setup`, or `kharos permissions account-mode diff auto` and `off`; see [Launch approval](#launch-approval) |
+| `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees; information only when you chose to leave the rules as they are, or your GitHub login cannot change the repository's settings) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
 | `managed policy` | (information) the local copy of the organization's managed settings: how many ask and deny rules, and whether bypass mode is disabled | none |
 | `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or use the opt-in permission hook; see [permissions.md](permissions.md) |
 | `managed hooks only` | the managed settings set `allowManagedHooksOnly`, so no repository hook runs and the permission hook never answers a prompt (warning) | ask the organization's administrator to narrow the rules instead |
@@ -69,10 +118,10 @@ An environment is known to fit a repository when you confirmed it (`--confirmed`
 ## Claude's access to the repository
 
 A cloud session clones the repository on the Claude side, with the Claude GitHub App or with a GitHub token sent by `/web-setup`; your local git credentials are not used.
-kharos cannot see that access from your machine.
-The service checks it when a routine is created, before any session exists, and answers `HTTP 403` with `repo_access_denied` when it is missing.
+kharos cannot see that access with your machine's tools; `/kharos:setup` reads it from Claude Code for the repository of the current folder, and records it.
+For any other repository, the service checks it when a routine is created, before any session exists, and answers `HTTP 403` with `repo_access_denied` when it is missing.
 kharos creates every routine disabled, so that check is free: a refused launch starts nothing and spends nothing.
-The first launch in a repository is therefore also its access check, and `/kharos:doctor` remembers the answer.
+The first launch in a repository is then also its access check, and `/kharos:doctor` remembers the answer.
 
 When the answer is `repo_access_denied`, the fix is one of:
 

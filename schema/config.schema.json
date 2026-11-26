@@ -49,6 +49,13 @@
       "type": "boolean",
       "default": false,
       "description": "Opt-in, with preflight_auto and a remembered confirmation that matches the organization's managed settings: the side branch of each launch gets the unblock preset, which allows every permission prompt in its cloud session. Refused when the organization disabled bypass mode; deny rules are never touched. See docs/permissions.md."
+    },
+    "account_mode": {
+      "enum": [
+        "auto",
+        "as-is"
+      ],
+      "description": "What the person chose in /kharos:setup, once: start this Claude account's sessions in auto mode (written to its user settings after an approved diff) or leave the mode as it is. See docs/setup.md#launch-approval."
     }
   },
   "$defs": {
@@ -72,7 +79,7 @@
         "environment": {
           "type": "string",
           "pattern": "^env_\\w+$",
-          "description": "Cloud environment id, as /schedule shows it."
+          "description": "Cloud environment id; /kharos:setup fills it in from the environment picked by name."
         },
         "model": {
           "type": "string",
@@ -94,6 +101,26 @@
           "type": "integer",
           "minimum": 1,
           "default": 180
+        },
+        "environment_name": {
+          "type": "string",
+          "description": "The environment's name as the account lists it; /kharos:setup writes it when the person picks the environment by name."
+        },
+        "permissions": {
+          "enum": [
+            "as-is",
+            "standard",
+            "hook",
+            "standard+hook",
+            "auto-preflight",
+            "unblock",
+            "auto-unblock"
+          ],
+          "description": "What the person chose in /kharos:setup for this profile's permission prompts. The repository's files change only through /kharos:permissions."
+        },
+        "account": {
+          "type": "string",
+          "description": "A hash of the Claude account that set up the profile, never the login itself; an environment belongs to one account, and this file is shared by every account on the machine."
         }
       }
     },
