@@ -7,6 +7,7 @@ import { readAuthStatus } from './account.ts';
 import type { WatchConfig } from './config.ts';
 import { oneLine, readOutbox, type KharosEvent } from './events.ts';
 import type { Paths } from './paths.ts';
+import { liveFollowers } from './lease.ts';
 import { collectGarbage, isFollowed, loadRegistry, updateRegistry, type Session } from './registry.ts';
 import { loadWatch, updateWatch } from './state.ts';
 import { settle, watchConfig } from './track.ts';
@@ -63,16 +64,18 @@ export interface DueResult {
   reads: Read[];
   open: number;
   events: KharosEvent[];
+  /** Open sessions left to a live follower in this pass. */
+  followers: number;
 }
 
-/** The current account, read at most every ten minutes and kept as a hash. */
-function currentAccount(paths: Paths, opts: DueOptions): string | null {
+/** The current account, read at most every ten minutes and kept as a hash; `read` is a test seam. */
+export function currentAccount(paths: Paths, now: number, env: NodeJS.ProcessEnv, read?: () => string | null): string | null {
   const w = loadWatch(paths);
-  if (!opts.account && w.account && w.account_read_at && opts.now - Date.parse(w.account_read_at) < ACCOUNT_TTL_MS) return w.account;
-  const account = opts.account ? opts.account() : (readAuthStatus(opts.env)?.account ?? null);
+  if (!read && w.account && w.account_read_at && now - Date.parse(w.account_read_at) < ACCOUNT_TTL_MS) return w.account;
+  const account = read ? read() : (readAuthStatus(env)?.account ?? null);
   updateWatch(paths, (x) => {
     x.account = account;
-    x.account_read_at = new Date(opts.now).toISOString();
+    x.account_read_at = new Date(now).toISOString();
   });
   return account;
 }
@@ -90,9 +93,12 @@ export function due(paths: Paths, opts: DueOptions): DueResult {
       for (const old of ids.slice(MAX_WATCHERS)) delete w.watchers[old];
     });
   }
-  const account = currentAccount(paths, opts);
+  const account = currentAccount(paths, opts.now, opts.env, opts.account);
   const events: KharosEvent[] = [];
   const reads: Read[] = [];
+  // A session a follower (`kharos wait`) reads now is left to it, unless the person asked for every read.
+  const followers = opts.all ? new Set<string>() : liveFollowers(paths, opts.now);
+  let leftToFollowers = 0;
   const open = updateRegistry(paths, (reg) => {
     collectGarbage(paths, reg, opts.now);
     const followed = Object.values(reg.sessions).filter(isFollowed);
@@ -102,11 +108,15 @@ export function due(paths: Paths, opts: DueOptions): DueResult {
         events.push(...settle({ paths, now: opts.now, env: opts.env }, s, { state: 'invisible', notice: 'invisible', reason: 'the account logged in now is not the one that launched this session' }, watch));
         continue;
       }
+      if (followers.has(s.id)) {
+        leftToFollowers++;
+        continue;
+      }
       if (opts.all || isDue(s, opts.now, watch.interval_min)) reads.push(...readsFor(s));
     }
     return followed.length;
   });
-  return { reads, open, events };
+  return { reads, open, events, followers: leftToFollowers };
 }
 
 /**
@@ -125,7 +135,7 @@ export function isActiveWatcher(paths: Paths, claudeSession: string | undefined,
 export function formatReads(r: DueResult): string {
   if (r.open === 0) return 'nothing open: no session to follow. Stop the loop that runs /kharos:watch.';
   const lines = r.events.map((e) => `event: ${oneLine(e)}`);
-  if (r.reads.length === 0) lines.push(`${r.open} open session(s), none due for a read in this pass.`);
+  if (r.reads.length === 0) lines.push(`${r.open} open session(s), none due for a read in this pass${r.followers ? ` (${r.followers} read by a follower)` : ''}.`);
   else {
     lines.push(`Make these RemoteTrigger calls, one by one, exactly as written:`);
     for (const x of r.reads) lines.push(`- action "${x.action}", ${Object.entries(x.params).map(([k, v]) => `${k} "${v}"`).join(', ')}`);
@@ -158,17 +168,26 @@ export interface Health {
   line: string;
 }
 
-/** Fails when sessions are open and the watcher has not beaten for three intervals. */
+/**
+ * Fails when a session is open that no live follower reads and the watcher has not beaten for three
+ * intervals: nobody would notice when that session needs the person.
+ */
 export function health(paths: Paths, now: number, watch: WatchConfig = watchConfig(paths)): Health {
   const reg = loadRegistry(paths);
-  const open = Object.values(reg.sessions).filter(isFollowed).length;
+  const open = Object.values(reg.sessions).filter(isFollowed).map((s) => s.id);
+  if (open.length === 0) return { ok: true, line: 'kharos: no open session' };
+  const followers = liveFollowers(paths, now);
+  const nobody = open.filter((id) => !followers.has(id));
+  const byFollowers = open.length - nobody.length;
+  if (nobody.length === 0) return { ok: true, line: `kharos: ${open.length} open session(s), each read by a follower` };
   const w = loadWatch(paths);
   const every = w.interval_min ?? watch.interval_min;
-  if (open === 0) return { ok: true, line: 'kharos: no open session' };
-  if (!w.last_beat) return { ok: false, line: `kharos: ${open} open session(s) and the watcher never ran. Start /loop ${every}m /kharos:watch in a separate session.` };
+  const followerPart = byFollowers ? ` (${byFollowers} more read by a follower)` : '';
+  const fix = `Type /kharos:follow in a Claude Code session to follow them there, or start /loop ${every}m /kharos:watch in a separate session.`;
+  if (!w.last_beat) return { ok: false, line: `kharos: ${nobody.length} open session(s) with no follower${followerPart}, and the watcher never ran. ${fix}` };
   const ago = now - Date.parse(w.last_beat);
   if (ago > 3 * every * MIN) {
-    return { ok: false, line: `kharos: ${open} open session(s) and no watcher heartbeat for ${Math.round(ago / MIN)} min. Start /loop ${every}m /kharos:watch again.` };
+    return { ok: false, line: `kharos: ${nobody.length} open session(s) with no follower${followerPart}, and no watcher heartbeat for ${Math.round(ago / MIN)} min. ${fix}` };
   }
-  return { ok: true, line: `kharos: ${open} open session(s), watcher heartbeat ${Math.round(ago / MIN)} min ago` };
+  return { ok: true, line: `kharos: ${open.length} open session(s)${byFollowers ? `, ${byFollowers} read by a follower` : ''}, watcher heartbeat ${Math.round(ago / MIN)} min ago` };
 }

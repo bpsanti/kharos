@@ -26,7 +26,9 @@ Each run spends plan usage, so keep the task small and the deadline short.
 3. Write a profile on a branch made for the test, with `kharos setup`, and add a `command` output that appends events to a file, to see each delivery.
 4. Launch with `/kharos:run`.
    In a headless session the `run` step needs an approval that `--allowedTools` does not give; the launch then stops at `firing`, and `/kharos:run --resume <id>` (with `--permission-mode bypassPermissions` for that one call) finds no session in `list_runs` and fires once.
-5. Run watcher passes (`/kharos:watch`), with `watch.interval_min` lowered for the test.
+5. Follow it: `/kharos:run` starts the `kharos:follow` agent in the background, and its reports arrive in the launching session.
+   For the watcher instead, run watcher passes (`/kharos:watch`), with `watch.interval_min` lowered for the test.
+   `kharos wait <id> --max 60` in a shell shows one wait's JSON line without an agent.
 6. Check each step against the session page on claude.ai/code.
 
 What to provoke:
@@ -37,6 +39,8 @@ What to provoke:
 | Question | an instruction that asks a question with `KHAROS-QUESTION` before changing anything; answer it with `/kharos:send` |
 | Mid-run message | `/kharos:send` while the session works; the reply shows on the next read |
 | End | the session's `KHAROS-DONE` mark, with the pull request |
+| Follower after an answer | answer a question with `/kharos:send`; the next report must be the next change, not the same question |
+| Follower after a restart | close the launching Claude Code session while the cloud session runs, open it again, and run `/kharos:follow` |
 
 A session left waiting on a permission request cannot be answered from the terminal; open its page, or leave it to idle.
 Routines are created disabled; delete them on claude.ai/code when the test is over.

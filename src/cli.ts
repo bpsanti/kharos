@@ -19,6 +19,7 @@ import { deliver, deliveryLine } from './outputs/index.ts';
 import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
+import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
 
 const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad']);
 /** Flags that may be given more than once; each value is kept, in order. */
@@ -105,6 +106,7 @@ const USAGE = `usage: kharos <command>
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
   due [--watcher id] [--all] | pass-end [--watcher id] | health
+  wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
@@ -142,7 +144,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(cmd.rearm(paths, need(args, 0, 'session id'), now));
         return 0;
       case 'show':
-        out(cmd.show(paths, need(args, 0, 'session id'), now));
+        out(cmd.show(paths, need(args, 0, 'session id')));
         return 0;
       case 'list':
         out(cmd.list(paths, { all: args.flags.all === true, now }));
@@ -233,6 +235,22 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(extraLine ? `${line}; ${extraLine}` : line);
         return 0;
       }
+      case 'wait': {
+        const since = flag(args, 'since');
+        const o = await wait(paths, {
+          id: need(args, 0, 'session id'),
+          since: since === undefined || since === '' ? null : since,
+          maxMs: (intFlag(args, 'max') ?? WAIT_DEFAULTS.maxS) * 1000,
+          minIntervalMs: (intFlag(args, 'min-interval') ?? WAIT_DEFAULTS.minIntervalS) * 1000,
+          maxIntervalMs: (intFlag(args, 'max-interval') ?? WAIT_DEFAULTS.maxIntervalS) * 1000,
+          env,
+        });
+        out(JSON.stringify(o));
+        return 0;
+      }
+      case 'followers':
+        out(followersToStart(paths, args.positional[0] ?? null, now));
+        return 0;
       case 'health': {
         const h = health(paths, now);
         out(h.line);
