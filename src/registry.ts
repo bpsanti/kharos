@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isObject, readState, withLock, writeJsonAtomic } from './fsutil.ts';
+import type { HookRules } from '../cloud/kharos-permission.mjs';
 import type { OutputConfig } from './config.ts';
 import type { Paths } from './paths.ts';
 import type { PermissionRequest } from './permission-request.ts';
@@ -94,6 +95,11 @@ export interface Session {
   cursor_reads: number;
   closed_at: string | null;
   error: string | null;
+  /**
+   * The rules of the kharos permission hook on the branch at launch, read only when permission_hook is
+   * on; null when the hook would not answer there. The watcher attributes the hook's decisions with them.
+   */
+  permission_hook?: HookRules | null;
 }
 
 export interface Registry {

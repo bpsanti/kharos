@@ -219,6 +219,8 @@ function deps(settings: RemoteSettings): DoctorDeps {
     heads: () => HEADS_OK,
     ownerType: () => 'User',
     settings: () => settings,
+    hookFiles: () => ({ status: 'found', files: { settings: null, script: null, rules: null } }),
+    managedPolicy: () => ({ status: 'absent', file: '/home/person/.claude/remote-settings.json' }),
   };
 }
 

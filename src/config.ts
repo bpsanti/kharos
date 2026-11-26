@@ -46,6 +46,11 @@ export interface Config {
   profiles: Record<string, Profile>;
   watch: WatchConfig;
   outputs: OutputConfig[];
+  /**
+   * Opt-in, off by default: kharos may install a PermissionRequest hook in a repository, which answers
+   * permission prompts in cloud sessions, and attributes the hook's decisions in the logs it reads.
+   */
+  permission_hook: boolean;
 }
 
 export const DEFAULT_WATCH: WatchConfig = {
@@ -78,6 +83,7 @@ export function defaultConfig(): Config {
       { type: 'notification', events: ['needs_you', 'terminal'] },
       { type: 'file', path: '{state}/events.jsonl', events: ['*'] },
     ],
+    permission_hook: false,
   };
 }
 
@@ -201,7 +207,8 @@ export function parseConfig(v: unknown): Config {
     if (!Array.isArray(o.outputs)) throw new ConfigError('config.outputs must be a list');
     return o.outputs.map((x, i) => parseOutput(x, `outputs[${i}]`));
   })();
-  return { version: 1, default_profile: defaultProfile, profiles, watch, outputs };
+  if (o.permission_hook !== undefined && typeof o.permission_hook !== 'boolean') throw new ConfigError('config.permission_hook must be true or false');
+  return { version: 1, default_profile: defaultProfile, profiles, watch, outputs, permission_hook: o.permission_hook === true };
 }
 
 /** The configuration, or the defaults when there is no file yet. */

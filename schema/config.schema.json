@@ -34,6 +34,11 @@
       "items": {
         "$ref": "#/$defs/output"
       }
+    },
+    "permission_hook": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in: kharos may install a PermissionRequest hook in a repository, which answers permission prompts in its cloud sessions, and the watcher logs the hook's decisions. See docs/permissions.md."
     }
   },
   "$defs": {

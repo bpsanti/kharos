@@ -54,7 +54,7 @@ const WORK = new Set(['tool_use', 'tool_result', 'init', 'user']);
 // prompt counts as answered when the calls that were open at that moment all have results, or when
 // the session moved on (the model spoke again, or the turn ended or restarted). A message from a person
 // does not answer it: it was seen queued behind the open prompt.
-function isPermissionPrompt(e: LogEvent): boolean {
+export function isPermissionPrompt(e: LogEvent): boolean {
   return /permission/.test(e.kind) && !/denied|deny|response|granted|allow|answer/.test(e.kind);
 }
 

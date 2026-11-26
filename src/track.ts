@@ -1,5 +1,6 @@
 // What one read changes in a session record: store the result marks, classify, and queue the events.
 
+import { recordHookDecisions } from './approvals.ts';
 import { readDoneMark, readQuestionMark } from './body.ts';
 import { classify, CONFIRM_TWICE, type Verdict } from './classify.ts';
 import { ConfigError, DEFAULT_WATCH, loadConfig, type WatchConfig } from './config.ts';
@@ -94,11 +95,13 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
     s.result = { ...s.result, status: null, pr: null, branch: null, summary: null, sheet: null };
   }
   s.result.question = marks.question;
+  const decided = recordHookDecisions(ctx.paths, s, merged.added);
 
   const watch = watchConfig(ctx.paths);
   const verdict = classify({ events, seenStart: s.seen_start === true, createdAt: Date.parse(s.created_at), deadlineMin: s.deadline_min, now: ctx.now, watch });
   const emitted = settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';
   const more = s.pending_cursor ? ` Older events are missing: call RemoteTrigger get_run_log with session_id "${s.session_id}" and cursor "${s.pending_cursor}".` : '';
-  return `kharos: ${s.id} ${s.state.replace(/_/g, ' ')}; ${merged.added.length} new event(s); last event ${s.last_event_at?.slice(11, 19) ?? 'none'} UTC.${change}${more}`;
+  const hook = decided.length ? ` The kharos permission hook answered ${decided.length} prompt(s) (kharos permissions approvals --all).` : '';
+  return `kharos: ${s.id} ${s.state.replace(/_/g, ' ')}; ${merged.added.length} new event(s); last event ${s.last_event_at?.slice(11, 19) ?? 'none'} UTC.${change}${hook}${more}`;
 }

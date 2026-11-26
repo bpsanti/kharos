@@ -29,6 +29,10 @@ Each check that fails comes with its fix, and every fix goes through an official
 | `claude access` | the service answered `repo_access_denied` | see below |
 | `environment` | the environment id is not used by any of your routines (warning) | check the id in `/schedule` |
 | `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
+| `managed policy` | (information) the local copy of the organization's managed settings: how many ask and deny rules, and whether bypass mode is disabled | none |
+| `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or use the opt-in permission hook; see [permissions.md](permissions.md) |
+| `managed hooks only` | the managed settings set `allowManagedHooksOnly`, so no repository hook runs and the permission hook never answers a prompt (warning) | ask the organization's administrator to narrow the rules instead |
+| `permission hook` | the opt-in permission hook is on (warning); per profile, what the branch's hook answers, a missing or changed script or rules file, a hook on the branch while the setting is off, or mirrored organization ask rules while the organization disables bypass mode (warning) | `kharos permissions hook disable`; `/kharos:permissions hook` in a checkout |
 | `limits` | (information) open sessions against `watch.max_open`, and fires in the last hour | wait, or close finished sessions |
 
 ## Claude's access to the repository
