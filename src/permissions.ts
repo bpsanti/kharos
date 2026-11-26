@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CommandError } from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo, pickProfile, repoSlug, saveConfig, type Config } from './config.ts';
-import { ghForge, realGh, type Forge, type RepoSnapshot } from './forge.ts';
+import { GH_MAX_BUFFER, ghForge, ghSpawnError, realGh, type Forge, type RepoSnapshot } from './forge.ts';
 import { writeTextAtomic } from './fsutil.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
 import { confirmationState, describeConfirmation, loadConfirmation, policyFingerprint, saveConfirmation } from './org-confirmations.ts';
@@ -200,9 +200,9 @@ export type RemoteSettings = { status: 'found'; text: string } | { status: 'abse
 /** A file of the repository on the branch sessions start on, through the person's own gh. */
 export function readRemoteFile(repo: string, revision: string, file: string, env: NodeJS.ProcessEnv = process.env): RemoteSettings {
   const slug = repoSlug(repo);
-  const gh = (args: string[]) => spawnSync('gh', args, { encoding: 'utf8', timeout: 20_000, env });
+  const gh = (args: string[]) => spawnSync('gh', args, { encoding: 'utf8', timeout: 20_000, maxBuffer: GH_MAX_BUFFER, env });
   const r = gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${slug}/contents/${file}?ref=${encodeURIComponent(revision)}`]);
-  if (r.error) return { status: 'unreadable', error: 'gh is not installed' };
+  if (r.error) return { status: 'unreadable', error: ghSpawnError(r.error, 20_000).error };
   if (r.status === 0) return { status: 'found', text: r.stdout };
   const err = `${r.stderr ?? ''}`.trim().split('\n').pop() ?? '';
   // GitHub answers 404 both for a missing file and for a repository gh cannot see: tell them apart.

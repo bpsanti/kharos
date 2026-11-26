@@ -11,17 +11,37 @@ export interface GhResult {
   status: number | null;
   stdout: string;
   stderr: string;
-  /** gh could not be started at all. */
+  /** gh is not installed: there is no such program to start. */
   missing?: boolean;
+  /** gh did not run to its end (not installed, timed out, answered too much), as a person reads it. */
+  error?: string;
 }
 
 /** Runs gh with arguments and an optional stdin; the seam the tests replace. */
 export type Gh = (args: string[], input?: string) => GhResult;
 
-export function realGh(env: NodeJS.ProcessEnv): Gh {
+/**
+ * How much gh may print. The file list of a large repository is several megabytes, well past the
+ * one-megabyte default of spawnSync, which then stops the child and reports ENOBUFS.
+ */
+export const GH_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** Why gh did not run to its end, from the error spawnSync gives. */
+export function ghSpawnError(err: Error, timeoutMs: number): { missing: boolean; error: string } {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === 'ENOENT') return { missing: true, error: 'gh is not installed' };
+  if (code === 'ETIMEDOUT') return { missing: false, error: `gh did not answer within ${Math.ceil(timeoutMs / 1000)} s` };
+  if (code === 'ENOBUFS') return { missing: false, error: `gh answered more than ${GH_MAX_BUFFER / 1024 / 1024} MiB` };
+  return { missing: false, error: `gh could not run (${code ?? err.message})` };
+}
+
+export function realGh(env: NodeJS.ProcessEnv, timeoutMs = 30_000): Gh {
   return (args, input) => {
-    const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 30_000, env, ...(input !== undefined ? { input } : {}) });
-    if (r.error) return { status: null, stdout: '', stderr: r.error.message, missing: true };
+    const r = spawnSync('gh', args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: GH_MAX_BUFFER, env, ...(input !== undefined ? { input } : {}) });
+    if (r.error) {
+      const e = ghSpawnError(r.error, timeoutMs);
+      return { status: null, stdout: '', stderr: '', error: e.error, ...(e.missing ? { missing: true } : {}) };
+    }
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
 }
@@ -52,6 +72,7 @@ export interface Forge {
 }
 
 function lastLine(r: GhResult): string {
+  if (r.error) return r.error;
   if (r.missing) return 'gh is not installed';
   return (`${r.stderr}`.trim().split('\n').pop() ?? '').slice(0, 200) || `gh exited with ${r.status}`;
 }
