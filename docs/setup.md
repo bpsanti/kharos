@@ -22,7 +22,7 @@ No CLI or API creates or edits one: you create it in the environment selector on
 
 | Field | What kharos gives you |
 |---|---|
-| Setup script | `tools/cloud/bootstrap.sh` of the repository on the profile's branch, verbatim, with any `# snapshot:` line it carries; when the repository has none, a minimal script that installs nothing. It is copied to the clipboard when a clipboard tool exists (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip`), and saved under the state folder to load with "Choose file" |
+| Setup script | `tools/cloud/bootstrap.sh` of the repository on the profile's branch, verbatim, with any `# snapshot:` line it carries; when the repository has none, a minimal script that installs nothing. It is copied to the clipboard when a clipboard tool exists (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `clip`), and printed in full |
 | Environment variables | the names the repository's files expect, with what they say each is for. Never a value: you type the values on the page |
 | Network access | the level the repository's documents name (`Network access: Full`); otherwise Limited with "Allow package managers", where a new environment starts |
 
@@ -43,7 +43,7 @@ The same from a shell: `kharos env-guide --repo owner/name --copy --open`, `khar
 ## What kharos knows about an environment
 
 Environments belong to one account, and nothing shows what one holds.
-An environment is known to fit a repository when you confirmed it (`--confirmed`, kept by account in `setups.json` of the state folder, with a digest of the setup script) or when one of your routines used it on that repository.
+An environment is known to fit a repository when you confirmed it (`--confirmed`, kept by account, repository and revision in `setups.json` of the state folder, with a digest of the setup script) or when one of your routines used it on that repository.
 
 ## The checks
 
@@ -58,7 +58,7 @@ An environment is known to fit a repository when you confirmed it (`--confirmed`
 | `repo` | the repository has no commit (fail), or this machine's git cannot read it (warning only: the cloud does not use local credentials) | an initial commit, which setup offers |
 | `revision` | the branch or tag of the profile does not exist | set `revision` to an existing branch |
 | `claude access` | the service answered `repo_access_denied` | see below |
-| `environment` | warning, when you have not confirmed the environment for the repository and none of your routines uses it, or the repository ships `tools/cloud/bootstrap.sh` and your routines used the environment only on other repositories; or the script changed since you confirmed | check the id in `/schedule`, paste the changed script, or take the [assisted path](#creating-a-cloud-environment) with `/kharos:setup` |
+| `environment` | warning, when you have not confirmed the environment for the repository and none of your routines uses it, or the repository ships `tools/cloud/bootstrap.sh` and your routines used the environment only on other repositories; or the setup script changed on the profile's revision since you confirmed ("the setup script changed on <revision>; paste it again") | check the id in `/schedule`; for a changed script, copy it with `kharos env-guide --profile <name> --copy`, paste it into the environment and confirm it with `/kharos:setup`; or take the [assisted path](#creating-a-cloud-environment) with `/kharos:setup` |
 | `permissions` | the repository's `.claude/settings.json` on the launch branch has `ask` rules, no narrow allow rule for Bash, broad allow rules that auto mode drops, or `defaultMode` `bypassPermissions` or `dontAsk`, which cloud sessions ignore (warning: a session would likely stop at a prompt nobody sees) | `/kharos:permissions` in a checkout, then commit and push; see [permissions.md](permissions.md) |
 | `managed policy` | (information) the local copy of the organization's managed settings: how many ask and deny rules, and whether bypass mode is disabled | none |
 | `managed ask rules` | organization ask rules that would stop the profile's cloud sessions at a prompt, which no repository rule outranks (warning) | ask the organization's administrator to narrow them, or use the opt-in permission hook; see [permissions.md](permissions.md) |

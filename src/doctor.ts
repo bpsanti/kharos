@@ -12,7 +12,7 @@ import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RUL
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
-import { environmentsOf, findSetup, loadEnvironments, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
+import { environmentsOf, findSetup, loadEnvironments, loadSetups, loadWatch, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
 
 export type Level = 'ok' | 'warn' | 'fail' | 'info';
 
@@ -128,6 +128,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   };
   const repos = state('repos', paths.repos, () => loadRepos(paths));
   const envs = state('environments', paths.environments, () => loadEnvironments(paths));
+  const setups = state('setups', paths.setups, () => loadSetups(paths));
   const names = opts.profile ? [opts.profile] : Object.keys(config.profiles);
   if (names.length === 0) add('fail', 'profile', 'the configuration has no profile', ['Run /kharos:setup.']);
   add('ok', 'config', `${paths.config} (${Object.keys(config.profiles).length} profile(s), default ${config.default_profile ?? 'none'})`);
@@ -166,8 +167,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
       continue;
     }
     checkProfile(name, p, deps, add, repos ?? {}, config.permission_hook, policy);
-    const confirmed = state('setups', paths.setups, () => findSetup(paths, account, repoSlug(p.repo)));
-    checkEnvironment(name, p, deps, add, environmentsOf(envs, account), confirmed);
+    checkEnvironment(name, p, deps, add, environmentsOf(envs, account), findSetup(setups ?? {}, account, repoSlug(p.repo), p.revision));
   }
 
   const reg = state('registry', paths.registry, () => loadRegistry(paths));
@@ -248,10 +248,11 @@ function checkEnvironment(
   if (confirmed?.environment === p.environment) {
     const script = confirmed.script_sha256 ? shipped() : null;
     if (script !== null && scriptDigest(script) !== confirmed.script_sha256) {
-      add('warn', label, `${p.environment}: ${SETUP_SCRIPT_PATH} changed since you confirmed it on ${confirmed.confirmed_at.slice(0, 10)}`, [
-        `Paste the new script into the environment's "Setup script" on claude.ai/code, then confirm it with /kharos:setup.`,
+      add('warn', label, `the setup script changed on ${p.revision}; paste it again`, [
+        `Copy the new script with \`kharos env-guide --profile ${name} --copy\` and paste it into the "Setup script" of ${p.environment} on claude.ai/code.`,
+        'Then confirm it with /kharos:setup.',
       ]);
-    } else add('ok', label, `${p.environment} (you confirmed it for ${slug} on ${confirmed.confirmed_at.slice(0, 10)}${used ? `; ${used}` : ''})`);
+    } else add('ok', label, `${p.environment} (you confirmed it for ${slug}@${p.revision} on ${confirmed.confirmed_at.slice(0, 10)}${used ? `; ${used}` : ''})`);
   } else if (seen) {
     // A repository that ships a setup script needs an environment that runs it, which routines on others do not show.
     if (seen.repos && !seen.repos.includes(key) && shipped() !== null) {

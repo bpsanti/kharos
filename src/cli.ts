@@ -16,7 +16,6 @@ import {
   formatGuide,
   GuideError,
   openBrowser,
-  saveScript,
   scriptDigest,
   SETUP_SCRIPT_PATH,
   waitForEnvironment,
@@ -364,9 +363,7 @@ function envGuide(args: Args, paths: Paths, env: NodeJS.ProcessEnv): string {
   if (heads?.readable && !heads.hasRevision) throw new cmd.CommandError(`"${revision}" is not a branch or tag of ${repoSlug(url)}`);
   const guide = buildGuide(url, revision, (file) => readRemoteFile(url, revision, file, env));
   const since = defaultEnvironment(env);
-  const file = saveScript(paths, guide);
   return formatGuide(guide, {
-    file,
     since,
     ...(args.flags.copy === true ? { copied: copyToClipboard(guide.script, env) } : {}),
     ...(args.flags.open === true ? { opened: openBrowser(CREATE_URL, env) } : {}),
@@ -382,11 +379,12 @@ function confirmEnvironment(paths: Paths, name: string, env: NodeJS.ProcessEnv, 
   recordSetup(paths, {
     account,
     repo: repoSlug(profile.repo),
+    revision: profile.revision,
     environment: profile.environment,
     confirmed_at: new Date(now).toISOString(),
     script_sha256: script.status === 'found' ? scriptDigest(script.text) : null,
   });
-  return `recorded: ${profile.environment} is set up for ${repoSlug(profile.repo)} in this account.`;
+  return `recorded: ${profile.environment} is set up for ${repoSlug(profile.repo)}@${profile.revision} in this account.`;
 }
 
 /** The change to the kharos permission hook that the flags of `permissions hook diff|write` state. */

@@ -21,7 +21,7 @@ import {
 } from './registry.ts';
 import { readCreatedTrigger, readEnvironments, readError, readLogHeader, readRunSession, readRuns, readToolResponse, type EnvironmentUse } from './remote.ts';
 import { recordAccess, readOwnerType, refusalFix, type OwnerType } from './repo.ts';
-import { findSetup, saveEnvironments, takeIntent } from './state.ts';
+import { loadSetups, saveEnvironments, setupsFor, takeIntent } from './state.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { applyRead, failedRead, settle } from './track.ts';
 import { health, isActiveWatcher } from './watch.ts';
@@ -328,8 +328,8 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
 /** Whether kharos knows an environment for the repository: one the person confirmed, or one its routines used. */
 function knownFor(paths: Paths, account: string | null, repo: string, envs: EnvironmentUse[]): string {
   const slug = repoSlug(repo);
-  const confirmed = findSetup(paths, account, slug);
-  if (confirmed) return `for ${slug}: ${confirmed.environment} (you confirmed it on ${confirmed.confirmed_at.slice(0, 10)})`;
+  const confirmed = setupsFor(loadSetups(paths), account, slug);
+  if (confirmed.length) return `for ${slug}: ${confirmed.map((s) => `${s.environment} on ${clean(s.revision, 100)} (you confirmed it on ${s.confirmed_at.slice(0, 10)})`).join(', ')}`;
   const used = envs.filter((e) => e.repos?.includes(slug.toLowerCase())).map((e) => e.id);
   if (used.length) return `for ${slug}: ${used.join(', ')} (used by your routines on it)`;
   return `for ${slug}: no environment is known to fit it; offer the assisted path (kharos env-guide)`;

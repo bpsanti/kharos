@@ -17,7 +17,7 @@ import {
 } from '../src/environment.ts';
 import { postToolUse } from '../src/hook.ts';
 import type { RemoteSettings } from '../src/permissions.ts';
-import { findSetup, loadEnvironments, recordSetup, saveEnvironments } from '../src/state.ts';
+import { findSetup, loadEnvironments, loadSetups, recordSetup, saveEnvironments } from '../src/state.ts';
 import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
 const SCRIPT = [
@@ -73,9 +73,9 @@ test('guide: the shipped script verbatim, the documented variables and network, 
   assert.equal(g.variables[3]!.source, 'tools/cloud/setup.sh');
   assert.deepEqual(g.overrides, ['DEMO_BUDGET_S', 'DEMO_CLOUD_LOG']);
   assert.equal(g.network.level, 'Full');
-  const text = formatGuide(g, { file: '/tmp/x.sh', copied: 'pbcopy', opened: true, since: 'env_01OLD' });
+  const text = formatGuide(g, { copied: 'pbcopy', opened: true, since: 'env_01OLD' });
   assert.match(text, /Network access: Full \(docs\/environment\/cloud\.md says/);
-  assert.match(text, /copied to the clipboard with pbcopy; also saved in \/tmp\/x\.sh/);
+  assert.match(text, /copied to the clipboard with pbcopy; it is printed below\./);
   assert.match(text, /# snapshot: 2026-01-02/);
   assert.match(text, /default environment before you start: env_01OLD$/);
   assert.doesNotMatch(text, /do-not-show|also-hidden|ghp_0123/);
@@ -87,7 +87,7 @@ test('guide: without a script in the repository, a minimal one and the default n
   assert.equal(g.script, minimalScript('example/demo'));
   assert.deepEqual(g.variables.map((v) => v.name), ['API_URL']);
   assert.equal(g.network.level, 'Limited');
-  assert.match(formatGuide(g, { file: 'f', copied: null, since: null }), /ships no tools\/cloud\/bootstrap\.sh.*no clipboard tool worked/);
+  assert.match(formatGuide(g, { copied: null, since: null }), /ships no tools\/cloud\/bootstrap\.sh.*no clipboard tool worked/);
 });
 
 test('guide: a repository gh cannot read gives no script at all', () => {
@@ -116,6 +116,10 @@ test('clipboard and browser: the first tool that works, and null or false withou
   const none = { ...sb.env, PATH: path.join(sb.dir, 'empty') };
   assert.equal(copyToClipboard(SCRIPT, none, 'linux'), null);
   assert.equal(openBrowser('https://claude.ai/code', none, 'linux'), false);
+  // `start` takes its first quoted argument as a window title, so the empty one keeps the url as the target.
+  const win = tools(sb, { cmd: `printf '%s|' "$@" > "${sb.dir}/cmd.txt"` });
+  assert.equal(openBrowser('https://claude.ai/code', win, 'win32'), true);
+  assert.equal(fs.readFileSync(path.join(sb.dir, 'cmd.txt'), 'utf8'), '/c|start||https://claude.ai/code|');
 });
 
 function settingsFile(sb: Sandbox, id: string): void {
@@ -153,6 +157,10 @@ test('environments: the answer says which environment is known for the repositor
   };
   assert.match(await ask('example/demo'), /env_01DEMO  used by 1 routine\(s\) on example\/demo[\s\S]*for example\/demo: env_01DEMO \(used by your routines on it\)/);
   assert.match(await ask('example/new'), /for example\/new: no environment is known to fit it/);
+  const at = new Date(T0).toISOString();
+  recordSetup(sb.paths, { account: loadEnvironments(sb.paths)!.account!, repo: 'example/new', revision: 'main', environment: 'env_01MAIN', confirmed_at: at, script_sha256: null });
+  recordSetup(sb.paths, { account: loadEnvironments(sb.paths)!.account!, repo: 'example/new', revision: 'dev', environment: 'env_01DEV', confirmed_at: at, script_sha256: null });
+  assert.match(await ask('example/new'), /for example\/new: env_01MAIN on main \(you confirmed it on 2026-11-25\), env_01DEV on dev \(you confirmed it on 2026-11-25\)/);
   assert.deepEqual(loadEnvironments(sb.paths)?.environments.map((e) => e.repos), [['example/demo'], ['example/other']]);
   assert.match(loadEnvironments(sb.paths)?.account ?? '', /^sha256:/);
 });
@@ -201,12 +209,24 @@ test('doctor: a confirmed environment passes until the setup script changes', ()
   const sb = sandbox();
   writeConfig(sb);
   saveEnvironments(sb.paths, [], T0, 'sha256:x');
-  recordSetup(sb.paths, { account: 'sha256:x', repo: 'Example/Demo', environment: 'env_01TESTENVIRONMENT', confirmed_at: new Date(T0).toISOString(), script_sha256: scriptDigest(SCRIPT) });
+  const confirm = (revision: string, script: string) =>
+    recordSetup(sb.paths, { account: 'sha256:x', repo: 'Example/Demo', revision, environment: 'env_01TESTENVIRONMENT', confirmed_at: new Date(T0).toISOString(), script_sha256: scriptDigest(script) });
+  confirm('main', SCRIPT);
   assert.equal(environmentCheck(sb).level, 'ok');
-  assert.match(environmentCheck(sb).text, /you confirmed it for example\/demo on 2026-11-25/);
+  assert.match(environmentCheck(sb).text, /you confirmed it for example\/demo@main on 2026-11-25/);
+  // A confirmation on another branch of the same repository, whose script differs, leaves the one on main alone.
+  confirm('dev', SCRIPT.replace('2026-01-02', '2026-03-04'));
+  assert.equal(environmentCheck(sb).level, 'ok');
   const changed = environmentCheck(sb, { setupScript: () => ({ status: 'found', text: SCRIPT.replace('2026-01-02', '2026-02-03') }) });
   assert.equal(changed.level, 'warn');
-  assert.match(changed.text, /changed since you confirmed it/);
+  assert.equal(
+    changed.text,
+    [
+      'the setup script changed on main; paste it again',
+      'Copy the new script with `kharos env-guide --profile demo --copy` and paste it into the "Setup script" of env_01TESTENVIRONMENT on claude.ai/code.',
+      'Then confirm it with /kharos:setup.',
+    ].join('\n'),
+  );
 });
 
 test('setup --confirmed writes the id into the profile and records it for this account', async () => {
@@ -214,12 +234,13 @@ test('setup --confirmed writes the id into the profile and records it for this a
   const env = tools(sb, { gh: 'printf "%s" "echo setup"' });
   const r = await captured(() => main(['setup', '--profile', 'demo', '--repo', 'example/demo', '--revision', 'main', '--environment', 'env_01NEW', '--confirmed'], env, () => ''));
   assert.equal(r.value, 0);
-  assert.match(r.stdout, /recorded: env_01NEW is set up for example\/demo/);
+  assert.match(r.stdout, /recorded: env_01NEW is set up for example\/demo@main/);
   const stored = Object.values(JSON.parse(fs.readFileSync(sb.paths.setups, 'utf8')) as Record<string, { account: string }>)[0]!;
-  assert.equal(findSetup(sb.paths, stored.account, 'example/demo')?.script_sha256, scriptDigest('echo setup'));
+  assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'main')?.script_sha256, scriptDigest('echo setup'));
+  assert.equal(findSetup(loadSetups(sb.paths), stored.account, 'example/demo', 'dev'), null);
 });
 
-test('env-guide: saves the script, copies it, opens the page, and prints no value', async () => {
+test('env-guide: copies the script, opens the page, and prints no value', async () => {
   const sb = sandbox();
   writeConfig(sb);
   const env = tools(sb, {
@@ -235,7 +256,7 @@ test('env-guide: saves the script, copies it, opens the page, and prints no valu
   assert.match(r.stdout, /cloud environment for example\/demo@main/);
   assert.match(r.stdout, /default environment before you start: none/);
   assert.equal(fs.readFileSync(path.join(sb.dir, 'clip.txt'), 'utf8'), 'echo setup\n');
-  assert.equal(fs.readFileSync(path.join(sb.paths.state, 'environment', 'example--demo-setup.sh'), 'utf8'), 'echo setup\n');
+  assert.match(r.stdout, /----- setup script \(tools\/cloud\/bootstrap\.sh\) -----\necho setup\n----- end of setup script -----/);
   const missing = await captured(() => main(['env-guide', '--repo', 'example/demo', '--revision', 'nope'], env, () => ''));
   assert.equal(missing.value, 1);
   assert.match(missing.stderr, /"nope" is not a branch or tag/);

@@ -8,8 +8,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { clean, sha256 } from './body.ts';
 import { repoSlug } from './config.ts';
-import { writeTextAtomic } from './fsutil.ts';
-import type { Paths } from './paths.ts';
 import type { RemoteSettings } from './permissions.ts';
 
 /** Where a repository ships the setup script of its cloud environment, by convention. */
@@ -225,13 +223,6 @@ export function scriptDigest(script: string): string {
   return sha256(script);
 }
 
-/** A copy of the script to load with "Choose file" when there is no clipboard. */
-export function saveScript(paths: Paths, guide: Guide): string {
-  const file = path.join(paths.state, 'environment', `${guide.repo.replace('/', '--')}-setup.sh`);
-  writeTextAtomic(file, guide.script);
-  return file;
-}
-
 function run(argv: string[], env: NodeJS.ProcessEnv, input?: string): boolean {
   const [bin, ...args] = argv as [string, ...string[]];
   // The output is ignored, not piped: xclip leaves a child behind that would hold a pipe open.
@@ -252,8 +243,8 @@ export function copyToClipboard(text: string, env: NodeJS.ProcessEnv, platform: 
 }
 
 export function openBrowser(url: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): boolean {
-  const tools = platform === 'darwin' ? [['open']] : platform === 'win32' ? [['cmd', '/c', 'start', '', '']] : [['xdg-open'], ['wslview']];
-  return tools.some((t) => run(platform === 'win32' ? ['cmd', '/c', 'start', '', url] : [...t, url], env));
+  const tools = platform === 'darwin' ? [['open']] : platform === 'win32' ? [['cmd', '/c', 'start', '']] : [['xdg-open'], ['wslview']];
+  return tools.some((t) => run([...t, url], env));
 }
 
 /** The environment /remote-env saved in the user settings, or null. */
@@ -287,7 +278,6 @@ export async function waitForEnvironment(
 }
 
 export interface GuideDelivery {
-  file: string;
   /** The clipboard tool used, null when none worked, undefined when no copy was asked for. */
   copied?: string | null;
   opened?: boolean;
@@ -299,7 +289,7 @@ export function formatGuide(g: Guide, d: GuideDelivery): string {
   const where = [
     ...(d.copied ? [`copied to the clipboard with ${d.copied}`] : []),
     ...(d.copied === null ? ['no clipboard tool worked here'] : []),
-    `also saved in ${d.file}, for "Choose file"`,
+    'it is printed below',
   ].join('; ');
   const network = g.network.source
     ? `${g.network.level} (${g.network.source} says: "${g.network.quote}")`
@@ -313,7 +303,7 @@ export function formatGuide(g: Guide, d: GuideDelivery): string {
     '   If an environment for this repository is there already, under "Organization" or "Personal", use it and go to step 3.',
     '2. Otherwise choose "New environment" and fill in:',
     `   Network access: ${network}`,
-    `   Setup script: ${script}; ${where}. It is printed below.`,
+    `   Setup script: ${script}; ${where}.`,
   ];
   if (g.variables.length) {
     lines.push('   Environment variables, one NAME=value per line (type the values there; kharos never reads or stores them):');

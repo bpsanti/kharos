@@ -170,8 +170,7 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/sessions.json` | The registry, mode 0600, written atomically under a lock |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 | `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id and a heartbeat |
-| `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account and repository |
-| `~/.local/state/kharos/environment/` | The setup script kharos last prepared for each repository |
+| `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account, repository and revision |
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions the watcher read: time, session, tool, decision and matched rule, never the command |
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
 | `~/.local/state/kharos/org-confirmations.json` | Your confirmations to mirror the organization's ask rules and of the unblock preset, each with the fingerprint of the managed settings it holds for |
