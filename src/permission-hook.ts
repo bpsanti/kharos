@@ -1,15 +1,16 @@
 // The kharos permission hook in a repository: three files, changed only as one approved diff.
 //   .claude/settings.json            a PermissionRequest entry that runs the script in cloud sessions
 //   .claude/hooks/kharos-permission.mjs  the script, copied from cloud/kharos-permission.mjs of the plugin
-//   .claude/kharos-permissions.json  the rules: the person's own allow patterns and the organization ask
-//                                    rules the person chose to mirror; every other prompt is denied. Broad
-//                                    rules, which allow any command they cover, only with --broad
+//   .claude/kharos-permissions.json  the rules: the person's own allow patterns and prefix rules, and the
+//                                    organization ask rules the person chose to mirror; every other prompt is denied. Broad
+//                                    rules, which allow any command they cover, only with --broad; with the
+//                                    unblock preset, every prompt is allowed instead
 // A repository allow rule cannot outrank an ask rule, least of all a managed one, and a cloud session
 // has no bypass mode; a PermissionRequest hook answers the prompt on the person's behalf instead.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { bashRuleMatches, broadPatternWhy, broadRuleWhy, HOOK_VERSION, parsePattern, readHookRules, type HookRules } from '../cloud/kharos-permission.mjs';
+import { bashRuleMatches, broadPatternWhy, broadRuleWhy, HOOK_VERSION, parsePattern, prefixOf, prefixRuleWhy, readHookRules, type HookRules } from '../cloud/kharos-permission.mjs';
 import { mirrorRefusal, planMirror, staleMirror, type ManagedPolicy, type MirrorPlan } from './managed-policy.ts';
 import { parseSettings, readRules, renderSettings, SETTINGS_PATH, SettingsError, unifiedDiff } from './permission-profiles.ts';
 
@@ -124,16 +125,22 @@ export function isBroadPattern(pattern: string): boolean {
   return p.ok && broadPatternWhy(p.words) !== null;
 }
 
-/** The broad rules of a rules file: allow patterns and mirrored organization rules. */
+/** The broad rules of a rules file: allow patterns, mirrored organization rules and prefix rules. */
 export function broadRules(r: HookRules): string[] {
-  return [...r.allow.filter(isBroadPattern), ...r.mirror.filter((m) => broadRuleWhy(m) !== null)];
+  return [...r.allow.filter(isBroadPattern), ...r.mirror.filter((m) => broadRuleWhy(m) !== null), ...(r.prefix ?? []).filter((m) => broadRuleWhy(m) !== null)];
 }
 
 const mark = (rule: string, broad: boolean) => (broad ? `${rule} (broad)` : rule);
 
+function prefixLine(r: HookRules): string[] {
+  const prefix = r.prefix ?? [];
+  return prefix.length ? [`prefix rules, any arguments (${prefix.length}): ${prefix.map((m) => mark(m, broadRuleWhy(m) !== null)).join(', ')}`] : [];
+}
+
 function listRules(r: HookRules): string[] {
   return [
     `allow patterns (${r.allow.length}): ${r.allow.length ? r.allow.map((p) => mark(p, isBroadPattern(p))).join(' | ') : 'none'}`,
+    ...prefixLine(r),
     `mirrored organization ask rules (${r.mirror.length}): ${r.mirror.length ? r.mirror.map((m) => mark(m, broadRuleWhy(m) !== null)).join(', ') : 'none'}`,
   ];
 }
@@ -148,19 +155,44 @@ export function describeHook(st: HookState): string[] {
     out.push(...listRules(st.rules).map((l) => `  ${l}`));
     const broad = broadRules(st.rules);
     if (broad.length) out.push(`  broad rules (${broad.length}) ${BROAD_RISK}: ${broad.join(', ')}`);
-    out.push('  any other prompt in a cloud session: denied, with a message that names the allowed forms');
+    out.push(st.rules.unblock ? `  any other prompt in a cloud session: allowed, by the unblock preset (${UNBLOCK_RISK})` : '  any other prompt in a cloud session: denied, with a message that names the allowed forms');
   }
   return out;
 }
 
+export const UNBLOCK_RISK = "every permission prompt in this repository's cloud sessions is allowed, of any tool, with no person asked";
+
+const REMOTE_DATABASES: [RegExp, string][] = [
+  [/rds\.amazonaws\.com/i, 'Amazon RDS'],
+  [/cache\.amazonaws\.com/i, 'Amazon ElastiCache'],
+  [/docdb\.amazonaws\.com/i, 'Amazon DocumentDB'],
+  [/mongodb\.net|mongodb\+srv/i, 'MongoDB Atlas'],
+];
+
+/** What the unblock preset opens under this policy, as the person confirms it; empty when kharos refuses it. */
+export function unblockOpens(policy: ManagedPolicy): string[] {
+  if (policy.status !== 'found') return [];
+  const remote = policy.ask.flatMap((r) => REMOTE_DATABASES.filter(([re]) => re.test(r)).map(([, name]) => `${r} (${name})`));
+  return [
+    `${UNBLOCK_RISK}: Bash commands of any form (chained, piped, with variables, for any program, shells and interpreters too), web fetches, connector tools and every other tool that asks`,
+    `the organization's ask rules it answers (${policy.ask.length}), as mirrored rules and through the preset: ${policy.ask.length ? policy.ask.join(', ') : 'none'}`,
+    `remote databases: a session may connect with no person asked to any database the cloud machine can reach, such as Amazon RDS, ElastiCache, DocumentDB, or MongoDB Atlas through a connection string${remote.length ? `; the organization asks before these hosts today: ${remote.join(', ')}` : ''}`,
+    `what stays: the organization's deny rules (${policy.deny.length}), which Claude Code enforces before any prompt, and every prompt on a person's machine, where the hook says nothing`,
+  ];
+}
+
 export interface HookChange {
   allow: string[];
+  /** Prefix rules, `Bash(<program> <subcommands>:*)`, which allow any arguments. */
+  prefix: string[];
   drop: string[];
   mirror: boolean;
   unmirror: boolean;
   uninstall: boolean;
   /** Accept broad rules: allow patterns and mirrored organization rules that allow any command they cover. */
   broad: boolean;
+  /** Turn the unblock preset on (it mirrors every organization ask rule and allows every other prompt) or off. */
+  unblock?: 'on' | 'off' | null;
 }
 
 export interface FileChange {
@@ -175,10 +207,12 @@ export interface HookPlan {
   lines: string[];
   /** Set when the change mirrors the organization's ask rules: the write then needs --org-confirmed. */
   mirror: MirrorPlan | null;
+  /** The change turns the unblock preset on: the write then needs the person's unblock confirmation. */
+  unblock: boolean;
 }
 
 function renderRules(r: HookRules): string {
-  return JSON.stringify({ version: 1, ...(r.broad ? { broad: true } : {}), allow: r.allow, mirror: r.mirror }, null, 2) + '\n';
+  return JSON.stringify({ version: 1, ...(r.broad ? { broad: true } : {}), ...(r.unblock ? { unblock: true } : {}), allow: r.allow, ...(r.prefix?.length ? { prefix: r.prefix } : {}), mirror: r.mirror }, null, 2) + '\n';
 }
 
 /** A deny rule that would cover calls an allow pattern names: the hook could never approve them. */
@@ -187,6 +221,33 @@ function deniedBy(pattern: string, deny: readonly string[]): string | null {
   if (!p.ok) return null;
   const sample = p.words.map((w) => (w === null ? 'x' : w)).join(' ');
   return deny.find((d) => bashRuleMatches(d, sample)) ?? null;
+}
+
+/**
+ * Why kharos refuses an allow pattern, or null when it accepts it: the pattern is not valid, it is broad
+ * and the change does not accept broad rules, or a deny rule of the organization or the repository covers it.
+ */
+export function allowRefusal(pattern: string, broad: boolean, policy: ManagedPolicy, repoDeny: readonly string[]): string | null {
+  const r = parsePattern(pattern, broad);
+  if (!r.ok) {
+    const loose = parsePattern(pattern, true);
+    const why = loose.ok ? broadPatternWhy(loose.words) : null;
+    return why ? `allow pattern "${pattern}" is refused: it is broad (${why}), so it would allow any command; add --broad to allow it anyway` : `allow pattern "${pattern}" is refused: ${r.why}`;
+  }
+  const deny = deniedBy(pattern, [...(policy.status === 'found' ? policy.deny : []), ...repoDeny]);
+  return deny ? `allow pattern "${pattern}" is refused: the deny rule ${deny} covers it, and a hook cannot approve what a deny rule refuses` : null;
+}
+
+/**
+ * Why kharos refuses a prefix rule, or null when it accepts it: the rule is not valid, it is broad and
+ * the change does not accept broad rules, or a deny rule of the organization or the repository covers it.
+ */
+export function prefixRefusal(rule: string, broad: boolean, policy: ManagedPolicy, repoDeny: readonly string[]): string | null {
+  const why = prefixRuleWhy(rule, broad);
+  if (why) return `prefix rule "${rule}" is refused: ${why}${why.startsWith('it is broad') ? ', so it would allow any command; add --broad to allow it anyway' : ''}`;
+  const head = prefixOf(rule);
+  const deny = [...(policy.status === 'found' ? policy.deny : []), ...repoDeny].find((d) => bashRuleMatches(d, head) || bashRuleMatches(d, `${head} x`));
+  return deny ? `prefix rule "${rule}" is refused: the deny rule ${deny} covers it, and a hook cannot approve what a deny rule refuses` : null;
 }
 
 /**
@@ -200,8 +261,10 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
   let next: { settings: Record<string, unknown>; script: string | null; rules: string | null };
   let mirror: MirrorPlan | null = null;
 
+  const unblock = change.unblock ?? null;
+  let turningOn = false;
   if (change.uninstall) {
-    if (change.allow.length || change.drop.length || change.mirror || change.unmirror || change.broad) throw new HookError('--uninstall takes no other change');
+    if (change.allow.length || change.prefix.length || change.drop.length || change.mirror || change.unmirror || change.broad || unblock) throw new HookError('--uninstall takes no other change');
     next = { settings: withoutHookEntry(settings), script: null, rules: null };
     lines.push('removes the kharos permission hook: its settings entry, the script and the rules file; every other key of the settings stays');
   } else {
@@ -209,39 +272,56 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
     const current = files.rules === null ? null : parseRulesText(files.rules);
     if (current && 'error' in current) throw new HookError(`${HOOK_RULES_PATH}: ${current.error}; fix it by hand, or remove the hook with --uninstall`);
     const base: HookRules = current ?? { allow: [], mirror: [] };
+    const basePrefix = base.prefix ?? [];
+    if (unblock === 'on' && (change.mirror || change.unmirror)) throw new HookError('--unblock mirrors every organization ask rule itself; it takes no --mirror or --unmirror');
+    if (unblock === 'on') {
+      const refusal = mirrorRefusal(policy);
+      if (refusal) throw new HookError(`the unblock preset: ${refusal}`);
+    }
+    if (base.unblock && unblock !== 'off' && policy.status === 'found' && policy.bypassDisabled) {
+      throw new HookError("refused: the hook here has the unblock preset, but the organization's managed settings now set disableBypassPermissionsMode, so its ask rules bind every session; remove it with `kharos permissions hook diff --no-unblock --unmirror` (or remove the hook with --uninstall)");
+    }
     const stale = change.unmirror ? null : staleMirror(policy, base.mirror);
     if (stale) throw new HookError(`refused: ${stale}`);
+    const acceptBroad = change.broad || unblock === 'on';
     for (const p of change.allow) {
-      const r = parsePattern(p, change.broad);
-      if (!r.ok) {
-        const loose = parsePattern(p, true);
-        const why = loose.ok ? broadPatternWhy(loose.words) : null;
-        throw new HookError(
-          why ? `allow pattern "${p}" is refused: it is broad (${why}), so it would allow any command; add --broad to allow it anyway` : `allow pattern "${p}" is refused: ${r.why}`,
-        );
-      }
-      const deny = deniedBy(p, [...(policy.status === 'found' ? policy.deny : []), ...repoDeny]);
-      if (deny) throw new HookError(`allow pattern "${p}" is refused: the deny rule ${deny} covers it, and a hook cannot approve what a deny rule refuses`);
+      const refusal = allowRefusal(p, acceptBroad, policy, repoDeny);
+      if (refusal) throw new HookError(refusal);
     }
-    for (const p of change.drop) if (!base.allow.includes(p)) throw new HookError(`"${p}" is not an allow pattern of ${HOOK_RULES_PATH}`);
+    for (const p of change.prefix) {
+      const refusal = prefixRefusal(p, acceptBroad, policy, repoDeny);
+      if (refusal) throw new HookError(refusal);
+    }
+    for (const p of change.drop) if (!base.allow.includes(p) && !basePrefix.includes(p)) throw new HookError(`"${p}" is not an allow pattern or prefix rule of ${HOOK_RULES_PATH}`);
     let mirrored = base.mirror;
-    if (change.mirror) {
+    if (change.mirror || unblock === 'on') {
       const refusal = mirrorRefusal(policy);
       if (refusal) throw new HookError(refusal);
-      mirror = planMirror(policy.status === 'found' ? policy.ask : [], change.broad);
+      mirror = planMirror(policy.status === 'found' ? policy.ask : [], acceptBroad);
       mirrored = mirror.converted;
     } else if (change.unmirror) mirrored = [];
+    const prefix = [...basePrefix.filter((p) => !change.drop.includes(p)), ...change.prefix.filter((p, i, a) => a.indexOf(p) === i && !basePrefix.includes(p))];
     const kept: HookRules = {
       allow: [...base.allow.filter((p) => !change.drop.includes(p)), ...change.allow.filter((p, i, a) => a.indexOf(p) === i && !base.allow.includes(p))],
       mirror: mirrored,
+      ...(prefix.length ? { prefix } : {}),
     };
     const broad = broadRules(kept);
-    const rules: HookRules = broad.length ? { ...kept, broad: true } : kept;
+    const withBroad: HookRules = broad.length ? { ...kept, broad: true } : kept;
+    const unblocked = unblock === 'on' || (unblock === null && base.unblock === true);
+    turningOn = unblock === 'on' && base.unblock !== true;
+    const rules: HookRules = unblocked ? { ...withBroad, unblock: true } : withBroad;
     const added = broad.filter((r) => !broadRules(base).includes(r));
     next = { settings: withHookEntry(settings), script: shippedScript(), rules: renderRules(rules) };
     lines.push(`${hasHookEntry(settings) ? 'updates' : 'installs'} the kharos permission hook; it decides only in cloud sessions (CLAUDE_CODE_REMOTE=true), and says nothing on a person's machine`);
-    lines.push(listRules(rules)[0] as string);
-    lines.push('any other prompt in a cloud session: denied, with a message that names the allowed forms');
+    lines.push(listRules(rules)[0] as string, ...prefixLine(rules));
+    lines.push(unblocked ? 'any other prompt in a cloud session: allowed, by the unblock preset' : 'any other prompt in a cloud session: denied, with a message that names the allowed forms');
+    if (unblock === 'on' && !base.unblock) {
+      lines.push(`WARNING: this change turns on the unblock preset: ${UNBLOCK_RISK}. It opens:`, ...unblockOpens(policy).map((l) => `  ${l}`));
+    } else if (unblock === 'off' && base.unblock) lines.push(
+        `turns off the unblock preset: prompts no rule allows are denied again, with a message that names the allowed forms${rules.mirror.length ? `; the ${rules.mirror.length} mirrored organization rule(s)${rules.broad ? ' and broad: true' : ''} stay until --unmirror` : ''}`,
+      );
+    else if (unblocked) lines.push(`the unblock preset stays on: ${UNBLOCK_RISK}`);
     if (added.length) lines.push(`WARNING: this change adds ${added.length} broad rule(s), which ${BROAD_RISK}: ${added.join(', ')}`);
     else if (broad.length) lines.push(`broad rules (${broad.length}), unchanged: ${broad.join(', ')}`);
     if (mirror) {
@@ -261,7 +341,7 @@ export function planHook(files: HookFiles, change: HookChange, policy: ManagedPo
     { path: HOOK_RULES_PATH, before: files.rules, after: next.rules },
   ].filter((c) => c.before !== c.after);
   const token = changes.length ? sha(JSON.stringify(changes.map((c) => [c.path, c.before, c.after]))) : null;
-  return { changes, token, lines, mirror };
+  return { changes, token, lines, mirror, unblock: turningOn && changes.length > 0 };
 }
 
 /** The diff of a plan as a person reads it. The script is the plugin's own file, so it shows as its hash. */

@@ -103,7 +103,18 @@ export interface Session {
    * on; null when the hook would not answer there. The watcher attributes the hook's decisions with them.
    */
   permission_hook?: HookRules | null;
+  /** What automatic permission preflight did at launch; absent or null when it was off. */
+  preflight?: Preflight | null;
 }
+
+/**
+ * Automatic permission preflight at launch. `creating` is written before the side branch is made, so a
+ * launch that stopped midway still names the branch; `applied` once the session starts on it.
+ */
+export type Preflight =
+  | { status: 'creating'; branch: string; base: string; applied: string[] }
+  | { status: 'applied'; branch: string; base: string; commit: string; applied: string[]; deleted_at: string | null; mirrored?: string[]; unblock?: boolean; note?: string | null }
+  | { status: 'skipped'; reason: string };
 
 export interface Registry {
   version: 1;

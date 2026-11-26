@@ -8,10 +8,11 @@ import * as cmd from './commands.ts';
 import { ConfigError, loadConfig, normalizeRepo, type OutputConfig } from './config.ts';
 import { formatChecks, realDeps, runDoctor } from './doctor.ts';
 import { postToolUse, postToolUseFailure, preToolUse, sessionStart, type Ctx, type HookInput } from './hook.ts';
-import { LaunchError, prepare, readInstruction } from './launch.ts';
+import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
+import { ghForge, realGh } from './forge.ts';
 import { resolvePaths } from './paths.ts';
 import { formatHookDecisions } from './approvals.ts';
-import { diffHook, diffPermissions, showHook, showPermissions, switchHook, writeHook, writePermissions } from './permissions.ts';
+import { diffHook, diffPermissions, preflight, showHook, showPermissions, switchHook, switchPreflightAuto, switchUnblockAuto, unblockConfirm, unblockShow, writeHook, writePermissions } from './permissions.ts';
 import type { HookChange } from './permission-hook.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
@@ -22,9 +23,9 @@ import path from 'node:path';
 import { due, formatReads, health, passEnd } from './watch.ts';
 import { followersToStart, wait, WAIT_DEFAULTS } from './wait.ts';
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad']);
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'default', 'no-remote-tool', 'resume', 'connectors', 'no-connectors', 'mirror', 'unmirror', 'uninstall', 'org-confirmed', 'broad', 'launch', 'stdin', 'unblock', 'no-unblock']);
 /** Flags that may be given more than once; each value is kept, in order. */
-const LIST_FLAGS = new Set(['allow', 'drop']);
+const LIST_FLAGS = new Set(['allow', 'allow-prefix', 'drop']);
 
 export interface Args {
   positional: string[];
@@ -104,9 +105,13 @@ const USAGE = `usage: kharos <command>
   action [name] [--session id]
   permissions show [dir] | permissions diff <default|standard> [dir] | permissions write <default|standard> --expect <token> [dir]
   permissions hook show [dir] | permissions hook enable | permissions hook disable
-  permissions hook diff [--allow <pattern>]... [--drop <pattern>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
+  permissions hook diff [--allow <pattern>]... [--allow-prefix 'Bash(<program> <subcommands>:*)']... [--drop <pattern or prefix rule>]... [--mirror|--unmirror] [--broad] [--uninstall] [dir]
   permissions hook write --expect <token> [the same change flags] [--org-confirmed] [dir]
   permissions approvals [--all] [--session k-0001] [--limit n]
+  permissions preflight [dir] | permissions preflight --launch [--profile p]   [--stdin | --file f]: the launch instruction
+  permissions auto <preflight|unblock> <on|off>
+  permissions unblock show | permissions unblock confirm --fingerprint <fp>
+  permissions unblock [dir]   (the same as permissions hook diff --unblock [dir]; --no-unblock turns it off)
   due [--watcher id] [--all] | pass-end [--watcher id] | health
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id]
   hook <pre-tool-use|post-tool-use|post-tool-use-failure|session-start>`;
@@ -136,7 +141,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           now,
           env,
         });
-        out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min.\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
+        const pre = preflightLine(s);
+        out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min.${pre ? `\n${pre}` : ''}\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
         return 0;
       }
       case 'action':
@@ -167,7 +173,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         out(cmd.result(paths, need(args, 0, 'session id'), env));
         return 0;
       case 'close':
-        out(cmd.close(paths, need(args, 0, 'session id'), now));
+        out(cmd.close(paths, need(args, 0, 'session id'), now, ghForge(realGh(env))));
         return 0;
       case 'environments':
         addIntent(paths, { kind: 'environments', claude_session: flag(args, 'session') ?? '' }, now);
@@ -223,9 +229,27 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           else if (what === 'diff') out(diffHook(paths, dir, hookChange(args), env));
           else if (what === 'write') out(writeHook(paths, dir, hookChange(args), flag(args, 'expect'), args.flags['org-confirmed'] === true, env));
           else throw new cmd.CommandError('permissions hook takes show, enable, disable, diff or write');
+        } else if (sub === 'preflight') {
+          {
+            const launch = args.flags.launch === true || flag(args, 'profile') !== undefined;
+            if (launch && args.positional[1] !== undefined) throw new cmd.CommandError('permissions preflight takes a checkout folder or --launch, not both');
+            const file = flag(args, 'file');
+            const instruction = file !== undefined ? readInstruction(file, stdin) : args.flags.stdin === true ? stdin() : '';
+            out(preflight(paths, { dir: launch ? null : (args.positional[1] ?? '.'), ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), instruction }, env));
+          }
+        } else if (sub === 'unblock') {
+          const what = args.positional[1];
+          if (what === 'show') out(unblockShow(paths, env));
+          else if (what === 'confirm') out(unblockConfirm(paths, flag(args, 'fingerprint'), env));
+          else out(diffHook(paths, what ?? '.', { ...hookChange(args), unblock: args.flags['no-unblock'] === true ? 'off' : 'on' }, env));
+        } else if (sub === 'auto') {
+          // Switches of the configuration, apart from the read-only commands a skill may pre-approve.
+          const [what, v] = [args.positional[1], args.positional[2]];
+          if ((what !== 'preflight' && what !== 'unblock') || (v !== 'on' && v !== 'off')) throw new cmd.CommandError('permissions auto takes preflight or unblock, then on or off');
+          out(what === 'preflight' ? switchPreflightAuto(paths, v === 'on') : switchUnblockAuto(paths, v === 'on', env));
         } else if (sub === 'approvals') {
           out(formatHookDecisions(paths, { all: args.flags.all === true, session: flag(args, 'session') ?? null, limit: intFlag(args, 'limit') ?? 50 }));
-        } else throw new cmd.CommandError('permissions takes show, diff, write, hook or approvals');
+        } else throw new cmd.CommandError('permissions takes show, diff, write, hook, preflight, unblock, auto or approvals');
         return 0;
       }
       case 'due': {
@@ -291,11 +315,13 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
 export function hookChange(args: Args): HookChange {
   return {
     allow: args.lists.allow ?? [],
+    prefix: args.lists['allow-prefix'] ?? [],
     drop: args.lists.drop ?? [],
     mirror: args.flags.mirror === true,
     unmirror: args.flags.unmirror === true,
     uninstall: args.flags.uninstall === true,
     broad: args.flags.broad === true,
+    unblock: args.flags.unblock === true ? 'on' : args.flags['no-unblock'] === true ? 'off' : null,
   };
 }
 

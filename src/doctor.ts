@@ -7,7 +7,7 @@ import { StateError } from './fsutil.ts';
 import type { Paths } from './paths.ts';
 import { assess, identify, parseSettings, readRules, SETTINGS_PATH, SettingsError } from './permission-profiles.ts';
 import { hooksBlocked, readManagedPolicy, staleMirror, type ManagedPolicy } from './managed-policy.ts';
-import { BROAD_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
+import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH } from './permission-hook.ts';
 import { readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, type OwnerType, type RemoteHeads, type RepoBook } from './repo.ts';
@@ -138,6 +138,20 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   if (config.permission_hook) {
     add('warn', 'permission hook', `permission_hook is on: a repository that has the kharos permission hook answers permission prompts in its cloud sessions with no person asked; see what it allowed with \`kharos permissions approvals\``, [
       'Turn it off with `kharos permissions hook disable`, and remove the hook from a repository with `kharos permissions hook diff --uninstall`.',
+    ]);
+  }
+  if (!config.preflight_auto) {
+    add('info', 'permission preflight', 'automatic preflight is off (the default): `kharos permissions preflight` and /kharos:run list the prompts a launch is likely to hit, with a narrow rule for each, and apply nothing');
+  } else if (!config.permission_hook) {
+    add('warn', 'permission preflight', 'preflight_auto is on, but permission_hook is off, so automatic preflight applies nothing', ['Turn the hook on with `kharos permissions hook enable`, or automatic preflight off with `kharos permissions auto preflight off`.']);
+  } else {
+    add('info', 'permission preflight', "automatic preflight is on: each launch writes the allow patterns and prefix rules the preflight suggests to a side branch kharos/<id> and starts there (the organization's ask rules are also mirrored while a remembered mirror confirmation matches its managed settings); the branch a profile launches from is never changed, and /kharos:close deletes the side branch", [
+      'Turn it off with `kharos permissions auto preflight off`.',
+    ]);
+  }
+  if (config.permission_unblock) {
+    add('warn', 'unblock preset', `permission_unblock is on${config.preflight_auto && config.permission_hook ? '' : ' (inactive until preflight_auto and permission_hook are both on)'}: the side branch of each launch gets the unblock preset, so every permission prompt in its cloud session is allowed, of any tool, with no person asked, while your confirmation matches the organization's managed settings`, [
+      'Turn it off with `kharos permissions auto unblock off`; `kharos permissions approvals` lists what it allowed.',
     ]);
   }
   for (const name of names) {
@@ -283,9 +297,10 @@ function checkHook(
   const rules = st.rules && !('error' in st.rules) ? st.rules : null;
   const stale = rules ? staleMirror(policy, rules.mirror) : null;
   if (stale) problems.push(stale);
+  if (rules?.unblock) problems.push(`the unblock preset is on: ${UNBLOCK_RISK}`);
   const broad = rules ? broadRules(rules) : [];
   const what = rules
-    ? `${rules.allow.length} allow pattern(s), ${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms${broad.length ? `; ${broad.length} broad rule(s), which ${BROAD_RISK}: ${broad.join(', ')}` : ''}`
+    ? `${rules.allow.length} allow pattern(s), ${rules.prefix?.length ? `${rules.prefix.length} prefix rule(s), ` : ''}${rules.mirror.length} mirrored organization ask rule(s), any other prompt denied with the allowed forms${broad.length ? `; ${broad.length} broad rule(s), which ${BROAD_RISK}: ${broad.join(', ')}` : ''}`
     : 'no usable rules';
   add(problems.length ? 'warn' : 'info', label, [`${where} has the kharos permission hook: ${what}`, ...problems].join('; '), [
     `/kharos:permissions hook in a checkout of ${repoSlug(p.repo)} shows the hook and changes it (or removes it with --uninstall); then commit and push to ${p.revision}.`,

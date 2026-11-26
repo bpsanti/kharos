@@ -18,9 +18,9 @@ export interface HookDecision {
   session_id: string | null;
   tool: string;
   decision: 'allow' | 'deny';
-  /** The allow pattern or mirrored organization rule that matched; null for a denial. */
+  /** The allow pattern, prefix rule or mirrored organization rule that matched, or `unblock` for the unblock preset; null for a denial. */
   rule: string | null;
-  source: 'allow' | 'mirror' | null;
+  source: 'allow' | 'mirror' | 'prefix' | 'unblock' | null;
   /** For an approval: whether the rule that matched is broad (it allows any command it covers). Absent in lines from before kharos marked them. */
   broad?: boolean;
   /** For a denial: the program whose allowed forms the refusal named, if any. */
@@ -52,8 +52,8 @@ export function recordHookDecisions(paths: Paths, s: Session, added: readonly Lo
     if (!isPermissionPrompt(e)) continue;
     const tool = e.tool ?? 'unknown tool';
     const input = tool === 'Bash' ? { command: promptCommand(e.text) } : {};
-    // A Bash line too cut to show its command cannot be attributed; the hook allows no command that long.
-    if (tool === 'Bash' && input.command === null) continue;
+    // A Bash line too cut to show its command cannot be attributed to a rule; only the unblock preset allows it.
+    if (tool === 'Bash' && input.command === null && rules.unblock !== true) continue;
     const d = decide({ tool_name: tool, tool_input: input }, rules);
     out.push({
       at: e.ts,
@@ -106,7 +106,12 @@ export function formatHookDecisions(paths: Paths, q: ApprovalQuery): string {
   }
   const shown = rows.slice(-q.limit);
   const lines = shown.map((d) => {
-    const what = d.decision === 'allow' ? `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : 'allow pattern'} ${d.rule}` : `denied${d.program ? ` (refusal named the forms of ${d.program})` : ''}`;
+    const what =
+      d.decision !== 'allow'
+        ? `denied${d.program ? ` (refusal named the forms of ${d.program})` : ''}`
+        : d.source === 'unblock'
+          ? 'allowed by the unblock preset (no rule matched; every prompt is allowed)'
+          : `allowed by ${d.broad ? 'broad ' : ''}${d.source === 'mirror' ? 'mirrored organization rule' : d.source === 'prefix' ? 'prefix rule' : 'allow pattern'} ${d.rule}`;
     return `${d.at.slice(0, 19)}Z  ${d.kharos}  ${d.tool}  ${what}`;
   });
   const head = `${rows.length} ${q.all ? 'decision(s)' : 'approval(s)'} of the kharos permission hook, as the watcher read them from the session logs${shown.length < rows.length ? `; the last ${shown.length}` : ''}:`;

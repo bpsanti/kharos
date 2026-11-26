@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kharos permission hook, version 2. `kharos permissions hook` copies this file into a repository as
+// kharos permission hook, version 3. `kharos permissions hook` copies this file into a repository as
 // .claude/hooks/kharos-permission.mjs and rewrites it on every change: edit the rules in
 // .claude/kharos-permissions.json instead.
 //
@@ -11,11 +11,16 @@
 //   glob) and matches one of the rules file's allow patterns word by word is allowed.
 // - The same for a mirrored rule: an ask rule of the organization's managed settings that the person
 //   chose to turn into a cloud-only allow.
-// - A broad rule (an allow pattern or a mirrored rule for a shell, an interpreter, a wrapper or any
+// - The same for a prefix rule, `Bash(<program> <subcommands>:*)` with literal words: it allows that
+//   program, or that subcommand of it, with any arguments. The known global options a program takes
+//   before its subcommand are skipped (`Bash(git log:*)` covers `git --no-pager log`).
+// - A broad rule (an allow pattern, a mirrored rule or a prefix rule for a shell, an interpreter, a wrapper or any
 //   program) counts only when the rules file says `"broad": true`, which
 //   kharos writes only when the person asked for broad rules with --broad.
 // - Everything else is denied with a message that names the allowed forms, so the session sends the
 //   right command or goes on without it instead of waiting.
+// - With the unblock preset (`"unblock": true`, which kharos writes only after the person confirmed
+//   what it opens), every prompt is allowed instead, of any tool, so no cloud session waits on a person.
 // A deny rule is never reached: Claude Code blocks those calls before any prompt.
 //
 // No dependency, Node.js 18 or newer. The functions are exported so kharos tests them and reads the
@@ -25,7 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HOOK_VERSION = 2;
+export const HOOK_VERSION = 3;
 
 /** The rules file, next to the hooks folder this script is in. */
 export const RULES_FILE = 'kharos-permissions.json';
@@ -33,14 +38,17 @@ export const RULES_FILE = 'kharos-permissions.json';
 /** Longest command the hook allows, so the whole command fits in the session log kharos reads. */
 export const MAX_ALLOWED_LENGTH = 600;
 
+/** The rule an approval of the unblock preset names when no allow pattern or mirrored rule matched. */
+export const UNBLOCK_RULE = 'unblock';
+
 /** The start of every refusal, so a reader of the session log can tell the hook's refusals apart. */
 export const REFUSAL_PREFIX = 'Refused by the kharos permission hook';
 
 /**
- * @typedef {{ allow: string[], mirror: string[], broad?: boolean }} HookRules
+ * @typedef {{ allow: string[], mirror: string[], prefix?: string[], broad?: boolean, unblock?: boolean }} HookRules
  * @typedef {{ ok: true, words: string[] } | { ok: false, why: string }} Split
  * @typedef {{ ok: true, words: (string | null)[] } | { ok: false, why: string }} Pattern
- * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror', broad: boolean }} Allow
+ * @typedef {{ behavior: 'allow', rule: string, source: 'allow' | 'mirror' | 'prefix' | 'unblock', broad: boolean }} Allow
  * @typedef {{ behavior: 'deny', message: string, program: string | null }} Deny
  * @typedef {Allow | Deny} Decision
  */
@@ -251,7 +259,126 @@ export function bashRuleMatches(rule, command) {
 }
 
 /**
- * The rules file's content, checked. Invalid allow patterns, non-Bash mirrored rules, and broad rules
+ * Why a prefix rule is not valid, or null when it is: it must be `Bash(<words>:*)`, its words literal
+ * (no wildcard), and, unless `broad`, its program must not run other commands.
+ * @param {string} rule
+ * @param {boolean} [broad]
+ */
+export function prefixRuleWhy(rule, broad = false) {
+  const m = /^Bash\((.+):\*\)$/s.exec(rule);
+  if (!m) return 'a prefix rule has the form Bash(<program> <subcommands>:*)';
+  const words = /** @type {string} */ (m[1]).split(' ');
+  if (words.some((w) => !/^[\w@%+=:,./-]+$/.test(w))) return 'its words must be literal: no wildcard, quote or extra space';
+  if (broad) return null;
+  const why = broadRuleWhy(rule);
+  return why ? `it is broad (${why})` : null;
+}
+
+/** Programs built on subcommands, with how many words after the program name the action. */
+const SUBCOMMAND_WORDS = {
+  ...Object.fromEntries(['git', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go', 'make', 'terraform', 'helm', 'brew', 'pip', 'poetry', 'uv', 'docker', 'podman'].map((p) => [p, 1])),
+  ...Object.fromEntries(['kubectl', 'gh', 'aws', 'gcloud'].map((p) => [p, 2])),
+};
+const SUBCOMMAND_RE = /^[a-z0-9][a-z0-9-]*$/;
+const NPM_OPTIONS = { value: ['--prefix', '-C', '--dir', '-w', '--workspace', '--filter'], flag: ['--silent', '-s'] };
+const DOCKER_OPTIONS = { value: ['-H', '--host', '--context', '--config', '-f', '--file', '-p', '--project-name', '--project-directory', '--env-file', '--profile'], flag: [] };
+/**
+ * The global options a program takes before its subcommand: those that take a value, and those that
+ * take none. Any other option before the subcommand stops a prefix rule from matching.
+ * @type {Record<string, { value: string[], flag: string[] }>}
+ */
+const GLOBAL_OPTIONS = {
+  git: { value: ['-C', '--git-dir', '--work-tree', '--namespace'], flag: ['--no-pager', '--paginate', '-p', '--bare', '--no-replace-objects'] },
+  kubectl: { value: ['-n', '--namespace', '--context', '--cluster', '--kubeconfig', '--user', '-s', '--server'], flag: [] },
+  npm: NPM_OPTIONS,
+  pnpm: NPM_OPTIONS,
+  yarn: NPM_OPTIONS,
+  docker: DOCKER_OPTIONS,
+  podman: DOCKER_OPTIONS,
+  gh: { value: ['-R', '--repo'], flag: [] },
+  aws: { value: ['--profile', '--region', '--output', '--endpoint-url'], flag: [] },
+  gcloud: { value: ['--project', '--account', '--configuration'], flag: [] },
+};
+
+/** @param {string} program */
+const baseName = (program) => program.slice(program.lastIndexOf('/') + 1);
+
+/**
+ * A command's words without the known global options (and their values, also as `--option=value`)
+ * before its subcommand, and after `docker compose`: `git --no-pager log -1` reads as `git log -1`. A null word is one whose value
+ * is not known (a variable); it stays.
+ * @param {(string | null)[]} words
+ * @returns {(string | null)[]}
+ */
+export function commandWords(words) {
+  const program = /** @type {string} */ (words[0]);
+  const name = baseName(program);
+  const options = GLOBAL_OPTIONS[name];
+  if (!options) return [...words];
+  const compose = name === 'docker' || name === 'podman';
+  /** @type {(string | null)[]} */
+  const out = [program];
+  for (let i = 1; i < words.length; i++) {
+    const w = /** @type {string | null} */ (words[i]);
+    const seeking = out.length === 1 || (compose && out.length === 2 && out[1] === 'compose');
+    if (seeking && typeof w === 'string' && w.startsWith('-')) {
+      const eq = w.indexOf('=');
+      if (eq > 0 && w.startsWith('--') && (options.value.includes(w.slice(0, eq)) || options.flag.includes(w.slice(0, eq)))) continue;
+      if (options.flag.includes(w)) continue;
+      if (options.value.includes(w)) {
+        i++;
+        continue;
+      }
+    }
+    out.push(w);
+  }
+  return out;
+}
+
+/**
+ * The program of a command and the subcommand words that name its action (`git push`, `docker compose
+ * exec`, `kubectl get pods`), with its global options skipped. `complete` is false when a program built
+ * on subcommands shows none that can be told apart from its options.
+ * @param {(string | null)[]} words
+ * @returns {{ words: string[], complete: boolean }}
+ */
+export function commandHead(words) {
+  const cw = commandWords(words);
+  const program = /** @type {string} */ (cw[0]);
+  const name = baseName(program);
+  let need = SUBCOMMAND_WORDS[name] ?? 0;
+  const head = [program];
+  for (let i = 1; i < cw.length && head.length <= need; i++) {
+    const w = cw[i];
+    if (typeof w !== 'string' || !SUBCOMMAND_RE.test(w)) break;
+    head.push(w);
+    if ((name === 'docker' || name === 'podman') && head.length === 2 && w === 'compose') need++;
+  }
+  const compose = (name === 'docker' || name === 'podman') && head[1] === 'compose';
+  return { words: head, complete: need === 0 || head.length >= (compose ? 3 : 2) };
+}
+
+/**
+ * Whether a prefix rule covers a single simple command: its words start the command, as written or with
+ * the program's global options before the subcommand skipped.
+ * @param {string} rule
+ * @param {(string | null)[]} words
+ */
+export function prefixMatches(rule, words) {
+  const want = prefixOf(rule).split(' ');
+  /** @param {(string | null)[]} ws */
+  const starts = (ws) => want.length <= ws.length && want.every((w, i) => ws[i] === w);
+  return starts(words) || starts(commandWords(words));
+}
+
+/** The literal words a prefix rule starts a command with.
+ * @param {string} rule */
+export function prefixOf(rule) {
+  return rule.replace(/^Bash\(/, '').replace(/:\*\)$/, '');
+}
+
+/**
+ * The rules file's content, checked. Invalid allow patterns and prefix rules, non-Bash mirrored rules, and broad rules
  * without `"broad": true` are an error: kharos writes the file, and a hand edit that breaks it must
  * show, not half work.
  * @param {unknown} value
@@ -268,6 +395,7 @@ export function readHookRules(value) {
     return /** @type {string[]} */ (v);
   };
   if (o.broad !== undefined && typeof o.broad !== 'boolean') throw new Error('"broad" must be true or false');
+  if (o.unblock !== undefined && typeof o.unblock !== 'boolean') throw new Error('"unblock" must be true or false');
   const broad = o.broad === true;
   const allow = list(o.allow, 'allow');
   for (const p of allow) {
@@ -280,7 +408,16 @@ export function readHookRules(value) {
     const why = broad ? null : broadRuleWhy(r);
     if (why) throw new Error(`mirrored rule "${r}" is broad (${why}), and the rules file does not say "broad": true`);
   }
-  return broad ? { allow, mirror, broad } : { allow, mirror };
+  const prefix = list(o.prefix, 'prefix');
+  for (const r of prefix) {
+    const why = prefixRuleWhy(r, broad);
+    if (why) throw new Error(`prefix rule "${r}" is not valid: ${why}${why.startsWith('it is broad') ? ', and the rules file does not say "broad": true' : ''}`);
+  }
+  /** @type {HookRules} */
+  const out = broad ? { allow, mirror, broad } : { allow, mirror };
+  if (prefix.length) out.prefix = prefix;
+  if (o.unblock === true) out.unblock = true;
+  return out;
 }
 
 /** @param {string} tool */
@@ -315,6 +452,11 @@ export function decide(input, rules) {
   }
   const ti = typeof input.tool_input === 'object' && input.tool_input !== null ? /** @type {Record<string, unknown>} */ (input.tool_input) : {};
   const command = typeof ti.command === 'string' ? ti.command : null;
+  if (rules.unblock === true) {
+    // Every prompt is allowed; a rule that matches still names itself, so the log shows which.
+    const d = tool === 'Bash' && command !== null ? decide(input, { ...rules, unblock: false }) : null;
+    return d !== null && d.behavior === 'allow' ? d : { behavior: 'allow', rule: UNBLOCK_RULE, source: 'unblock', broad: true };
+  }
   if (tool !== 'Bash' || command === null) return { behavior: 'deny', program: null, message: generic(tool) };
 
   const broad = rules.broad === true;
@@ -331,14 +473,18 @@ export function decide(input, rules) {
     if (hit !== undefined) return { behavior: 'allow', rule: hit.text, source: 'allow', broad: broadPatternWhy(hit.words) !== null };
     // Only a broad rule, in a rules file that allows broad rules, covers a program that runs other commands.
     const others = runsOtherCommands(/** @type {string} */ (split.words[0]));
-    const mirrored = rules.mirror.find((r) => bashRuleMatches(r, command) && (!others || (broad && broadRuleWhy(r) !== null)));
+    /** @param {string} r */
+    const allowed = (r) => !others || (broad && broadRuleWhy(r) !== null);
+    const mirrored = rules.mirror.find((r) => bashRuleMatches(r, command) && allowed(r));
     if (mirrored !== undefined) return { behavior: 'allow', rule: mirrored, source: 'mirror', broad: broadRuleWhy(mirrored) !== null };
+    const prefixed = (rules.prefix ?? []).find((r) => prefixMatches(r, split.words) && allowed(r));
+    if (prefixed !== undefined) return { behavior: 'allow', rule: prefixed, source: 'prefix', broad: broadRuleWhy(prefixed) !== null };
   }
 
   const first = split.ok ? split.words[0] : undefined;
   const programs = namedPrograms(command, patterns.map((p) => p.words)).sort((a, b) => Number(b === first) - Number(a === first));
   if (programs.length === 0) {
-    if (why !== null && rules.mirror.length > 0) {
+    if (why !== null && (rules.mirror.length > 0 || (rules.prefix ?? []).length > 0)) {
       return {
         behavior: 'deny',
         program: null,
@@ -367,7 +513,10 @@ export function hookOutput(d) {
   if (d.behavior === 'allow') {
     return {
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
-      systemMessage: `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : 'rule'} ${d.rule}`,
+      systemMessage:
+        d.source === 'unblock'
+          ? 'kharos permission hook allowed this call by its unblock preset, which allows every prompt in cloud sessions on this repository'
+          : `kharos permission hook allowed this call by ${d.broad ? 'the broad ' : 'the '}${d.source === 'mirror' ? 'mirrored organization rule' : d.source === 'prefix' ? 'prefix rule' : 'rule'} ${d.rule}`,
     };
   }
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: d.message } } };
