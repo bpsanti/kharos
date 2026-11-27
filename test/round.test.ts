@@ -236,6 +236,25 @@ test('round: a read due within 5 s joins the round another follower opened, and 
   assert.equal(calls.length, 2);
 });
 
+test('round: a follower whose read becomes due within 5 s while it waits joins the round opened meanwhile', async () => {
+  const sb = sandbox();
+  const ids = openMany(sb, 2);
+  // k-0001 is due 2 s after START; k-0002 5.1 s after, so it is not yet within the join window at START.
+  updateRegistry(sb.paths, (reg) => {
+    for (const [id, dueIn] of [['k-0001', 2_000], ['k-0002', 5_100]] as const) {
+      reg.sessions[id]!.reads = 1;
+      reg.sessions[id]!.last_read_at = new Date(START - STEP + dueIn).toISOString();
+    }
+  });
+  const clock = virtualClock(START);
+  const calls: Call[] = [];
+  await followAll(sb, ids, clock, roundReader(sb, clock, calls), () => ({ maxMs: 10_000 }));
+  // k-0001 opens its round at 2 s, which starts at 4 s; k-0002 joins it rather than open its own at 5.1 s.
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.at, START + 4_000);
+  assert.deepEqual([...calls[0]!.sessions].sort(), ids);
+});
+
 test('round: a round the wait has to leave before its reader starts counts no read', async () => {
   const sb = sandbox();
   const ids = openMany(sb, 2);

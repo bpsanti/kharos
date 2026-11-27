@@ -315,8 +315,9 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
         continue;
       }
       const left = opts.maxMs - (now() - start);
-      const step = soon && holds ? JOIN_POLL_MS : SLICE_MS;
-      await sleep(Math.max(0, Math.min(t >= dueAt ? SLICE_MS : dueAt - t, step, left)));
+      // Before the join window it wakes at its start at the latest, then looks for a round to join as it goes.
+      const until = t >= dueAt ? SLICE_MS : soon ? Math.min(dueAt - t, holds ? JOIN_POLL_MS : SLICE_MS) : dueAt - JOIN_AHEAD_MS - t;
+      await sleep(Math.max(0, Math.min(until, SLICE_MS, left)));
     }
   } finally {
     if (leased) releaseLease(paths, id, process.pid, handover ? now() : null);

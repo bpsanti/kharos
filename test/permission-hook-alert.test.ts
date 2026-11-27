@@ -164,6 +164,5 @@ test('hook alert: a follower is woken by a prompt the next read still finds open
   assert.equal(o.state, 'waiting_permission');
   assert.deepEqual(o.permission, { tool: 'Bash', category: 'unknown' });
   assert.equal(o.reads, 2);
-  // The second read is at the next moment of the 15 s grid the followers share, within one interval.
-  assert.ok(o.waited_s <= 15, `${o.waited_s} s`);
+  assert.equal(o.waited_s, 15);
 });
