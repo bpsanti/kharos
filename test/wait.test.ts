@@ -659,7 +659,7 @@ test('wait: a session seen archived in the round its quiet turn becomes due for 
   assert.deepEqual(events.map((e) => e.event), ['session.ended_unmarked']);
 });
 
-test('wait: a first read off the grid is followed by the next one no later than the shortest interval', async () => {
+test('wait: a first read off the grid is followed by the next one on the grid, sooner than the shortest interval after it began and never later', async () => {
   const sb = sandbox();
   openOne(sb);
   const starts: number[] = [];
