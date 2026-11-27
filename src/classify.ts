@@ -5,7 +5,7 @@
 // with the fixed category of why it asks.
 
 import type { WatchConfig } from './config.ts';
-import type { LogEvent } from './logparse.ts';
+import { lastMessage, lastMessageText, type LogEvent } from './logparse.ts';
 import { categoryText, describePermission, NO_RULES, type AskRules, type PermissionRequest } from './permission-request.ts';
 import type { State } from './registry.ts';
 import { END_PROBE_MARK } from './body.ts';
@@ -206,7 +206,8 @@ function endCheck(input: ClassifyInput, last: LogEvent, idleMin: number): Verdic
   const { events, now, watch } = input;
   if (last.kind !== 'result' || idleMin <= watch.unmarked_end_min) return null;
   if (openBackgroundTasks(events, now) > 0) return null;
-  const closed = { state: 'turn_closed', notice: 'quiet_unmarked', unanswered: { said: events.findLast((e) => e.kind === 'assistant')?.text ?? null } } as const;
+  const said = lastMessage(events);
+  const closed = { state: 'turn_closed', notice: 'quiet_unmarked', unanswered: { said: said ? lastMessageText(said) : null } } as const;
   const person = events.findLastIndex((e) => e.kind === 'user' && !isSystemUser(e));
   if (person >= 0 && isEndProbe(events[person] as LogEvent) && !events.slice(person + 1).some((e) => e.kind === 'tool_use')) {
     return { ...closed, reason: 'turn closed without the end mark: kharos asked the session whether it finished, and it answered with no end mark and no work' };

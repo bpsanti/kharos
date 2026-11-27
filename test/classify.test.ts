@@ -124,6 +124,14 @@ const STARTS: [number, string, string | null, string][] = [
   [150, 'tool_result', null, 'Async agent launched successfully. (This tool result is internal metadata.) agentId: b01 (internal ID - do not mention to user.)'],
 ];
 
+test('classify: an unanswered closed turn carries the last message the session wrote, not a thinking step or a cut note', () => {
+  const sent = (events: ReturnType<typeof log>) => ({ for: events.at(-1)!.key, at: BASE + 207 * 1000, failed: false });
+  const thinking = log([...START, [200, 'assistant', null, 'The report is in the PR.'], [202, 'assistant', null, '[thinking]'], [203, 'tool_use', 'Bash', '{"command":"git status"}'], [204, 'tool_result', null, 'clean'], [205, 'result', null, 'success is_error=false turns=9']]);
+  assert.deepEqual(at(thinking, 205 + 12 * 60, { asked: sent(thinking) }).unanswered, { said: 'The report is in the PR.' });
+  const resultOnly = log([...START, [205, 'result', null, 'success is_error=false turns=9 — Everything is merged… [+812 chars]']]);
+  assert.deepEqual(at(resultOnly, 205 + 12 * 60, { asked: sent(resultOnly) }).unanswered, { said: 'Everything is merged' });
+});
+
 test('classify: a turn that closed while a background task it started may wake it warns only after quiet_end_min', () => {
   for (const started of STARTS) {
     const events = log([...START, [149, 'tool_use', 'Bash', '{"command":"cargo build","run_in_background":true}'], started, [200, 'assistant', null, 'The server is still compiling'], [201, 'result', null, 'success is_error=false']]);
