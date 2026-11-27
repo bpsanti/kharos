@@ -127,6 +127,20 @@ test('reads: an archive check answered before the log that carries KHAROS-DONE s
   assert.ok(!events.includes('session.ended_unmarked'));
 });
 
+test('reads: a failed log read of an archived session leaves it open, and a later read with KHAROS-DONE ends it finished', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const at = Date.parse('2026-11-25T19:04:00Z');
+  postToolUse(sb.ctx(at), h({ action: 'list_runs', trigger_id: TRIG }, archived(), 'reader'));
+  postToolUse(sb.ctx(at + 15_000), h({ action: 'get_run_log', session_id: SID }, response(503, { error: { type: 'overloaded_error' } }), 'reader'));
+  assert.ok(!['ended_unmarked', 'finished'].includes(loadRegistry(sb.paths).sessions[id]!.state));
+  readLog(sb, at + 30_000, fixture('log-question-background-done.txt'));
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'finished');
+  assert.equal(s.result.summary, 'BANANA AVOCADO');
+  assert.ok(!readOutbox(sb.paths).some((x) => x.event.event === 'session.ended_unmarked'));
+});
+
 test('reads: an empty log for a session that had events is a failed read', () => {
   const sb = sandbox();
   const id = openOne(sb);

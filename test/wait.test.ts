@@ -150,7 +150,7 @@ test('wait: an answer sent with /kharos:send does not wake the follower before t
   assert.equal(stopKey(s), 'ok', 'an answered question is no news');
   // The log has not caught up with the answer yet: the new follower keeps waiting.
   // A follower started afresh right after the answer does not bring the answered question back.
-  const fresh = await clocked(sb, at('2026-11-25T19:00:58Z'), reader(sb, () => log), { maxMs: 10_000 }).run();
+  const fresh = await clocked(sb, at('2026-11-25T19:00:58Z'), reader(sb, () => log), { maxMs: 1_000 }).run();
   assert.equal(fresh.changed, false);
   assert.equal(fresh.reads, 0);
   // The log has not caught up with the answer yet: the new follower keeps waiting.
@@ -657,6 +657,22 @@ test('wait: a session seen archived in the round its quiet turn becomes due for 
   assert.equal(o.key, 'end:ended_unmarked');
   const events = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event !== 'session.opened');
   assert.deepEqual(events.map((e) => e.event), ['session.ended_unmarked']);
+});
+
+test('wait: a new wait reads an interval after the round of the last read, not after its answer came', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  // The last read's round was on the 15 s grid; its answer came 10 s later.
+  const tick = Math.ceil((T0 + MIN) / 15_000) * 15_000;
+  postToolUse(sb.ctx(tick + 10_000), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(fixture('log-foreground-command.txt'), tick)), 'reader'));
+  const starts: number[] = [];
+  const inner = reader(sb, () => fixture('log-foreground-command.txt'));
+  const read: Reader = async (p, rs, env, now, ms) => {
+    starts.push(now - 4_000);
+    return inner(p, rs, env, now, ms);
+  };
+  await clocked(sb, tick + 10_000, read, { since: 'ok', maxMs: 20_000 }).run();
+  assert.equal(starts[0], tick + 15_000);
 });
 
 test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline with a terminal event', async () => {
