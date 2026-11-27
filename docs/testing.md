@@ -9,6 +9,7 @@ npm run validate     # claude plugin validate . --strict
 ```
 
 The tests use a fake `claude` binary and a temporary `KHAROS_HOME`, and never reach the network.
+They set `KHAROS_RELEASES_API=off`, which turns off every read of kharos's latest release; the tests of the update check point it at a local server instead.
 The log fixtures in `test/fixtures/` are recorded test sessions with their ids replaced; any new fixture must be synthetic or anonymized.
 
 ## End to end, with real cloud sessions

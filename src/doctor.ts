@@ -19,6 +19,7 @@ import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account
 import { describeUnblockAll, readUnblockAll, UNBLOCK_ALL_SHOW, UNBLOCK_ALL_SKILL, UNBLOCK_ALL_UNDO, type Part } from './unblock-all.ts';
 import { accessFix, loadRepos, readOwnerType, readRemoteHeads, readRepoRole, type OwnerType, type RemoteHeads, type RepoBook, type RepoRole } from './repo.ts';
 import { environmentsOf, findSetup, loadEnvironments, loadSetups, type EnvironmentBook, type EnvironmentSetup } from './state.ts';
+import { manualUpdate, npmUpdate, updateAvailable, type ReleaseView } from './release.ts';
 
 /** How a person takes back what unblock all turned on. */
 const UNBLOCK_ALL_TAKE_BACK = '`/kharos:permissions off` takes back what unblock all turned on';
@@ -98,6 +99,8 @@ export interface DoctorOptions {
   shared?: Paths | null;
   /** The session that ran the check has no RemoteTrigger tool. */
   noRemoteTool?: boolean;
+  /** kharos's own version against its latest release, read before the checks; absent, it is not checked. */
+  release?: ReleaseView;
   now: number;
   env: NodeJS.ProcessEnv;
 }
@@ -107,6 +110,22 @@ type Add = (level: Level, name: string, detail: string, fix?: string[]) => void;
 function collector(): { checks: Check[]; add: Add } {
   const checks: Check[] = [];
   return { checks, add: (level, name, detail, fix) => checks.push(fix ? { level, name, detail, fix } : { level, name, detail }) };
+}
+
+/** The installed kharos against its latest release on GitHub. */
+function checkRelease(v: ReleaseView, add: Add): void {
+  if (!v.installed) {
+    add('info', 'kharos', 'the installed version could not be read from its package.json');
+    return;
+  }
+  if (!v.latest) add('info', 'kharos', `${v.installed}; the latest release could not be read (${v.error ?? 'no answer'})`);
+  else if (updateAvailable(v)) {
+    add('warn', 'kharos', `${v.installed} installed; ${v.latest} is the latest release`, [
+      v.install.kind === 'plugin' ? 'What changed is listed below, and /kharos:doctor offers to update it.' : `To update it, ${manualUpdate(v)}, then restart Claude Code.`,
+    ]);
+  } else add('ok', 'kharos', `${v.installed}, the latest release`);
+  const npm = npmUpdate(v);
+  if (npm) add('warn', 'kharos npm', `the kharos command installed from npm is ${v.npm}`, [`Run \`${npm}\` to update it.`]);
 }
 
 /** Claude Code, the login, the plan and the RemoteTrigger tool: what every cloud launch needs first. */
@@ -145,6 +164,7 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   const { checks, add } = collector();
   const auth = deps.auth();
   checks.push(...accountChecks(opts, deps, auth));
+  if (opts.release) checkRelease(opts.release, add);
 
   let config: Config | null = null;
   try {

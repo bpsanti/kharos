@@ -41,6 +41,8 @@ export interface Paths {
   rounds: string;
   /** Records that this account's files were taken out of the shared ones, once. */
   migration: string;
+  /** The latest kharos release, as the last daily read found it, and when its notice was last shown. */
+  release: string;
 }
 
 function expand(p: string, home: string): string {
@@ -81,6 +83,7 @@ function layout(home: string, account: string | null, configDir: string, state: 
     followers: path.join(state, 'followers'),
     rounds: path.join(state, 'rounds.json'),
     migration: path.join(state, 'migration.json'),
+    release: path.join(state, 'release.json'),
   };
 }
 

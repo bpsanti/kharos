@@ -39,7 +39,7 @@ export function sandbox(opts: { auth?: Record<string, unknown>; send?: Record<st
     ].join('\n'),
     { mode: 0o755 },
   );
-  const env: NodeJS.ProcessEnv = { HOME: dir, KHAROS_HOME: path.join(dir, 'kharos'), KHAROS_CLAUDE_BIN: bin, PATH: process.env.PATH ?? '' };
+  const env: NodeJS.ProcessEnv = { HOME: dir, KHAROS_HOME: path.join(dir, 'kharos'), KHAROS_CLAUDE_BIN: bin, KHAROS_RELEASES_API: 'off', PATH: process.env.PATH ?? '' };
   const paths = resolvePaths(env);
   return { dir, env, paths, ctx: (now: number) => ({ paths, now, env, ownerType: () => null }) };
 }
