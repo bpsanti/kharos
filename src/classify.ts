@@ -27,6 +27,7 @@ export type NoticeKind =
   | 'silent_severe'
   | 'quiet_unmarked'
   | 'deadline_closed'
+  | 'auto_closed'
   | 'turn_error';
 
 export interface Verdict {

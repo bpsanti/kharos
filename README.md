@@ -123,10 +123,20 @@ A session closed while it still runs keeps its `watch.max_open` slot: it is `clo
 `kharos close <id> --stopped` frees the slot at once, for a session you saw stop.
 Freeing the slot never stops the session: only `--ask-stop` asks it to stop (it commits and pushes what it has first, unless the launch was `--no-push`), and only its page stops it.
 
+A session frees its slot by itself in two cases, with nobody running `/kharos:close`:
+
+- It writes `KHAROS-DONE`: the read that sees the mark makes it `finished` (or `failed`), its slot is free at once, and its follower stops, also when it was `closing`.
+- It opened a pull request, every pull request it opened is merged or closed, and it sits idle: its turn closed, no call is open, no background task it started can still wake it, and it has been quiet for `watch.unmarked_end_min` (5 minutes).
+  The follower then closes it with `session.auto_closed` (`terminal`), which names the pull request and whether it was merged, instead of asking it whether it finished.
+  The follower asks GitHub through your own `gh`, only while the session sits idle, and keeps the answer for 5 minutes; a merge is never asked again.
+  While `gh` fails, it is asked again only after those 5 minutes, so a `gh` that is logged out or offline does not hold up every read.
+  A session that is working is never closed this way, however its pull request stands, and a session that opened no pull request is never closed this way.
+  Closing it never stops the cloud session; kharos only stops following it.
+
 ### Queued launches
 
 A launch refused because every `watch.max_open` slot is taken can wait instead: `/kharos:run --queue "<instruction>"` runs every check and the permission preflight as usual, stores the routine body, and records the launch as `queued`, with nothing created.
-When a slot frees (a session ends, is closed or is refused, or a closing one ends or reaches its deadline), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
+When a slot frees (a session ends, is closed or is refused, a closing one ends or reaches its deadline, or an idle one is closed once its pull requests ended), the hook, command or follower that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
 
 - The fire is a paid action with nobody present: a minimal headless Claude Code in auto mode makes the same RemoteTrigger calls `/kharos:run --resume` names, so Claude Code's classifier approves the `run`, and the hook allows one `run` per launch, as always.
   Each headless Claude Code makes one call, the one its user message names: the `create`, then the `run` in a process of its own.
@@ -193,10 +203,11 @@ See [docs/follow.md](docs/follow.md) for how it works and its limits.
 ### What a follower reports
 
 Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
-Only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+A session ends with its own `KHAROS-DONE` mark (also as its answer to the question below), at its deadline after that question brought no mark, or once every pull request it opened is merged or closed while it sits idle ([Closing a session](#closing-a-session)); "could not read" is never taken for "finished".
 When a turn closes without the mark and stays quiet for `watch.unmarked_end_min` (5 minutes), with no background task left that could wake it (every task it started, a background command, a `Monitor` or a background agent, has ended, by its notice of the end, a wait on its output that saw it end, or a stop that worked), the follower asks the session once whether it finished: one short message that asks for the final report in `KHAROS-PART` messages and the `KHAROS-DONE` line, or to go on with its work.
 The session ends when it answers with `KHAROS-DONE`, and is `running` again when it goes on working; with no answer, or an answer with neither, it stays `turn_closed` with the `session.quiet_unmarked` warning, keeps its `watch.max_open` slot, and is closed at its deadline with `session.deadline_closed` (`terminal`), which carries its last message.
 It is asked once per quiet period, never past its deadline, and never once you closed it.
+A session whose pull requests all ended is closed instead of asked ([Closing a session](#closing-a-session)).
 While a task it started may still wake it, a closed turn is only a warning after `watch.quiet_end_min` (40 minutes).
 A session waiting at a permission prompt raises a notice that names the tool and a fixed category of why it asks (an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell), with the link to the session, where a person answers it.
 Only the tool name and a fixed category leave the machine: what the tool would run never does.

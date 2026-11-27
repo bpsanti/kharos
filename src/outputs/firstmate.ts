@@ -72,6 +72,13 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
       if (ev.open_notice) return `resolved ${key} ${at}: ${text(`kharos ${ev.session} finished`)}${pr}`;
       return `note ${at}: ${text(`kharos ${ev.session} finished`)}${pr}`;
     }
+    case 'auto_closed':
+      // The pull requests ended and the session sat idle: no end mark, so a dedicated task has no session sheet.
+      if (mode === 'dedicated') {
+        if (ev.pr_state === 'merged') return `blocked ${key} ${at}: ${text(`kharos ${ev.session} ${ev.reason}; it gave no end mark, so there is no session sheet`)}${pr}${where}`;
+        return `failed ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${pr}${where}`;
+      }
+      return `${ev.open_notice ? `resolved ${key}` : 'note'} ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${pr}`;
     case 'failed':
     case 'ended_unmarked':
     case 'deadline_closed':

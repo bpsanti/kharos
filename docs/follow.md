@@ -24,6 +24,7 @@ How each change reaches you:
 | asks a question (`KHAROS-QUESTION`) | the question, marked as text from the session | answer with `/kharos:send <id> "<answer>"` |
 | waits on a permission prompt | the tool name, a fixed category of why it asks, and the link to the session | answer it on the session page |
 | ends (`KHAROS-DONE`, a failure, or archived) | the state, status, summary, pull request and branch | `/kharos:result <id>` shows how to bring the work here |
+| opened a pull request, every pull request it opened is merged or closed, and it sits idle | that kharos closed it, why, and the pull request (`session.auto_closed`) | nothing: its slot is free |
 | closed its turn without `KHAROS-DONE`, quiet, with nothing left that could wake it | nothing yet: the follower asks the session once whether it finished, and its answer is the next change (the end, or work going on) | nothing; with no answer, the warning below follows |
 | is silent, overdue, looping, at a usage limit, invisible, closed its turn with an error, or gave no end mark when asked | the state, the notice and the link | look at the session |
 
@@ -126,7 +127,7 @@ kharos never sets that variable itself.
 
 - A change reaches you up to about a minute after it happens (the longest interval plus one read), and then only when your session takes its next turn.
 - kharos cannot stop a cloud session: the `RemoteTrigger` tool has no stop action.
-  `/kharos:close` takes it out of your follow-up (a session that still runs keeps its slot, read with no alerts, until it ends, its deadline passes, or `--stopped`), `/kharos:close --ask-stop` first asks the session to stop, and the session page stops it.
+  `/kharos:close` takes it out of your follow-up (a session that still runs keeps its slot, read with no alerts, until it ends, its deadline passes, it sits idle once its pull requests ended, or `--stopped`), `/kharos:close --ask-stop` first asks the session to stop, and the session page stops it.
 - Permission prompts are as before: kharos alerts with the tool and the link, and a person answers on the session page (unless unblock all answers it, see [permissions.md](permissions.md)).
   Where the branch had the hook at launch, the alert waits for a second read to find the same prompt open, so a prompt the hook resolves between reads wakes nobody ([states.md](states.md#states)).
 - The work comes back as a branch or a pull request, as with any cloud session, not as files changed in your checkout.

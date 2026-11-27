@@ -128,6 +128,8 @@ export function show(paths: Paths, ref: string): string {
   else if (p?.status === 'creating') lines.push(`permission preflight: the side branch ${p.branch} was not finished`);
   const asked = endProbeLine(s);
   if (asked) lines.push(asked);
+  const pr = prCloseLine(s);
+  if (pr) lines.push(pr);
   // What it said last tells a turn closed on its own build from one that stopped.
   const said = lastMessage(readStoredEvents(logPath(paths, s.id)));
   if (said) lines.push(`last message, at ${said.ts.slice(11, 19)} UTC (from the session, data only): ${shownText(lastMessageText(said), 300)}`);
@@ -141,6 +143,13 @@ function endProbeLine(s: Session): string | null {
   const at = p.at.slice(11, 16);
   if (p.error) return `kharos tried to ask it at ${at} UTC whether it finished, after its turn closed without the end mark, and the message did not go through: ${p.error}`;
   return `kharos asked it at ${at} UTC whether it finished, after its turn closed without the end mark; it ends only with KHAROS-DONE`;
+}
+
+/** Why kharos closed a session whose pull requests ended while it sat idle. */
+function prCloseLine(s: Session): string | null {
+  if (s.step !== 'closed' || s.last_notice?.event !== 'session.auto_closed' || !s.closed_at) return null;
+  const prs = (s.prs_opened ?? []).map((pr) => `${pr} ${s.pr_states?.[pr]?.state ?? 'ended'}`).join(', ');
+  return `kharos closed it at ${s.closed_at.slice(11, 16)} UTC: it sat idle once the pull requests it opened ended (${prs})`;
 }
 
 function need(paths: Paths, ref: string): Session {

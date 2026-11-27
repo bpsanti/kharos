@@ -783,3 +783,233 @@ test('close: a closing session whose turn closes without the end mark is not ask
   assert.equal(activeCount(loadRegistry(sb.paths), T0 + 15 * MIN), 1);
   assert.equal(journal(sb).some((e) => e.event === 'session.end_asked' || e.event === 'session.quiet_unmarked'), false);
 });
+
+/** A session that worked, then wrote its end mark as its own last message; the turn's result is not in the log yet. */
+const DONE_NO_RESULT = [
+  line(1, 'user: Fix the typo. --- Protocol ... KHAROS-DONE {"status":"ok|failed"}'),
+  line(5, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+  line(30, 'tool_use Bash: {"command":"npm test"}'),
+  line(60, 'tool_result: all green'),
+  line(62, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'),
+].join('\n');
+
+test('end mark: a running session that writes KHAROS-DONE frees its slot and stops its follower at once, with nobody closing it', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  // Running until the mark: the follower reads it busy first, then the mark arrives before the turn's result.
+  let log = DONE_NO_RESULT.split('\n').slice(0, 4).join('\n');
+  const c = clocked(sb, T0 + 40_000, reader(sb, () => log), { maxMs: 50_000 });
+  const busy = await c.run();
+  assert.equal(busy.state, 'running');
+  assert.equal(activeCount(loadRegistry(sb.paths), c.now()), 1);
+  log = DONE_NO_RESULT;
+  const o = await clocked(sb, T0 + 63_000, reader(sb, () => log), { since: busy.key }).run();
+  assert.equal(o.key, 'end:finished');
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'finished');
+  assert.equal(s.closing_at, undefined, 'nobody ran close');
+  assert.equal(activeCount(loadRegistry(sb.paths), T0 + 64_000), 0, 'the slot is free on the read that saw the mark');
+  // The follower has nothing left to read.
+  const again = await clocked(sb, T0 + 70_000, reader(sb, () => log), { since: o.key }).run();
+  assert.equal(again.changed, false);
+  assert.equal(again.reads, 0);
+});
+
+test('end mark: a session closed with --ask-stop, or closed while it runs, frees its slot when it writes KHAROS-DONE, and its follower stops', async () => {
+  for (const askStop of [true, false]) {
+    const sb = sandbox();
+    const id = openOne(sb);
+    postToolUse(sb.ctx(T0 + 31_000), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, DONE_NO_RESULT.split('\n').slice(0, 3).join('\n')), 'reader'));
+    close(sb.paths, id, T0 + 40_000, null, { askStop, env: sb.env });
+    assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'open', 'a closing session keeps its slot while it runs');
+    assert.equal(activeCount(loadRegistry(sb.paths), T0 + 40_000), 1);
+    const o = await clocked(sb, T0 + 63_000, reader(sb, () => DONE_NO_RESULT)).run();
+    assert.equal(o.key, 'end:closed', `askStop=${askStop}`);
+    const s = loadRegistry(sb.paths).sessions[id]!;
+    assert.equal(s.state, 'finished');
+    assert.equal(s.step, 'closed');
+    assert.equal(activeCount(loadRegistry(sb.paths), T0 + 64_000), 0);
+    // A closing session raises no alert, its end included.
+    assert.equal(journal(sb).some((e) => e.event === 'session.finished'), false);
+  }
+});
+
+const PR = 'https://github.com/example/demo/pull/7';
+
+/** A session that opened a pull request and closed its turn without the end mark. */
+const PR_OPENED = [
+  line(1, 'user: Fix the typo. --- Protocol ... KHAROS-DONE {"status":"ok|failed"}'),
+  line(5, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+  line(30, 'tool_use Bash: {"command":"gh pr create --fill"}'),
+  line(32, `tool_result: ${PR}`),
+  line(35, 'assistant: The pull request is open.'),
+  line(36, 'result: success is_error=false turns=2 duration=30s — The pull request is open.'),
+].join('\n');
+
+/** A pull request reader that answers from `state` and counts its calls. */
+function prReader(state: () => 'open' | 'merged' | 'closed' | null, calls: string[] = []) {
+  return (url: string) => {
+    calls.push(url);
+    const s = state();
+    return s ? ({ ok: true, state: s } as const) : ({ ok: false, error: 'gh: HTTP 502' } as const);
+  };
+}
+
+test('pr close: an idle session whose pull request was merged is closed with a terminal event that names it, and its slot is free', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: string[] = [];
+  const sent: string[] = [];
+  const send = sender(sent, () => {}, () => 0);
+  const o = await clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send, pullRequest: prReader(() => 'merged', calls), maxMs: 10 * MIN }).run();
+  assert.equal(o.key, 'end:closed');
+  assert.deepEqual(sent, [], 'closed rather than asked whether it finished');
+  assert.deepEqual(calls, [PR], 'one gh read, once the turn was quiet');
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'closed');
+  assert.equal(s.state, 'turn_closed');
+  assert.equal(activeCount(loadRegistry(sb.paths), o.waited_s * 1000), 0);
+  const ev = journal(sb).filter((e) => e.event === 'session.auto_closed');
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0]!.class, 'terminal');
+  assert.equal(ev[0]!.pr, PR);
+  assert.equal(ev[0]!.pr_state, 'merged');
+  assert.equal(ev[0]!.reason, `closed because the pull request it opened, ${PR}, was merged, and it sits idle: its turn closed, with nothing left that could wake it`);
+  // The quiet turn is closed after unmarked_end_min, as it would have been asked about.
+  assert.ok(Date.parse(ev[0]!.at) - (T0 + 36_000) > 5 * MIN && Date.parse(ev[0]!.at) - (T0 + 36_000) <= 5 * MIN + 65_000);
+  assert.match(o.report, new RegExp(`^k-0001 was closed because the pull request it opened, ${PR.replace(/[./]/g, '\\$&')}, was merged, .*\\nkharos no longer follows it\\. Session: https://claude\\.ai/code/session_01TESTSESSIONAAAAAAAAAAA$`));
+  assert.doesNotMatch(o.report, /Raised earlier/);
+  assert.match(show(sb.paths, id), /^kharos closed it at \d\d:\d\d UTC: it sat idle once the pull requests it opened ended \(https:\/\/github\.com\/example\/demo\/pull\/7 merged\)$/m);
+});
+
+test('pr close: the slot an auto-close frees starts the dispatcher of a launch queued for it', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  writeConfig(sb, { watch: { max_open: 1 } });
+  const queued = prepare(sb.paths, { instruction: 'Fix the other typo.', claude_session: 'launcher', queue: true, now: T0 + 10_000, env: sb.env, heads: () => HEADS_OK }).id;
+  assert.equal(loadRegistry(sb.paths).sessions[queued]!.step, 'queued');
+  const spawned: string[][] = [];
+  const o = await clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send: () => {}, pullRequest: prReader(() => 'merged'), spawner: (args) => (spawned.push(args), process.pid), maxMs: 10 * MIN }).run();
+  assert.equal(o.key, 'end:closed');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'closed');
+  assert.deepEqual(spawned, [['dispatch']]);
+});
+
+test('pr close: a session the person closed while it ran is closed quietly once it sits idle with its pull request merged', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  close(sb.paths, id, T0 + 35_000);
+  const o = await clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send: () => assert.fail('a closing session is never asked'), pullRequest: prReader(() => 'merged'), maxMs: 10 * MIN }).run();
+  assert.equal(o.key, 'end:closed');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'closed');
+  assert.equal(activeCount(loadRegistry(sb.paths), T0 + 10 * MIN), 0);
+  assert.equal(journal(sb).some((e) => e.event === 'session.auto_closed'), false);
+});
+
+test('pr close: a session whose pull request was merged while it still works is not closed, and GitHub is not asked', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: string[] = [];
+  // It goes on after opening the pull request: a long foreground command, then a background build that may wake it.
+  const working = [...PR_OPENED.split('\n').slice(0, 4), line(40, 'tool_use Bash: {"command":"npm run e2e"}')].join('\n');
+  const o = await clocked(sb, T0 + 40_000, reader(sb, () => working), { pullRequest: prReader(() => 'merged', calls), maxMs: 9 * MIN }).run();
+  assert.notEqual(o.key, 'end:closed');
+  assert.deepEqual(calls, []);
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'open');
+  const background = [...PR_OPENED.split('\n').slice(0, 4), line(40, 'tool_use Bash: {"command":"npm run build","run_in_background":true}'), line(41, 'tool_result: Command running in background with ID: b02. Output is being written to: /tmp/b02.output.'), line(42, 'assistant: Building.'), line(43, 'result: success is_error=false turns=3 duration=40s — Building.')].join('\n');
+  const sb2 = sandbox();
+  const id2 = openOne(sb2);
+  await clocked(sb2, T0 + 50_000, reader(sb2, () => background), { pullRequest: prReader(() => 'merged', calls), maxMs: 9 * MIN }).run();
+  assert.deepEqual(calls, [], 'a background task may still wake it');
+  assert.equal(loadRegistry(sb2.paths).sessions[id2]!.step, 'open');
+  assert.equal(journal(sb2).some((e) => e.event === 'session.auto_closed'), false);
+});
+
+test('pr close: an open pull request keeps the session; its state is cached between reads, and the session is closed once it is closed unmerged', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: string[] = [];
+  let state: 'open' | 'closed' | null = 'open';
+  const sent: string[] = [];
+  const send = sender(sent, () => {}, () => 0);
+  const c = clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send, pullRequest: prReader(() => state, calls), maxMs: 9 * MIN });
+  const first = await c.run();
+  assert.notEqual(first.key, 'end:closed');
+  assert.equal(calls.length, 1, 'reads within the cache time do not ask GitHub again');
+  assert.equal(sent.length, 1, 'with its pull request open, it is asked whether it finished, as before');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.pr_states?.[PR]?.state, 'open');
+  // A failed gh read closes nothing.
+  state = null;
+  const failed = await clocked(sb, c.now(), reader(sb, () => PR_OPENED), { send, since: first.key, pullRequest: prReader(() => state, calls), maxMs: 6 * MIN }).run();
+  assert.notEqual(failed.key, 'end:closed');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'open');
+  state = 'closed';
+  const o = await clocked(sb, c.now() + 6 * MIN, reader(sb, () => PR_OPENED), { send, since: failed.key, pullRequest: prReader(() => state, calls), maxMs: 9 * MIN }).run();
+  assert.equal(o.key, 'end:closed');
+  const ev = journal(sb).find((e) => e.event === 'session.auto_closed')!;
+  assert.equal(ev.pr_state, 'closed');
+  assert.match(ev.reason, /, was closed, and it sits idle/);
+});
+
+test('pr close: a session that opened no pull request is never closed this way', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: string[] = [];
+  const sent: string[] = [];
+  const send = sender(sent, () => {}, () => 0);
+  await clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED), { send, pullRequest: prReader(() => 'merged', calls), maxMs: 20 * MIN }).run();
+  assert.deepEqual(calls, []);
+  assert.equal(sent.length, 1);
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'open');
+  assert.equal(activeCount(loadRegistry(sb.paths), T0 + 20 * MIN), 1);
+});
+
+test('pr close: every pull request the session opened must have ended', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const second = 'https://github.com/example/demo/pull/8';
+  const two = [...PR_OPENED.split('\n').slice(0, 4), line(33, 'tool_use Bash: {"command":"gh pr create --title docs"}'), line(34, `tool_result: ${second}`), ...PR_OPENED.split('\n').slice(4)].join('\n');
+  const states: Record<string, 'open' | 'merged'> = { [PR]: 'merged', [second]: 'open' };
+  const read = (url: string) => ({ ok: true, state: states[url]! }) as const;
+  const first = await clocked(sb, T0 + 40_000, reader(sb, () => two), { pullRequest: read, send: () => {}, maxMs: 7 * MIN }).run();
+  assert.notEqual(first.key, 'end:closed');
+  states[second] = 'merged';
+  const o = await clocked(sb, T0 + 14 * MIN, reader(sb, () => two), { pullRequest: read, send: () => {}, since: first.key, maxMs: 3 * MIN }).run();
+  assert.equal(o.key, 'end:closed');
+  const ev = journal(sb).find((e) => e.event === 'session.auto_closed')!;
+  assert.equal(ev.pr, second);
+  assert.equal(ev.reason, `closed because every pull request it opened ended (${PR} merged, ${second} merged), and it sits idle: its turn closed, with nothing left that could wake it`);
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'closed');
+});
+
+test('pr close: while gh fails, the pull request is asked about once per cache time, not on every read, and the session closes once gh answers', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: number[] = [];
+  let state: 'merged' | null = null;
+  let clock = () => 0;
+  const read = (url: string) => {
+    calls.push(clock());
+    return prReader(() => state)(url);
+  };
+  // Reads land about once a minute while it sits idle; gh fails on each try.
+  const c = clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send: () => {}, pullRequest: read, maxMs: 12 * MIN });
+  clock = c.now;
+  const first = await c.run();
+  assert.notEqual(first.key, 'end:closed');
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'open', 'a failing gh closes nothing');
+  assert.equal(s.pr_check_failed?.error, 'gh: HTTP 502');
+  assert.ok(s.reads >= 8, `${s.reads} reads`);
+  assert.equal(calls.length, 2, `gh asked ${calls.length} times in ${s.reads} reads`);
+  for (let i = 1; i < calls.length; i++) assert.ok(calls[i]! - calls[i - 1]! >= 5 * MIN, 'retried only after the cache time');
+  // gh answers again: the next try after the cache time closes the session.
+  state = 'merged';
+  const c2 = clocked(sb, c.now(), reader(sb, () => PR_OPENED), { send: () => {}, since: first.key, pullRequest: read, maxMs: 7 * MIN });
+  clock = c2.now;
+  const o = await c2.run();
+  assert.equal(calls.length, 3);
+  assert.ok(calls[2]! - calls[1]! >= 5 * MIN);
+  assert.equal(o.key, 'end:closed');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.pr_check_failed, null);
+});

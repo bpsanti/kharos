@@ -43,9 +43,11 @@ export interface KharosEvent {
   sheet?: string;
   /** Only on session.waiting_permission: the tool the open prompt is for, and the fixed category of why it asks. */
   permission?: { tool: string; category: PermissionCategory };
+  /** Only on session.auto_closed: `merged` when every pull request the session opened was merged, else `closed`. */
+  pr_state?: 'merged' | 'closed';
 }
 
-const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked', 'deadline_closed']);
+const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked', 'deadline_closed', 'auto_closed']);
 
 export function classOf(name: EventName): EventClass {
   const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened' | 'end_asked';
@@ -83,6 +85,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
   if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
   if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool, category: s.permission.category ?? 'unknown' };
+  if (name === 'session.auto_closed') ev.pr_state = (s.prs_opened ?? []).every((pr) => s.pr_states?.[pr]?.state === 'merged') ? 'merged' : 'closed';
   return ev;
 }
 

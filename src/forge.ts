@@ -172,3 +172,21 @@ export function ghForge(gh: Gh): Forge {
     },
   };
 }
+
+/** Where a pull request stands on GitHub. */
+export type PullRequestState = 'open' | 'merged' | 'closed';
+
+/** Reads where a pull request stands, by its URL; the seam the tests replace. */
+export type PullRequestReader = (url: string) => Outcome<{ state: PullRequestState }>;
+
+const PR_STATES: Record<string, PullRequestState> = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' };
+
+/** A pull request's state through the person's own gh, which holds the GitHub access kharos uses. */
+export function pullRequestReader(gh: Gh): PullRequestReader {
+  return (url) => {
+    const r = gh(['pr', 'view', url, '--json', 'state', '--jq', '.state']);
+    if (r.status !== 0) return { ok: false, error: lastLine(r) };
+    const state = PR_STATES[r.stdout.trim().toUpperCase()];
+    return state ? { ok: true, state } : { ok: false, error: 'gh gave no pull request state' };
+  };
+}

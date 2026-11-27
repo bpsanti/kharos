@@ -27,7 +27,13 @@ Commands that spend usage or change state are typed by the person, never started
 ### Code decides, and doubt is never an end
 
 A session's state comes from rules in code, tested on recorded logs, not from a model's reading of the log.
-A closed turn is not an end; only the session's own `KHAROS-DONE` mark ends it.
+A closed turn is not an end; a session ends in one of four ways, and in no other:
+- its own `KHAROS-DONE` mark;
+- its answer with `KHAROS-DONE` to the one question kharos asks when a turn closes quiet without the mark, with nothing left that could wake it;
+- its deadline, after a turn closed without the mark and the question brought none;
+- the pull requests it opened, once every one of them is merged or closed and the session sits idle: its turn closed, no call open, nothing left in the background that could wake it.
+There is no cap on inactivity: a session that works, or one that opened no pull request, holds its slot until one of these ends comes.
+An end kharos reaches by itself stops following the session and frees its slot; it never stops the cloud session.
 "Could not read" is never "finished": unreadable state fails closed and names the file to fix.
 A warning that a single read could fake waits for a second read that agrees.
 A new state, rule, or threshold arrives with the observation or documentation that justifies it.
