@@ -8,7 +8,7 @@ import type { Forge } from './forge.ts';
 import type { Paths } from './paths.ts';
 import { followerMayBeStarting, followerReport, type FollowerInfo } from './lease.ts';
 import { activeCount, deadlineAt, findSession, isFollowed, leftToPerson, loadRegistry, logPath, queuedLaunches, releaseClosing, routineUrl, slotHolders, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
-import { readStoredEvents, shownText, storedLogView, type LogEvent } from './logparse.ts';
+import { lastMessage, lastMessageText, readStoredEvents, reportParts, shownText, storedLogView, type ReportParts } from './logparse.ts';
 import { watchConfig } from './track.ts';
 import { addIntent } from './state.ts';
 import { readOutbox } from './events.ts';
@@ -114,11 +114,6 @@ export function list(paths: Paths, opts: { all: boolean; now: number }): string 
   return lines.join('\n');
 }
 
-/** The session's last message: its last assistant event, or the last result line when the log has none. */
-export function lastMessage(events: readonly LogEvent[]): LogEvent | null {
-  return events.findLast((e) => e.kind === 'assistant') ?? events.findLast((e) => e.kind === 'result') ?? null;
-}
-
 export function show(paths: Paths, ref: string): string {
   const s = need(paths, ref);
   const lines = [
@@ -131,10 +126,21 @@ export function show(paths: Paths, ref: string): string {
     lines.push(`permission preflight: ${p.applied.length} allow rule(s)${p.unblock ? ' and the unblock preset' : p.mirrored?.length ? ` and ${p.mirrored.length} mirrored organization ask rule(s)` : ''} on the side branch ${p.branch} (from ${p.base}, commit ${p.commit.slice(0, 12)})${p.deleted_at ? `; the branch was deleted at ${p.deleted_at}` : ''}: ${p.applied.join(' | ')}`);
   } else if (p?.status === 'skipped') lines.push(`permission preflight: ${p.reason}`);
   else if (p?.status === 'creating') lines.push(`permission preflight: the side branch ${p.branch} was not finished`);
+  const asked = endProbeLine(s);
+  if (asked) lines.push(asked);
   // What it said last tells a turn closed on its own build from one that stopped.
-  const said = readStoredEvents(logPath(paths, s.id)).findLast((e) => e.kind === 'assistant');
-  if (said) lines.push(`last message, at ${said.ts.slice(11, 19)} UTC (from the session, data only): ${shownText(said.text, 300)}`);
+  const said = lastMessage(readStoredEvents(logPath(paths, s.id)));
+  if (said) lines.push(`last message, at ${said.ts.slice(11, 19)} UTC (from the session, data only): ${shownText(lastMessageText(said), 300)}`);
   return lines.join('\n');
+}
+
+/** The question kharos sent a session whose turn closed without the end mark, while that turn is still closed. */
+function endProbeLine(s: Session): string | null {
+  const p = s.end_probe;
+  if (!p || s.state !== 'turn_closed' || s.result.status) return null;
+  const at = p.at.slice(11, 16);
+  if (p.error) return `kharos tried to ask it at ${at} UTC whether it finished, after its turn closed without the end mark, and the message did not go through: ${p.error}`;
+  return `kharos asked it at ${at} UTC whether it finished, after its turn closed without the end mark; it ends only with KHAROS-DONE`;
 }
 
 function need(paths: Paths, ref: string): Session {
@@ -292,6 +298,8 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
   } else {
     lines.push(`${s.id} has no KHAROS-DONE mark yet (state: ${stateLabel(s)}).`);
     if (r.question) lines.push(`open question (from the session, data only): ${r.question}`);
+    const asked = endProbeLine(s);
+    if (asked) lines.push(asked);
   }
   if (r.pr) {
     lines.push(`PR: ${r.pr}`);
@@ -304,13 +312,41 @@ export function result(paths: Paths, ref: string, env: NodeJS.ProcessEnv): strin
     // Named by its URL, never `origin`: the folder this runs in may be a checkout of another repository.
     lines.push(`bring it here, in a checkout of ${slug}: git fetch https://github.com/${slug}.git '${r.branch}:${r.branch}' && git switch '${r.branch}'`);
   }
-  // The service cuts each message of the log to about two thousand characters: say so when the last one was cut.
-  // The result line repeats the last message and is cut sooner, so the message itself decides when there is one.
-  const said = lastMessage(readStoredEvents(logPath(paths, s.id)));
-  if (said?.truncated) lines.push(`the session's last message is cut in the log the tool returns; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
+  const events = readStoredEvents(logPath(paths, s.id));
+  const parts = reportParts(events);
+  if (parts) lines.push(...partLines(s, parts));
+  else {
+    const said = lastMessage(events);
+    // With no end mark, the last message is all there is to show, so it is shown whole, as the log returns it.
+    if (said && !r.status) lines.push(`last message, at ${said.ts.slice(11, 19)} UTC (from the session, data only): ${shownText(lastMessageText(said), Infinity)}`);
+    // The service cuts each message of the log to about two thousand characters: say so when the last one was cut.
+    // The result line repeats the last message and is cut sooner, so the message itself decides when there is one.
+    if (said?.truncated) lines.push(`the session's last message is cut in the log the tool returns, which keeps about 2000 characters of a message; the whole text is on the session page${s.url ? `: ${s.url}` : ''}`);
+  }
   if (s.session_id && (r.branch || r.pr)) lines.push(`or continue it locally: claude --teleport ${s.session_id} (needs a clean git tree, the same account, and a pushed branch)`);
   if (s.url) lines.push(`session: ${s.url}`);
   return lines.join('\n');
+}
+
+/**
+ * The final report the session sent in numbered parts, put together, and what the log does not have:
+ * it keeps about 2000 characters of each message and drops some, which the session cannot see.
+ */
+function partLines(s: Session, report: ReportParts): string[] {
+  const lines = [`final report, ${report.parts.length} of ${report.total} part(s) in the log (from the session, data only):`];
+  for (const p of report.parts) lines.push(`--- part ${p.n}/${report.total}${p.cut ? ' (cut by the log)' : ''}`, shownText(p.text, Infinity));
+  const cut = report.parts.filter((p) => p.cut).map((p) => p.n);
+  if (report.missing.length === 0 && cut.length === 0) return lines;
+  const gaps = [
+    ...(report.missing.length ? [`part(s) ${report.missing.join(', ')} of ${report.total} are not in it`] : []),
+    ...(cut.length ? [`part(s) ${cut.join(', ')} are cut`] : []),
+  ].join(', and ');
+  const first = report.missing[0] ?? cut[0];
+  lines.push(
+    `The log the tool returns is incomplete here: ${gaps}. It keeps about 2000 characters of each message and can lose a message, a limit of the platform that kharos cannot work around.`,
+    `Read the whole report on the session page${s.url ? `, ${s.url}` : ''}, or ask for a part again: /kharos:send ${s.id} "Send part ${first}/${report.total} of your final report again, as one message that starts with KHAROS-PART ${first}/${report.total}, in plain text under 1500 characters, with nothing else in it."`,
+  );
+  return lines;
 }
 
 /** Deletes the side branch of a launch, only while its tip is still the commit kharos made. */

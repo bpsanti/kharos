@@ -182,6 +182,7 @@ test('firstmate: the verb map of the shared mode never writes done or failed', (
   for (const e of ['session.failed', 'session.ended_unmarked', 'session.silent', 'session.looping', 'session.overdue', 'session.usage_limit', 'session.invisible', 'session.quiet_unmarked'] as const) {
     assert.match(line({ event: e }) ?? '', /^blocked \[key=kharos-k-0001\]/, e);
   }
+  assert.equal(line({ event: 'session.end_asked', class: 'progress', reason: 'its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished' }), 'note [at=1795632250]: kharos k-0001 its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished https://claude.ai/code/session_01X');
 });
 
 test('firstmate: the dedicated mode writes done only with a session sheet', () => {

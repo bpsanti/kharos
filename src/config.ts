@@ -68,7 +68,11 @@ export interface WatchConfig {
   silence_min: number;
   silence_severe_min: number;
   quiet_end_min: number;
-  /** A turn that closed with no end mark, and started no background task, is reported after this many minutes. */
+  /**
+   * A turn that closed with no end mark, with no background task left that could wake it, is asked about
+   * (whether the session finished) after this many minutes of quiet, and warned about as long again later
+   * when no end mark came.
+   */
   unmarked_end_min: number;
   loop_failures: number;
   renotify_min: number;

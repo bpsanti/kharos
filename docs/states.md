@@ -29,21 +29,41 @@ The rules are checked in this order, and the first that matches wins.
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
 | `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
 | `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
+| `turn_closed` | the last event is a `result` with no mark, quiet for `unmarked_end_min` (5), and no background task left that could wake it (below); checked before the deadline | none at first: the follower asks the session once whether it finished (below); `quiet_unmarked` when no end mark came, after `unmarked_end_min` more, or at once past the deadline, where nothing is asked |
 | `overdue` | running for longer than the launch's deadline (`--deadline`, or the profile's `deadline_min`), counted from the open of the cloud session; raised once per session and repeated while it stays open, unless a check below it has a notice to raise, which replaces it; once it closes, a session a message reopens past its deadline is read by the checks below it (looping, silent, `quiet_unmarked`) | yes |
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
 | `silent` | an open turn with no new event for `silence_min` | at `silence_min`, again at `silence_severe_min` |
-| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked` after `unmarked_end_min` (5), or after `quiet_end_min` (40) when the turn started a background task (a command run or moved to the background, a `Monitor`, an agent whose result says it was launched in the background; a foreground agent returns inside the turn and does not count) that may wake it |
+| `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked`, a warning, after `quiet_end_min` (40) while a background task the session started may still wake it; with none, the question above |
 | `running` | anything else | no |
 
 A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal.
 
+A background task may still wake the session while the log shows it started and not its end:
+
+- It started when a call's result names it: `Command running in background with ID: <id>`, `Command was moved to the background with ID: <id>`, `Monitor started (task <id>, expires in <n>m ...)`, or `Async agent launched ... agentId: <id>`.
+  A foreground agent returns its report inside the turn, so it wakes nothing.
+- It ended when a `user` event `<task-notification>` names it with a `<status>` (`completed`, `failed`, `killed`), or says that the Monitor expired; a Monitor past the time its start gave has ended too.
+- It ended too when the session learned it itself: a `tool_result` of a wait on its output names it as `<task_id>ID</task_id>` with a final `<status>` (`completed`, `failed`, `killed`; `running` leaves it open), or a stop that worked says `Successfully stopped task: ID` or `Successfully killed shell: ID`.
+- A start whose result names no task cannot be matched with its end, so it counts while its turn lasts.
+
+The question whether it finished:
+
+- is one message, sent by the follower that holds the session's lease, as with `/kharos:send`: `kharos: your turn closed without the end mark. If you have finished, send your final report in KHAROS-PART messages, then the KHAROS-DONE line as your last message. If not, go on with your work.`
+- is recorded before it is sent, with the closed turn it is about, so it goes once; a send that fails is kept with its reason, and `session.end_asked` (`progress`) says it was sent or why not;
+- is sent once per quiet period: about a turn the question itself started only when the session worked in it;
+- is never sent past the deadline, which would wake a session whose time is up, nor to a session the person closed, which is read only to free its slot;
+- ends the session only through its answer: `KHAROS-DONE` is `finished`, work is `running`, and an answer with neither, or none within `unmarked_end_min`, leaves the turn closed with `quiet_unmarked`, holding its slot;
+- leaves such a session to its deadline, when it is closed with `session.deadline_closed` (`terminal`), which carries its last message, on a read after the one that raised the warning, so the warning goes out first.
+
 ## Why these numbers
 
 - A command in the foreground can run up to 10 minutes; gaps of almost 10 minutes with no event are normal, so `silence_min` is 15.
-- A closed turn is not an end, not even one that ended with an error result: a session closed its turn, stayed quiet for over 10 minutes, and woke up by itself when a background command finished.
-  A command moved to the background can run up to 30 minutes more, hence `quiet_end_min` of 40 for a turn that started one, and the notice is a warning, never an end.
-  A turn that started nothing in the background has nothing left to wake it, so it is said after `unmarked_end_min`.
+- A closed turn is not a sure end, not even one that ended with an error result: a session closed its turn, stayed quiet for over 10 minutes, and woke up by itself when a background command finished.
+  A command moved to the background can run up to 30 minutes more, hence `quiet_end_min` of 40 while a task the session started has not ended, and that notice is a warning, never an end.
+  Only the tasks that have not ended count: a session that ran a build in the background, was woken by its end, and then closed its last turn has nothing left to wake it.
+  On recorded logs of many sessions, every closed turn that later woke by itself still had a task with no notice of its end, and every turn that closed with none was the session's end.
+  So a turn with nothing left to wake it is asked about after `unmarked_end_min`: only the session knows whether it finished, and its answer, the end mark or more work, settles it.
 - Repeated calls of the same script are normal (waiting for CI, for example); only the same error in a row counts as a loop.
 - The end is said by the session itself, with a mark it sends as its own last message: the condensed log cuts each event at about a thousand characters, so a mark at the end of a long message would be lost.
 - The marks in the prompt (the footer) do not count: only `assistant` and `result` events after the last `user` event are read.
@@ -74,7 +94,7 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "permission":{"tool":"Bash","category":"org_ask_rule"}}
 ```
 
-- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`).
+- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`, `session.deadline_closed`); `session.end_asked` (`progress`) says kharos asked a session whose turn closed without the end mark whether it finished.
 - `session.queued` (`progress`) says a launch made with `--queue` waits for a slot; `session.not_fired` (`needs_you`) says kharos did not fire a queued launch by itself (another account is logged in, a refusal, or fires that did not go through) and the person decides.
 - `session.pr_opened` (`progress`) says the session opened a pull request, with its URL in `pr`, as soon as a read shows the result of the call that created it (`gh pr create`, or a GitHub tool that creates one); once per pull request.
 - `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.

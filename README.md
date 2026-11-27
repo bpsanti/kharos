@@ -76,7 +76,7 @@ npm install -g kharos
 | `/kharos:list [--all]` | Lists followed sessions from the local registry, with their followers and the open slots |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
 | `/kharos:send <id> "<text>"` | Sends a message into the session; the reply shows on the next read |
-| `/kharos:result <id>` | Shows the end mark, pull request and branch, and how to bring the work here |
+| `/kharos:result <id>` | Shows the end mark, pull request and branch, the final report put together from its numbered parts (or the last message), and how to bring the work here |
 | `/kharos:close <id> [--ask-stop] [--stopped]` | Stops following a session, and shows where to delete its routine; `--ask-stop` first sends the session a request to stop; cancels a queued launch. A session that still runs is `closing` (below) |
 | `/kharos:permissions [on\|off\|state]` | Unblock all: frees every permission prompt kharos can free for this account, in one step, after one confirmation; `off` takes back what it turned on; `state` shows where it stands. It never changes a repository's own files |
 
@@ -130,7 +130,7 @@ The one-run guard covers only launches kharos knows.
 Calling RemoteTrigger `run` by hand on a routine id read elsewhere (the routine page, /schedule) starts another paid session, and the service has no fire-once flag.
 While the registry file cannot be read, every `run`, `list_runs` and `get_run_log` answer is hidden behind one line that names the file, because kharos cannot tell its own launches from others.
 
-The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}` line when it is truly finished, or a `KHAROS-QUESTION {...}` line when it needs an answer, and pushes work in progress every 30 minutes.
+The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}` line when it is truly finished, or a `KHAROS-QUESTION {...}` line when it needs an answer, sends its final report before the end mark in numbered parts (`KHAROS-PART <i>/<n>`, each a message of its own of at most 1500 characters, since the log keeps about 2000 of each message), and pushes work in progress every 30 minutes.
 `--no-push` leaves that last line out, for work that should reach the remote only when the session decides it is done.
 
 ## Following sessions
@@ -178,7 +178,11 @@ See [docs/follow.md](docs/follow.md) for how it works and its limits.
 ### What a follower reports
 
 Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
-A closed turn is never taken for the end: only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+Only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+When a turn closes without the mark and stays quiet for `watch.unmarked_end_min` (5 minutes), with no background task left that could wake it (every task it started, a background command, a `Monitor` or a background agent, has ended, by its notice of the end, a wait on its output that saw it end, or a stop that worked), the follower asks the session once whether it finished: one short message that asks for the final report in `KHAROS-PART` messages and the `KHAROS-DONE` line, or to go on with its work.
+The session ends when it answers with `KHAROS-DONE`, and is `running` again when it goes on working; with no answer, or an answer with neither, it stays `turn_closed` with the `session.quiet_unmarked` warning, keeps its `watch.max_open` slot, and is closed at its deadline with `session.deadline_closed` (`terminal`), which carries its last message.
+It is asked once per quiet period, never past its deadline, and never once you closed it.
+While a task it started may still wake it, a closed turn is only a warning after `watch.quiet_end_min` (40 minutes).
 A session waiting at a permission prompt raises a notice that names the tool and a fixed category of why it asks (an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell), with the link to the session, where a person answers it.
 Only the tool name and a fixed category leave the machine: what the tool would run never does.
 `kharos health` exits with 1 when an open session has no live follower, for launchd, cron or any other check.
@@ -242,7 +246,7 @@ Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/
 | Runs started by hand, per account | 100 per hour |
 | Concurrent cloud sessions | exists; no published number (`watch.max_open` is a local cap, 10 by default, that `/kharos:setup` asks once; `--queue` waits for a slot instead of being refused) |
 | Session cost | not readable: the run log the tool returns carries no token usage or cost, so kharos cannot show what a session spent; the usage page of claude.ai does, and `--deadline` raises an overdue notice past a set time |
-| Message length in the log | each message is cut to about two thousand characters and flattened to one line; `/kharos:result` says when the last one was cut, and the session page has the whole text |
+| Message length in the log | each message is cut to about two thousand characters and flattened to one line, and what a session only thought never shows; the footer asks for the final report in numbered parts, `/kharos:result` puts them together and names the parts that are missing or cut, and the session page has the whole text |
 | Deleting a routine | not possible through the tool: each launch leaves a disabled routine, and `/kharos:close` prints the link of its page, where it is deleted |
 | Stopping a session | not possible through the tool: `/kharos:close --ask-stop` asks the session to stop, and its page stops it |
 | Listing cloud environments | only through the bundled `/schedule` skill, which `/kharos:setup` uses; a shell has no way to list them |

@@ -5,15 +5,16 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { readAuthStatus } from '../src/account.ts';
 import { main } from '../src/cli.ts';
-import { close, followerProblems, list, sendMessage } from '../src/commands.ts';
+import { close, CommandError, followerProblems, list, result, sendMessage, show } from '../src/commands.ts';
 import { runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import { enqueue, readOutbox } from '../src/events.ts';
+import { endProbe } from '../src/body.ts';
 import { followLoop } from '../src/follow.ts';
 import { deliver } from '../src/outputs/index.ts';
 import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { followerReport, HANDOVER_MS, liveFollowers, releaseLease, takeLease } from '../src/lease.ts';
 import { prepare } from '../src/launch.ts';
-import { loadRegistry, updateRegistry } from '../src/registry.ts';
+import { activeCount, loadRegistry, updateRegistry } from '../src/registry.ts';
 import { acknowledge, followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
 import { health } from '../src/follow.ts';
 import { captured, fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -563,4 +564,159 @@ test('follow: the shell loop acknowledges what it printed, as the shell follower
   assert.equal(lines.length, 1);
   assert.deepEqual(loadRegistry(sb.paths).sessions[id]!.unacked, []);
   assert.equal(journal(sb).find((l) => l.mark === 'acknowledged')?.by, 'shell');
+});
+
+/** A log line `sec` seconds after T0. */
+function line(sec: number, text: string): string {
+  return `[${new Date(T0 + sec * 1000).toISOString()}] ${text}`;
+}
+
+/**
+ * A session that built in the background, closed its turn while the build ran, woke when it ended, and
+ * closed its last turn with its report but without the end mark.
+ */
+const UNMARKED = [
+  line(1, 'user: Fix the typo. --- Protocol ... KHAROS-DONE {"status":"ok|failed"}'),
+  line(5, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+  line(30, 'tool_use Bash: {"command":"npm run build","run_in_background":true}'),
+  line(31, 'tool_result: Command running in background with ID: b01. Output is being written to: /tmp/b01.output. You will be notified when it completes.'),
+  line(35, 'assistant: Building in the background.'),
+  line(36, 'result: success is_error=false turns=2 duration=30s — Building in the background.'),
+  line(210, 'user: <task-notification> <task-id>b01</task-id> <tool-use-id>toolu_01</tool-use-id> <output-file>/tmp/b01.output</output-file> <status>completed</status> <summary>Background command "build" completed (exit code 0)</summary> </task-notification>'),
+  line(212, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+  line(220, 'assistant: [thinking]'),
+  line(222, 'assistant: The build passes and the typo is fixed in README.md.'),
+  line(223, 'result: success is_error=false turns=3 duration=10s — The build passes and the typo is fixed in README.md.'),
+].join('\n');
+const LAST_RESULT = T0 + 223_000;
+
+/** A recorded send: the session's log grows by what `reply` returns, from the time of the send. */
+function sender(sent: string[], grow: (text: string, sec: number) => void, now: () => number) {
+  return (_p: unknown, _id: string, text: string) => {
+    sent.push(text);
+    grow(text, Math.round((now() - T0) / 1000));
+  };
+}
+
+test('wait: a turn closed without the end mark, with nothing left to wake it, is asked about once, and the session ends when it answers with KHAROS-DONE', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  let log = UNMARKED;
+  const sent: string[] = [];
+  let sentAt = 0;
+  const clock = { now: () => 0 };
+  const send = sender(sent, (text, sec) => {
+    sentAt = T0 + sec * 1000;
+    log = [log, line(sec + 2, `user: ${text}`), line(sec + 4, 'init: model=claude-opus-5-5 cwd=/home/user/demo'), line(sec + 8, 'assistant: KHAROS-PART 1/1 The build passes and the typo is fixed in README.md.'), line(sec + 9, 'tool_use Bash: {"command":"true"}'), line(sec + 10, 'tool_result: '), line(sec + 11, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'), line(sec + 12, 'result: success is_error=false turns=3 duration=8s — KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}')].join('\n');
+  }, () => clock.now());
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => log), { send });
+  clock.now = c.now;
+  const o = await c.run();
+  // The first turn closed while its build ran, so its quiet then asked nothing; the last one is asked
+  // about once it is quiet for unmarked_end_min (5), within one read at most 60 s apart.
+  assert.deepEqual(sent, [endProbe()]);
+  assert.ok(sentAt - LAST_RESULT > 5 * MIN && sentAt - LAST_RESULT <= 5 * MIN + 65_000, `asked ${(sentAt - LAST_RESULT) / 1000} s after the turn closed`);
+  assert.match(endProbe(), /^kharos: your turn closed without the end mark\. If you have finished, send your final report in KHAROS-PART messages, then the KHAROS-DONE line as your last message\. If not, go on with your work\.$/);
+  // Its answer is read soon after, and the end is the session's own.
+  assert.equal(o.key, 'end:finished');
+  assert.deepEqual(o.result, { status: 'ok', pr: null, branch: null, summary: 'typo fixed' });
+  assert.ok(c.now() - sentAt <= 30_000, `answer read ${(c.now() - sentAt) / 1000} s after the question`);
+  const events = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event !== 'session.opened');
+  assert.deepEqual(events.map((e) => [e.event, e.class]), [['session.end_asked', 'progress'], ['session.finished', 'terminal']]);
+  assert.equal(events[0]!.reason, 'its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished');
+  assert.match(result(sb.paths, id, sb.env), /^final report, 1 of 1 part\(s\) in the log \(from the session, data only\):\n--- part 1\/1\nThe build passes and the typo is fixed in README\.md\.$/m);
+  assert.equal(activeCount(loadRegistry(sb.paths), c.now()), 0);
+});
+
+test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline with a terminal event', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const sent: string[] = [];
+  const clock = { now: () => 0 };
+  const send = sender(sent, () => {}, () => clock.now());
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED), { send, maxMs: 20 * MIN });
+  clock.now = c.now;
+  const o = await c.run();
+  assert.equal(o.state, 'turn_closed');
+  assert.equal(o.notice, 'session.quiet_unmarked');
+  assert.match(journal(sb).find((e) => e.event === 'session.quiet_unmarked')!.reason, /^turn closed without the end mark: kharos asked the session whether it finished at \d\d:\d\d UTC, and no answer came$/);
+  // Later waits do not ask again, and it holds its slot: it may still be working on something kharos cannot see.
+  const later = await clocked(sb, c.now(), reader(sb, () => UNMARKED), { send, since: o.key }).run();
+  assert.equal(later.changed, false);
+  assert.equal(sent.length, 1);
+  assert.equal(activeCount(loadRegistry(sb.paths), later.waited_s * 1000 + c.now()), 1);
+  assert.match(show(sb.paths, id), /^kharos asked it at \d\d:\d\d UTC whether it finished, after its turn closed without the end mark; it ends only with KHAROS-DONE$/m);
+  assert.match(list(sb.paths, { all: false, now: c.now() }), /^k-0001  turn closed /m);
+  // At its deadline it is closed, on a read after the warning, and the follower stops.
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.deadline_min = 20;
+  });
+  postToolUse(sb.ctx(T0 + 21 * MIN), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, UNMARKED), 'reader'));
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'closed');
+  assert.equal(sent.length, 1);
+  const ended = journal(sb).filter((e) => e.event === 'session.deadline_closed');
+  assert.equal(ended.length, 1);
+  assert.equal(ended[0]!.class, 'terminal');
+  assert.match(ended[0]!.reason, /^closed at its deadline: .*; its last message \(from the session, data only\): The build passes and the typo is fixed in README\.md\.$/);
+  const closed = await clocked(sb, T0 + 21 * MIN, reader(sb, () => UNMARKED), { send, since: o.key }).run();
+  assert.equal(closed.key, 'end:closed');
+  assert.match(closed.report, /^k-0001 was closed at its deadline: /);
+  assert.doesNotMatch(closed.report, /Raised earlier/);
+});
+
+test('wait: a question that does not go through is kept with its reason, and the warning says so', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  let tries = 0;
+  const send = () => {
+    tries++;
+    throw new CommandError('not sent: the session is not reachable');
+  };
+  const o = await clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED), { send, maxMs: 20 * MIN }).run();
+  assert.equal(tries, 1);
+  assert.equal(o.notice, 'session.quiet_unmarked');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.end_probe?.error, 'not sent: the session is not reachable');
+  const asked = journal(sb).find((e) => e.event === 'session.end_asked')!;
+  assert.equal(asked.reason, 'its turn closed without the end mark, and kharos could not ask it whether it finished (not sent: the session is not reachable)');
+  assert.match(journal(sb).find((e) => e.event === 'session.quiet_unmarked')!.reason, /kharos could not send it the question whether it finished at \d\d:\d\d UTC$/);
+  assert.match(show(sb.paths, id), /^kharos tried to ask it at \d\d:\d\d UTC whether it finished, after its turn closed without the end mark, and the message did not go through: not sent: the session is not reachable$/m);
+});
+
+test('wait: a session that goes on with its work after the question is running, and its next quiet turn is a new one to ask about', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  let log = UNMARKED;
+  const sent: string[] = [];
+  const clock = { now: () => 0 };
+  // The first question is answered with more work; the second, about the turn that work closed, with words only.
+  const send = sender(sent, (text, sec) => {
+    const answer =
+      sent.length === 1
+        ? [line(sec + 8, 'tool_use Bash: {"command":"npm test"}'), line(sec + 60, 'tool_result: all green'), line(sec + 62, 'assistant: Tests pass too.'), line(sec + 63, 'result: success is_error=false turns=2 duration=60s — Tests pass too.')]
+        : [line(sec + 8, 'assistant: Still checking.'), line(sec + 9, 'result: success is_error=false turns=1 duration=1s — Still checking.')];
+    log = [log, line(sec + 2, `user: ${text}`), line(sec + 4, 'init: model=claude-opus-5-5 cwd=/home/user/demo'), ...answer].join('\n');
+  }, () => clock.now());
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => log), { send, maxMs: 25 * MIN });
+  clock.now = c.now;
+  const o = await c.run();
+  assert.equal(sent.length, 2, 'one question per quiet period');
+  // An answer with no work and no end mark is not asked about again: the turn stays closed, with the warning.
+  assert.equal(o.notice, 'session.quiet_unmarked');
+  assert.match(journal(sb).find((e) => e.event === 'session.quiet_unmarked')!.reason, /and it answered with no end mark and no work$/);
+  const kinds = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event === 'session.end_asked');
+  assert.equal(kinds.length, 2);
+});
+
+test('close: a closing session whose turn closes without the end mark is not asked, and keeps its slot until its deadline', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  close(sb.paths, id, T0 + 60_000);
+  const sent: string[] = [];
+  const send = sender(sent, () => {}, () => 0);
+  await clocked(sb, T0 + 70_000, reader(sb, () => UNMARKED), { send }).run();
+  assert.deepEqual(sent, []);
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'open');
+  assert.equal(activeCount(loadRegistry(sb.paths), T0 + 15 * MIN), 1);
+  assert.equal(journal(sb).some((e) => e.event === 'session.end_asked' || e.event === 'session.quiet_unmarked'), false);
 });

@@ -5,9 +5,10 @@
 // with the fixed category of why it asks.
 
 import type { WatchConfig } from './config.ts';
-import type { LogEvent } from './logparse.ts';
+import { lastMessage, lastMessageText, type LogEvent } from './logparse.ts';
 import { categoryText, describePermission, NO_RULES, type AskRules, type PermissionRequest } from './permission-request.ts';
 import type { State } from './registry.ts';
+import { END_PROBE_MARK } from './body.ts';
 import { isSystemUser, latestMarks, sinceLastUser } from './track.ts';
 
 /** A condition someone should hear about. `null` means nothing to report. */
@@ -25,6 +26,7 @@ export type NoticeKind =
   | 'silent'
   | 'silent_severe'
   | 'quiet_unmarked'
+  | 'deadline_closed'
   | 'turn_error';
 
 export interface Verdict {
@@ -33,6 +35,16 @@ export interface Verdict {
   reason: string;
   /** Only with waiting_permission: what the open prompt asks for. */
   permission?: PermissionRequest;
+  /**
+   * A turn that closed without the end mark, quiet, with nothing left to wake it, and not asked about yet:
+   * the key of its result, so kharos asks the session once whether it finished.
+   */
+  ask?: string;
+  /**
+   * kharos asked about the closed turn (or may not, past the deadline) and no end mark came: closed at
+   * the deadline, with the last message the session wrote.
+   */
+  unanswered?: { said: string | null };
 }
 
 export interface ClassifyInput {
@@ -50,6 +62,8 @@ export interface ClassifyInput {
   watch: WatchConfig;
   /** The ask rules an open permission prompt is compared with, to tell why it asks; read only when one is open. */
   rules?: () => AskRules;
+  /** The question kharos last sent about a closed turn: the key of that turn's result, when, and whether it failed. */
+  asked?: { for: string; at: number; failed: boolean } | null;
 }
 
 /** States that need to be seen on two reads in a row before they count. */
@@ -127,17 +141,85 @@ export function sameErrorRun(events: readonly LogEvent[]): number {
   return run;
 }
 
+// A task that goes on after the turn closes and can wake the session: a command run or moved to the
+// background, a Monitor, or an agent launched in the background. A foreground agent returns its report
+// inside the turn, so it wakes nothing. Observed: the call's result names the task, and the task's end
+// comes back as a `user` event `<task-notification> <task-id>ID</task-id> ... <status>completed</status>`
+// (or failed, or killed); a Monitor's last notice says it expired, and its start says when it would.
+// A session can also learn the end itself: a wait on the task's output returns
+// `<task_id>ID</task_id> ... <status>completed</status>` (or failed, or killed), and a stop that worked says
+// `Successfully stopped task: ID` (or `Successfully killed shell: ID`).
+const TASK_START_RE = /^(?:Command (?:is )?running in (?:the )?background|Command (?:was )?moved to (?:the )?background|Async agent launched)/i;
+const TASK_ID_RE = /^Command (?:is )?running in (?:the )?background with ID: ([\w-]+)|^Command (?:was )?moved to (?:the )?background with ID: ([\w-]+)|^Async agent launched[^]*?agentId: ([\w-]+)/i;
+const MONITOR_RE = /^Monitor started \(task ([\w-]+)(?:, expires in (\d+) ?m)?/i;
+const TASK_END_RE = /<task-id>([\w-]+)<\/task-id>[^]*?(?:<status>\w+<\/status>|Monitor expired)/;
+const TASK_OUTPUT_END_RE = /<task_id>([\w-]+)<\/task_id>[^]*?<status>(?:completed|failed|killed)<\/status>/;
+const TASK_STOPPED_RE = /Successfully (?:stopped task|killed shell): ([\w-]+)/;
+
 /**
- * Whether the turn started work that goes on after it closes and can wake it: a command run or moved to
- * the background, a Monitor, or an agent whose result says it was launched in the background.
- * A foreground agent returns its report inside the turn, so it wakes nothing.
+ * How many background tasks may still wake the session: started, by the results the log shows, with no
+ * notice of their end yet (a notification, a wait that saw it end, or a stop that worked), and for a
+ * Monitor not past the time it expires. A start whose result names no task cannot be matched with its
+ * end, so one in the current turn counts while that turn lasts.
  */
-export function startedBackground(turn: readonly LogEvent[]): boolean {
-  return turn.some(
-    (e) =>
-      (e.kind === 'tool_use' && (e.tool === 'Monitor' || /"run_in_background":\s*true/.test(e.text))) ||
-      (e.kind === 'tool_result' && /^(?:Command (?:is )?running in (?:the )?background|Command (?:was )?moved to the background|Async agent launched)/i.test(e.text)),
-  );
+export function openBackgroundTasks(events: readonly LogEvent[], now: number): number {
+  const open = new Map<string, number>();
+  for (const e of events) {
+    if (e.kind === 'tool_result') {
+      const monitor = MONITOR_RE.exec(e.text);
+      if (monitor) {
+        open.set(monitor[1] as string, monitor[2] ? e.t + Number(monitor[2]) * MIN : Infinity);
+        continue;
+      }
+      const id = TASK_ID_RE.exec(e.text);
+      const task = id?.[1] ?? id?.[2] ?? id?.[3];
+      if (task) {
+        open.set(task, Infinity);
+        continue;
+      }
+      const end = TASK_OUTPUT_END_RE.exec(e.text) ?? TASK_STOPPED_RE.exec(e.text);
+      if (end) open.delete(end[1] as string);
+    } else if (e.kind === 'user') {
+      const end = TASK_END_RE.exec(e.text);
+      if (end) open.delete(end[1] as string);
+    }
+  }
+  const unnamed = sinceLastUser(events).filter((e) => e.kind === 'tool_result' && TASK_START_RE.test(e.text) && !MONITOR_RE.test(e.text) && !TASK_ID_RE.test(e.text)).length;
+  return [...open.values()].filter((expires) => expires > now).length + unnamed;
+}
+
+/** The message kharos sent to ask whether the session finished, as the log shows it. */
+export function isEndProbe(e: LogEvent): boolean {
+  return e.kind === 'user' && e.text.trimStart().startsWith(END_PROBE_MARK);
+}
+
+const hhmm = (t: number) => new Date(t).toISOString().slice(11, 16);
+
+/**
+ * A turn that closed with no end mark, no question and no error, and stayed quiet with nothing left that
+ * could wake it. Only the session can say whether it finished, so kharos asks it once (`ask`): it ends
+ * only with KHAROS-DONE, works on, or gives no end mark, which leaves the turn closed with a warning.
+ * One question per quiet period: a turn the question started is asked about again only when the session
+ * worked in it. Past the deadline nothing is sent, since that would wake a session whose time is up.
+ */
+function endCheck(input: ClassifyInput, last: LogEvent, idleMin: number): Verdict | null {
+  const { events, now, watch } = input;
+  if (last.kind !== 'result' || idleMin <= watch.unmarked_end_min) return null;
+  if (openBackgroundTasks(events, now) > 0) return null;
+  const said = lastMessage(events);
+  const closed = { state: 'turn_closed', notice: 'quiet_unmarked', unanswered: { said: said ? lastMessageText(said) : null } } as const;
+  const person = events.findLastIndex((e) => e.kind === 'user' && !isSystemUser(e));
+  if (person >= 0 && isEndProbe(events[person] as LogEvent) && !events.slice(person + 1).some((e) => e.kind === 'tool_use')) {
+    return { ...closed, reason: 'turn closed without the end mark: kharos asked the session whether it finished, and it answered with no end mark and no work' };
+  }
+  const sent = input.asked?.for === last.key ? input.asked : null;
+  if (sent) {
+    if ((now - sent.at) / MIN <= watch.unmarked_end_min) return { state: 'turn_closed', notice: null, reason: 'turn closed without the end mark; kharos asked the session whether it finished' };
+    const why = sent.failed ? `kharos could not send it the question whether it finished at ${hhmm(sent.at)} UTC` : `kharos asked the session whether it finished at ${hhmm(sent.at)} UTC, and no answer came`;
+    return { ...closed, reason: `turn closed without the end mark: ${why}` };
+  }
+  if (now >= input.startedAt + input.deadlineMin * MIN) return { ...closed, reason: `turn closed without the end mark, quiet for ${Math.round(idleMin)} min, past the deadline: kharos does not ask a session whose time is up` };
+  return { state: 'turn_closed', notice: null, reason: `turn closed without the end mark, quiet for ${Math.round(idleMin)} min, with no background task left that could wake it; kharos asks the session whether it finished`, ask: last.key };
 }
 
 export function classify(input: ClassifyInput): Verdict {
@@ -200,6 +282,10 @@ export function classify(input: ClassifyInput): Verdict {
   // a turn that ended with an error: a warning, since a message can wake the session again
   if (last.kind === 'result' && /is_error=true/.test(last.text)) return { state: 'turn_closed', notice: 'turn_error', reason: 'turn ended with an error' };
 
+  // a closed turn, quiet, with nothing left to wake it: kharos asks the session whether it finished
+  const quiet = endCheck(input, last, idleMin);
+  if (quiet) return quiet;
+
   // past the deadline: raised once; while that notice is open, a later notice replaces it
   const ageMin = (now - input.startedAt) / MIN;
   const overdue: Verdict = { state: 'overdue', notice: 'overdue', reason: `running for ${Math.round(ageMin)} min, past the deadline of ${input.deadlineMin} min` };
@@ -222,14 +308,12 @@ function afterDeadline(input: ClassifyInput, turn: readonly LogEvent[], last: Lo
     return { state: 'provisioning', notice: null, reason: 'provisioning' };
   }
 
-  // a turn that closed without an end mark: not an end, since a background task it started can wake it;
-  // with no such task, nothing will, so it is said soon
+  // a turn that closed without an end mark, while a background task it started may still wake it: not
+  // an end; a long quiet is a warning. With no such task, endCheck asked the session whether it finished.
   if (last.kind === 'result') {
-    const waking = startedBackground(turn);
-    const limit = waking ? watch.quiet_end_min : watch.unmarked_end_min;
-    const why = waking ? 'a background task it started may still wake it' : 'it started no background task';
-    if (idleMin > limit) return { state: 'turn_closed', notice: 'quiet_unmarked', reason: `turn closed without an end mark, quiet for ${Math.round(idleMin)} min; ${why}` };
-    return { state: 'turn_closed', notice: null, reason: waking ? 'turn closed; a background task it started may wake it' : 'turn closed' };
+    if (openBackgroundTasks(events, now) === 0) return { state: 'turn_closed', notice: null, reason: 'turn closed' };
+    if (idleMin > watch.quiet_end_min) return { state: 'turn_closed', notice: 'quiet_unmarked', reason: `turn closed without an end mark, quiet for ${Math.round(idleMin)} min; a background task it started may still wake it` };
+    return { state: 'turn_closed', notice: null, reason: 'turn closed; a background task it started may wake it' };
   }
 
   // an open turn with no new event

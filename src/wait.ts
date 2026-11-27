@@ -9,15 +9,15 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeBin, readAuthStatus } from './account.ts';
-import { clean } from './body.ts';
-import { CommandError } from './commands.ts';
+import { clean, endProbe } from './body.ts';
+import { CommandError, sendMessage } from './commands.ts';
 import { expectFollower, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import type { Paths } from './paths.ts';
 import { findSession, isFollowed, loadRegistry, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { loadLogin, saveLogin } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
-import { appendMark, type AlertRef } from './events.ts';
+import { appendMark, buildEvent, enqueue, type AlertRef } from './events.ts';
 
 /** The plugin's root folder, which holds `scripts/kharos` and is loaded into each reader. */
 export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -120,6 +120,8 @@ export interface WaitOptions {
   sleep?: (ms: number) => Promise<void>;
   read?: Reader;
   account?: () => string | null;
+  /** Sends a message into the session (the question whether it finished); throws a CommandError when it does not go through. */
+  send?: (paths: Paths, id: string, text: string, env: NodeJS.ProcessEnv) => void;
   /**
    * Who reads the report: a kharos:follow agent, which is told how to start the next one, or the shell
    * loop of `kharos follow`, which goes on by itself.
@@ -170,7 +172,7 @@ function words(v: string): string {
 /** The alerts a report names besides the change it is about: the ones raised while no follower handed them on. */
 function earlier(s: Session, o: Omit<WaitOutcome, 'report'>): string[] {
   const current = s.notice;
-  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && a.event === `session.${s.state}`));
+  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && (a.event === `session.${s.state}` || a.event === 'session.deadline_closed')));
   if (rest.length === 0) return [];
   return [`Raised earlier, while no follower handed it on (${rest.length}): ${rest.map((a) => `${a.at.slice(11, 16)} UTC ${words(a.event)}: ${a.reason}`).join('; ')}`];
 }
@@ -188,6 +190,7 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
 function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; once it is fixed, the next turn end of a Claude Code session with kharos starts a follower again, or kharos follow ${s.id} --detach does now.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
+  if (o.key === 'end:closed' && s.last_notice?.event === 'session.deadline_closed') return `${s.id} was ${clean(s.unacked?.findLast((a) => a.event === 'session.deadline_closed')?.reason ?? 'closed at its deadline', 400)}\nkharos no longer follows it. Session: ${o.url ?? 'no link'}`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
   if (o.key === 'launch:queued') return `${s.id} is queued for a free watch.max_open slot, and fires by itself when one frees; /kharos:close ${s.id} cancels it.`;
@@ -384,6 +387,9 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           }
           interval = after.last_event_at !== lastEvent ? opts.minIntervalMs : Math.min(Math.max(interval * 2, opts.minIntervalMs), opts.maxIntervalMs);
         }
+        // The question whether it finished, when the read found a closed turn to ask about; its answer is
+        // read soon after.
+        if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;
         // A read that landed moves last_read_at, which sets the next one; anything else waits an interval.
         nextOwnRead = now() + (landed ? 0 : interval);
         continue;
@@ -394,6 +400,41 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   } finally {
     if (leased) releaseLease(paths, id, process.pid, handover ? now() : null);
   }
+}
+
+/**
+ * Asks a session whose turn closed without the end mark whether it finished, once per closed turn: the
+ * question is recorded before it is sent, so no process sends it twice, and a failed send is kept with its
+ * reason. The session ends only when it answers with KHAROS-DONE. Never for a session the person closed.
+ */
+function askIfDue(paths: Paths, id: string, now: number, opts: WaitOptions): boolean {
+  const iso = new Date(now).toISOString();
+  const due = updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id];
+    const key = s?.end_probe_due;
+    if (!s || !key || s.closing_at || s.step !== 'open' || s.end_probe?.for === key) return null;
+    s.end_probe = { for: key, at: iso };
+    s.end_probe_due = null;
+    return key;
+  });
+  if (!due) return false;
+  let error: string | null = null;
+  try {
+    (opts.send ?? sendMessage)(paths, id, endProbe(), opts.env);
+  } catch (err) {
+    if (!(err instanceof CommandError)) throw err;
+    error = err.message;
+  }
+  updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id];
+    if (!s) return;
+    if (error && s.end_probe?.for === due) s.end_probe.error = error;
+    const reason = error
+      ? `its turn closed without the end mark, and kharos could not ask it whether it finished (${error})`
+      : 'its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished';
+    enqueue(paths, [buildEvent(s, 'session.end_asked', s.state, reason, now)]);
+  });
+  return true;
 }
 
 /** A session that another login launched is invisible, never read as finished. */

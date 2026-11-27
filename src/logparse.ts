@@ -9,6 +9,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { PART_MARK } from './body.ts';
 import { appendLine } from './fsutil.ts';
 
 export interface LogEvent {
@@ -32,6 +33,11 @@ export interface LogPage {
 const LINE_RE = /^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)\] ([a-z_]+(?: (?!mcp__)[a-z_]+)*(?:\[[a-z_]+\])?)(?: ([A-Z][\w.-]*|mcp__[\w.-]+))?: ?(.*)$/;
 const CUT_RE = /… \[\+\d+ chars\]$/;
 
+/** An event's text without the note the service adds where it cut it. */
+export function withoutCutNote(text: string): string {
+  return text.replace(CUT_RE, '');
+}
+
 function eventKey(ts: string, kind: string, tool: string | null, text: string): string {
   return `${ts}|${kind}|${tool ?? ''}|${crypto.createHash('sha1').update(text).digest('hex').slice(0, 12)}`;
 }
@@ -54,9 +60,13 @@ export function parseLog(summary: string): LogPage {
     const kind = m[2] as string;
     const tool = m[3] ?? null;
     const text = m[4] ?? '';
-    events.push({ t: Date.parse(ts), ts, kind, tool, text, truncated: CUT_RE.test(text), key: '', seq: events.length });
+    events.push({ t: Date.parse(ts), ts, kind, tool, text, truncated: false, key: '', seq: events.length });
   }
-  for (const e of events) e.key = eventKey(e.ts, e.kind, e.tool, e.text);
+  // The note that the service cut a message ends its last line, so it is looked for once the lines are joined.
+  for (const e of events) {
+    e.truncated = CUT_RE.test(e.text);
+    e.key = eventKey(e.ts, e.kind, e.tool, e.text);
+  }
   return { events, partial };
 }
 
@@ -132,4 +142,58 @@ export function shownText(raw: string, max: number): string {
   // eslint-disable-next-line no-control-regex
   const text = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ');
   return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
+/** A thinking step: the log shows it as this placeholder, never its text. */
+function isThinking(e: LogEvent): boolean {
+  return /^\s*\[thinking\]\s*$/.test(e.text);
+}
+
+/**
+ * The session's last message: its last assistant event that is not a thinking step, or the last result
+ * line when the log has none. The result line repeats the last message and is cut sooner, so the message
+ * itself is preferred.
+ */
+export function lastMessage(events: readonly LogEvent[]): LogEvent | null {
+  return events.findLast((e) => e.kind === 'assistant' && !isThinking(e)) ?? events.findLast((e) => e.kind === 'result') ?? null;
+}
+
+/** The text of the last message: a result line keeps only what follows its status (`success ... — <text>`). */
+export function lastMessageText(e: LogEvent): string {
+  const text = withoutCutNote(e.text);
+  return e.kind === 'result' ? text.replace(/^[^—]*— /, '') : text;
+}
+
+const PART_RE = new RegExp(`^\\s*${PART_MARK} (\\d{1,3})/(\\d{1,3})\\b[ \\t]*\\n?`);
+
+export interface ReportParts {
+  /** How many parts the report has, as its latest part says. */
+  total: number;
+  /** The parts found, in order, each with its text after the mark and whether the log cut it. */
+  parts: { n: number; text: string; cut: boolean; ts: string }[];
+  /** The part numbers the log does not have. */
+  missing: number[];
+}
+
+/**
+ * The numbered parts of the session's final report (`KHAROS-PART i/n` at the start of a message), from
+ * every turn, so a part sent again later fills its place. The latest part says how many there are; for
+ * each number the latest copy counts. Null when the log has no part.
+ */
+export function reportParts(events: readonly LogEvent[]): ReportParts | null {
+  const found = events.filter((e) => e.kind === 'assistant').flatMap((e) => {
+    const m = PART_RE.exec(e.text);
+    return m ? [{ n: Number(m[1]), of: Number(m[2]), e, body: e.text.slice(m[0].length) }] : [];
+  });
+  const latest = found.at(-1);
+  if (!latest || latest.of < 1) return null;
+  const total = latest.of;
+  const parts: ReportParts['parts'] = [];
+  const missing: number[] = [];
+  for (let n = 1; n <= total; n++) {
+    const copy = found.findLast((p) => p.of === total && p.n === n);
+    if (copy) parts.push({ n, text: withoutCutNote(copy.body).trim(), cut: copy.e.truncated, ts: copy.e.ts });
+    else missing.push(n);
+  }
+  return { total, parts, missing };
 }

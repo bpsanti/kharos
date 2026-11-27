@@ -15,7 +15,7 @@ export const MARK_SCHEMA = 'kharos.mark.v1';
 
 export type EventClass = 'progress' | 'needs_you' | 'terminal';
 
-export type EventName = `session.${NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened'}`;
+export type EventName = `session.${NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened' | 'end_asked'}`;
 
 export interface KharosEvent {
   schema: typeof EVENT_SCHEMA;
@@ -45,11 +45,11 @@ export interface KharosEvent {
   permission?: { tool: string; category: PermissionCategory };
 }
 
-const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
+const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked', 'deadline_closed']);
 
 export function classOf(name: EventName): EventClass {
-  const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened';
-  if (kind === 'opened' || kind === 'back' || kind === 'queued' || kind === 'pr_opened') return 'progress';
+  const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened' | 'end_asked';
+  if (kind === 'opened' || kind === 'back' || kind === 'queued' || kind === 'pr_opened' || kind === 'end_asked') return 'progress';
   if (kind === 'unfollowed' || kind === 'not_fired') return 'needs_you';
   return TERMINAL.has(kind) ? 'terminal' : 'needs_you';
 }

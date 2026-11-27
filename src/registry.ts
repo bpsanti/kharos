@@ -126,6 +126,14 @@ export interface Session {
   no_push?: boolean;
   /** Present on a launch made with --queue that found every slot taken: its place in the queue and its fires. */
   queue?: QueueRecord;
+  /**
+   * The question kharos sent after a turn closed without the end mark, quiet, with nothing left to wake it:
+   * the key of that turn's result, when it was sent (written before the send, so it goes once), and why the
+   * send failed when it did.
+   */
+  end_probe?: { for: string; at: string; error?: string | null } | null;
+  /** A closed turn a read found to ask about: the key of its result. The follower that holds the lease sends the question. */
+  end_probe_due?: string | null;
   /** Alerts (notices and ends) that no follower handed on yet, oldest first; the next follower sends them. */
   unacked?: AlertRef[];
   /** What automatic permission preflight did at launch; absent or null when it was off. */

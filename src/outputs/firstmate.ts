@@ -54,6 +54,8 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
   switch (kind) {
     case 'opened':
       return `working ${at}: ${text(`kharos ${ev.session} cloud session opened (${ev.title})`)}${where}`;
+    case 'end_asked':
+      return `note ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
     case 'pr_opened':
       return `note ${at}: ${text(`kharos ${ev.session} opened a pull request (${ev.title})`)}${pr}`;
     case 'queued':
@@ -72,6 +74,7 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
     }
     case 'failed':
     case 'ended_unmarked':
+    case 'deadline_closed':
       if (mode === 'dedicated') return `failed ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
       return `blocked ${key} ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
     default:

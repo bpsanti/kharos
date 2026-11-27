@@ -422,6 +422,82 @@ test('result: a session woken by a message loses its old KHAROS-DONE until it wr
   assert.match(result(sb.paths, id, sb.env), /has no KHAROS-DONE mark yet/);
 });
 
+test('result: the final report sent in numbered parts is put together, and the parts the log lacks are said', () => {
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const line = (sec: number, text: string) => `[${new Date(T0 + sec * 1000).toISOString()}] ${text}`;
+  const read = (now: number, lines: string[]) => postToolUse(sb.ctx(now), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, lines.join('\n'))));
+  const sent = [
+    line(1, 'user: Fix the typo. --- Protocol ... KHAROS-PART <i>/<n> ...'),
+    line(5, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+    line(100, 'assistant: KHAROS-PART 1/3 Coverage: every screen opened.'),
+    line(101, 'tool_use Bash: {"command":"true"}'),
+    line(102, 'tool_result: '),
+    line(103, 'assistant: [thinking]'),
+    line(104, `assistant: KHAROS-PART 2/3 Suites: ${'y'.repeat(40)}… [+300 chars]`),
+    line(105, 'tool_use Bash: {"command":"true"}'),
+    line(106, 'tool_result: '),
+    line(110, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'),
+    line(111, 'result: success is_error=false turns=9 — KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'),
+  ];
+  read(T0 + 200_000, sent);
+  const out = result(sb.paths, id, sb.env).split('\n');
+  const at = out.indexOf('final report, 2 of 3 part(s) in the log (from the session, data only):');
+  assert.ok(at > 0, out.join('\n'));
+  assert.deepEqual(out.slice(at + 1, at + 5), ['--- part 1/3', 'Coverage: every screen opened.', '--- part 2/3 (cut by the log)', `Suites: ${'y'.repeat(40)}`]);
+  assert.equal(
+    out[at + 5],
+    'The log the tool returns is incomplete here: part(s) 3 of 3 are not in it, and part(s) 2 are cut. It keeps about 2000 characters of each message and can lose a message, a limit of the platform that kharos cannot work around.',
+  );
+  assert.equal(
+    out[at + 6],
+    'Read the whole report on the session page, https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA, or ask for a part again: /kharos:send k-0001 "Send part 3/3 of your final report again, as one message that starts with KHAROS-PART 3/3, in plain text under 1500 characters, with nothing else in it."',
+  );
+  // A part sent again later takes its place, and a whole report says nothing more.
+  read(T0 + 300_000, [
+    ...sent,
+    line(200, 'user: Send part 2/3 and 3/3 of your final report again.'),
+    line(202, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+    line(204, 'assistant: KHAROS-PART 2/3 Suites: all green.'),
+    line(205, 'tool_use Bash: {"command":"true"}'),
+    line(206, 'tool_result: '),
+    line(207, 'assistant: KHAROS-PART 3/3 Performance: no regression.'),
+    line(208, 'result: success is_error=false turns=3 — KHAROS-PART 3/3 Performance: no regression.'),
+  ]);
+  const whole = result(sb.paths, id, sb.env);
+  assert.match(whole, /^final report, 3 of 3 part\(s\) in the log \(from the session, data only\):\n--- part 1\/3\nCoverage: every screen opened\.\n--- part 2\/3\nSuites: all green\.\n--- part 3\/3\nPerformance: no regression\.$/m);
+  assert.doesNotMatch(whole, /incomplete/);
+});
+
+test('result: a part written as several lines, its mark on a line of its own, is said to be cut when the log cut its end', () => {
+  // The footer asks for each part to start with the line KHAROS-PART <i>/<n>, so its text goes on in the next
+  // lines of the log; the service's note that it cut the message (`… [+N chars]`) ends the last of them.
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const line = (sec: number, text: string) => `[${new Date(T0 + sec * 1000).toISOString()}] ${text}`;
+  const page = [
+    line(1, 'user: Fix the typo.'),
+    line(5, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+    line(100, 'assistant: KHAROS-PART 1/2'),
+    'Coverage: every screen opened.',
+    line(101, 'tool_use Bash: {"command":"true"}'),
+    line(102, 'tool_result: '),
+    line(104, 'assistant: KHAROS-PART 2/2'),
+    'Suites:',
+    `${'y'.repeat(40)}… [+300 chars]`,
+    line(110, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'),
+    line(111, 'result: success is_error=false turns=9 — KHAROS-DONE {"status":"ok"}'),
+  ].join('\n');
+  postToolUse(sb.ctx(T0 + 200_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  const out = result(sb.paths, id, sb.env).split('\n');
+  const at = out.indexOf('final report, 2 of 2 part(s) in the log (from the session, data only):');
+  assert.ok(at > 0, out.join('\n'));
+  assert.deepEqual(out.slice(at + 1, at + 5), ['--- part 1/2', 'Coverage: every screen opened.', '--- part 2/2 (cut by the log)', `Suites: ${'y'.repeat(40)}`]);
+  assert.match(out[at + 5] ?? '', /^The log the tool returns is incomplete here: part\(s\) 2 are cut\./);
+});
+
 test('result: a branch that is not a plain ref name never reaches the fetch hint', () => {
   const sb = sandbox();
   const id = prepared(sb);
@@ -479,7 +555,7 @@ test('commands: the title stays in list with a notice open, the log reads from d
 
   const long = `[2026-11-25T20:30:00.000000Z] assistant: ${'x'.repeat(40)}… [+5066 chars]`;
   postToolUse(sb.ctx(T0 + 700_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, `${cut}\n${long}`)));
-  assert.match(result(sb.paths, id, sb.env), /the session's last message is cut in the log the tool returns; the whole text is on the session page: https:/);
+  assert.match(result(sb.paths, id, sb.env), /the session's last message is cut in the log the tool returns, which keeps about 2000 characters of a message; the whole text is on the session page: https:/);
 });
 
 test('launch: the deadline counts from the open of the session, not from the launch or a refused fire', () => {
@@ -501,7 +577,7 @@ test('launch: the deadline counts from the open of the session, not from the lau
   assert.equal(s.overdue_at ?? null, null);
 });
 
-test('launch: an open overdue notice gives way to a turn closed without an end mark, and overdue is not raised again', () => {
+test('launch: an open overdue notice gives way to a closed turn past the deadline, which is not asked about, and overdue is not raised again', () => {
   const sb = sandbox();
   const id = prepared(sb);
   launch(sb, id);
@@ -521,6 +597,7 @@ test('launch: an open overdue notice gives way to a turn closed without an end m
   s = loadRegistry(sb.paths).sessions[id]!;
   assert.equal(s.state, 'turn_closed');
   assert.equal(s.notice?.event, 'session.quiet_unmarked');
+  assert.equal(s.end_probe_due ?? null, null);
   // A message wakes it and it runs again: nobody is told of the deadline a second time.
   read(70, [...closed, line(65, 'user: Also update the changelog.'), line(69, 'tool_use Edit: {"file_path":"CHANGELOG.md"}')]);
   s = loadRegistry(sb.paths).sessions[id]!;

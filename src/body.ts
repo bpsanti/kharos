@@ -21,9 +21,31 @@ export function parkedRunAt(now: number): string {
   return d.toISOString().replace('.000Z', 'Z');
 }
 
-/** The service cuts each message of the log the monitor reads: a long report goes where it stays whole. */
-export const LENGTH_LINE =
-  '- The monitor reads a log that cuts each message to about 2000 characters: put a long report in the pull request description or in a file on your branch, and keep each message, the last one included, shorter than that.';
+/** The mark that starts each part of a final report; /kharos:result puts the parts together. */
+export const PART_MARK = 'KHAROS-PART';
+
+/** The most characters a report part should have: under the about 2000 the log keeps of a message. */
+export const PART_MAX = 1500;
+
+/**
+ * The service cuts each message of the log the monitor reads to about 2000 characters, and the log never
+ * shows what a session only thought. So a long report goes in numbered parts, each a message of its own,
+ * and, when the session pushes, also where it stays whole.
+ */
+export function reportLines(push: boolean): string[] {
+  return [
+    `- The monitor reads a log that keeps about 2000 characters of each message, and only what you write as visible text. Send your final report before the end mark in numbered parts: each part a message of its own that starts with the line ${PART_MARK} <i>/<n> and holds at most ${PART_MAX} characters of plain text, with a call that does nothing (such as the Bash command true) after each part so the next one starts a new message. A short report is one part, ${PART_MARK} 1/1.`,
+    ...(push ? ['- Also put the whole report in the pull request description or in a file on your branch, where it stays whole.'] : []),
+  ];
+}
+
+/** How the message starts that asks a session whose turn closed without the end mark whether it finished; the log shows it so. */
+export const END_PROBE_MARK = 'kharos: your turn closed without the end mark.';
+
+/** The one message kharos sends a session whose turn closed without the end mark, quiet, with nothing left to wake it. */
+export function endProbe(): string {
+  return `${END_PROBE_MARK} If you have finished, send your final report in ${PART_MARK} messages, then the ${DONE_MARK} line as your last message. If not, go on with your work.`;
+}
 
 /** The footer line a `--no-push` launch leaves out. */
 export const PUSH_LINE = '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.';
@@ -38,7 +60,7 @@ export function footer(extraLines: readonly string[] = [], push = true): string 
     `${DONE_MARK} {"status":"ok|failed","pr":"<url or null>","branch":"<name or null>","summary":"<up to 200 characters>"}`,
     `- If you need an answer to go on, send one last message that contains only this line, then stop and wait for the reply:`,
     `${QUESTION_MARK} {"question":"<up to 300 characters>"}`,
-    LENGTH_LINE,
+    ...reportLines(push),
     ...(push ? [PUSH_LINE] : []),
     ...extraLines,
   ].join('\n');

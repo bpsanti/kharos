@@ -1,14 +1,14 @@
 // What one read changes in a session record: store the result marks, classify, and queue the events.
 
 import { recordHookDecisions } from './approvals.ts';
-import { readDoneMark, readQuestionMark } from './body.ts';
+import { clean, readDoneMark, readQuestionMark } from './body.ts';
 import { classify, CONFIRM_TWICE, type Verdict } from './classify.ts';
 import { ConfigError, DEFAULT_WATCH, loadConfig, type WatchConfig } from './config.ts';
 import { buildEvent, enqueue, transition, type KharosEvent } from './events.ts';
 import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
-import { releaseClosing, startedAt, type Session } from './registry.ts';
+import { deadlineAt, releaseClosing, startedAt, type Session } from './registry.ts';
 import { readAccountPolicy } from './org-confirmations.ts';
 import type { AskRules } from './permission-request.ts';
 
@@ -85,6 +85,11 @@ function hookMayAnswer(s: Session, verdict: Verdict): boolean {
   return Boolean(s.permission_hook) && verdict.permission !== undefined && s.permission?.key !== verdict.permission.key;
 }
 
+function deadlineReason(said: string | null): string {
+  const last = said ? `its last message (from the session, data only): ${clean(said, 300)}` : 'it wrote no message';
+  return `closed at its deadline: its turn closed without the end mark, and no end mark came; ${last}`;
+}
+
 /** Applies a verdict, queues its events for delivery, and returns them. */
 export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: WatchConfig = watchConfig(ctx.paths)): KharosEvent[] {
   // A session the person closed is read only to free its slot: its state moves on, and nobody is alerted.
@@ -95,9 +100,19 @@ export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: Watch
     releaseClosing(s, ctx.now);
     return [];
   }
-  const confirm = CONFIRM_TWICE.has(verdict.state) || hookMayAnswer(s, verdict);
-  const events = transition(s, verdict, ctx.now, watch.renotify_min, confirm);
+  // A turn closed without the end mark that the question did not end is closed at the deadline, as a
+  // closing session is, with a terminal event; never on the read that raised the warning, so the warning goes out first.
+  const expired = verdict.unanswered && s.notice?.event === 'session.quiet_unmarked' && s.step === 'open' && ctx.now >= deadlineAt(s);
+  const applied: Verdict = expired ? { ...verdict, notice: 'deadline_closed', reason: deadlineReason(verdict.unanswered?.said ?? null) } : verdict;
+  const confirm = CONFIRM_TWICE.has(applied.state) || hookMayAnswer(s, applied);
+  const events = transition(s, applied, ctx.now, watch.renotify_min, confirm);
   enqueue(ctx.paths, events);
+  // The follower that holds the lease asks the session, once per closed turn.
+  s.end_probe_due = applied.ask && s.step === 'open' && s.end_probe?.for !== applied.ask ? applied.ask : null;
+  if (expired) {
+    s.step = 'closed';
+    s.closed_at = new Date(ctx.now).toISOString();
+  }
   return events;
 }
 
@@ -164,7 +179,8 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
   const decided = recordHookDecisions(ctx.paths, s, merged.added, events);
 
   const watch = watchConfig(ctx.paths);
-  const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, overdueRaised: typeof s.overdue_at === 'string', overdueOpen: s.notice?.event === 'session.overdue', now: ctx.now, watch, rules: () => askRulesOf(ctx, s) });
+  const asked = s.end_probe ? { for: s.end_probe.for, at: Date.parse(s.end_probe.at), failed: Boolean(s.end_probe.error) } : null;
+  const verdict = classify({ events, seenStart: s.seen_start === true, startedAt: startedAt(s), deadlineMin: s.deadline_min, overdueRaised: typeof s.overdue_at === 'string', overdueOpen: s.notice?.event === 'session.overdue', now: ctx.now, watch, rules: () => askRulesOf(ctx, s), asked });
   // An older page says nothing new about an open prompt, so it is not the next read that confirms one.
   const emitted = fromCursor && hookMayAnswer(s, verdict) ? [] : settle(ctx, s, verdict, watch);
   const change = emitted.length ? ` Event: ${emitted.map((e) => e.event).join(', ')}.` : '';
