@@ -45,8 +45,8 @@ So a read is a minimal `claude -p`, a reader:
 - started with `KHAROS_ROLE=reader`, so the hook denies it any launch, fire or change of a kharos routine.
 
 The interval starts at 15 seconds, doubles while nothing new comes, stops at 60 seconds, and goes back to 15 seconds when new events come.
-It is counted from the moment on the 15 second grid at or before the read began, and lands on a grid of the interval that every follower shares (every 15 seconds, on the half minute, or on the minute), so the followers whose sessions are due in the same span are due at the same moment.
-So a read may come sooner than its interval after the previous read began, to land on that grid, but never later.
+It is counted from when the last read's answer came, as a read alone did, and moved to the next moment on a grid of the interval that every follower shares (every 15 seconds, on the half minute, or on the minute), so the followers whose sessions are due in the same span are due at the same moment.
+To stay on that grid, a read at 30 or 60 seconds may come up to 15 seconds sooner than its interval after the last answer, never sooner than 15 seconds after it.
 `kharos wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s]` takes other values for tests.
 
 ### Read rounds

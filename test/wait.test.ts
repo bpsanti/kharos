@@ -422,7 +422,7 @@ test('wait: a slow reader is stopped at the deadline, so the wait never outlasts
   const o = await wait(sb.paths, {
     id: 'k-0001',
     since: null,
-    maxMs: 70_000,
+    maxMs: 80_000,
     minIntervalMs: 15_000,
     maxIntervalMs: 60_000,
     env: sb.env,
@@ -439,8 +439,8 @@ test('wait: a slow reader is stopped at the deadline, so the wait never outlasts
     },
   });
   assert.equal(o.changed, false);
-  assert.ok(t - start <= 70_000, `the wait ran ${(t - start) / 1000} s`);
-  assert.equal(o.waited_s, 70);
+  assert.ok(t - start <= 80_000, `the wait ran ${(t - start) / 1000} s`);
+  assert.equal(o.waited_s, 80);
   assert.equal(timeouts[0], 50_000);
   assert.ok(timeouts.length >= 2 && timeouts.slice(1).every((ms) => ms <= 20_000), `timeouts ${timeouts.join(', ')}`);
   assert.equal(liveFollowers(sb.paths, t + HANDOVER_MS).size, 0);
@@ -659,7 +659,7 @@ test('wait: a session seen archived in the round its quiet turn becomes due for 
   assert.deepEqual(events.map((e) => e.event), ['session.ended_unmarked']);
 });
 
-test('wait: a first read off the grid is followed by the next one on the grid, sooner than the shortest interval after it began and never later', async () => {
+test('wait: a first read off the grid is followed by the next one on the grid, at least the shortest interval after its answer', async () => {
   const sb = sandbox();
   openOne(sb);
   const starts: number[] = [];
@@ -668,13 +668,14 @@ test('wait: a first read off the grid is followed by the next one on the grid, s
     starts.push(now - 4_000);
     return inner(p, rs, env, now, ms);
   };
-  // The session was never read, so the wait reads at once, 8 s after a 15 s mark.
-  await clocked(sb, at('2026-11-25T19:01:08Z'), read, { since: 'ok', maxMs: 20_000 }).run();
+  // The session was never read, so the wait reads at once, 8 s after a 15 s mark; its answer comes at :12.
+  await clocked(sb, at('2026-11-25T19:01:08Z'), read, { since: 'ok', maxMs: 30_000 }).run();
   assert.equal(starts[0], at('2026-11-25T19:01:08Z'));
-  assert.equal(starts[1], at('2026-11-25T19:01:15Z'));
+  // 15 s after the answer is :27, and the next 15 s mark :30.
+  assert.equal(starts[1], at('2026-11-25T19:01:30Z'));
 });
 
-test('wait: a new wait reads an interval after the round of the last read, not after its answer came', async () => {
+test('wait: a new wait reads at least an interval after the last answer came, on the grid', async () => {
   const sb = sandbox();
   openOne(sb);
   // The last read's round was on the 15 s grid; its answer came 10 s later.
@@ -686,8 +687,9 @@ test('wait: a new wait reads an interval after the round of the last read, not a
     starts.push(now - 4_000);
     return inner(p, rs, env, now, ms);
   };
-  await clocked(sb, tick + 10_000, read, { since: 'ok', maxMs: 20_000 }).run();
-  assert.equal(starts[0], tick + 15_000);
+  await clocked(sb, tick + 10_000, read, { since: 'ok', maxMs: 30_000 }).run();
+  // 15 s after the answer is tick + 25 s, and the next 15 s mark tick + 30 s, as a read alone would wait at least.
+  assert.equal(starts[0], tick + 30_000);
 });
 
 test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline with a terminal event', async () => {

@@ -79,15 +79,6 @@ export function roundTimeout(reads: number): number {
 }
 
 /**
- * The moment at or before `t` on the grid of `stepMs`, counted from the epoch: the moment a read that began
- * or landed at `t` counts from. Followers schedule their reads on this shared grid, so the ones whose sessions
- * are due about the same time are due at the same moment, and a read is never counted from after it began.
- */
-export function onGrid(t: number, stepMs: number): number {
-  return stepMs > 0 ? Math.floor(t / stepMs) * stepMs : t;
-}
-
-/**
  * The reader identity a round is for: only followers that would start the same reader (the same Claude
  * account folder and the same binary) share one.
  */
@@ -171,8 +162,6 @@ export interface RoundRequest {
   seen: string | null;
   /** When the wait must return. */
   deadline: number;
-  /** The grid step of the follower's schedule, its shortest interval. */
-  stepMs: number;
 }
 
 export interface RoundCtx {
@@ -186,8 +175,8 @@ export interface RoundCtx {
 
 export interface RoundPart {
   run: ReaderRun;
-  /** The moment on the grid at or before this follower asked for its read, which it counts its next read from. */
-  tick: number;
+  /** When the round's reader ended, the same for every follower of the round, or when this follower gave it up. */
+  ended: number;
   /** The sessions the round read, this one included. */
   sessions: number;
   /** Whether the round's reader was started: a round lost, or cut by the wait's deadline before it started, made no read. */
@@ -232,26 +221,27 @@ export async function readInRound(paths: Paths, req: RoundRequest, ctx: RoundCtx
     f.rounds.push(r);
     return r.id;
   });
-  return takePart(paths, id, member, onGrid(t, req.stepMs), ctx);
+  return takePart(paths, id, member, ctx);
 }
 
-async function takePart(paths: Paths, id: string, me: Member, tick: number, ctx: RoundCtx): Promise<RoundPart> {
+async function takePart(paths: Paths, id: string, me: Member, ctx: RoundCtx): Promise<RoundPart> {
   let lastBeat = ctx.now();
   let sessions = 1;
   let ran = false;
-  const part = (run: ReaderRun): RoundPart => ({ run, tick, sessions, ran });
+  const part = (run: ReaderRun, ended = ctx.now()): RoundPart => ({ run, ended, sessions, ran });
   for (;;) {
     const t = ctx.now();
     const r = loadRounds(paths).rounds.find((x) => x.id === id);
     if (!r) return part(failed('the read round was lost before it ended'));
     sessions = r.members.length;
     ran = r.state !== 'forming';
-    if (r.state === 'done') return part(r.results?.[me.session] ?? failed(`the read round gave no result for ${me.session}`));
+    if (r.state === 'done') return part(r.results?.[me.session] ?? failed(`the read round gave no result for ${me.session}`), r.ended ?? t);
     if (r.state === 'forming' && t >= r.starts) {
       const claimed = claim(paths, id, me, t);
       if (claimed) {
         ran = true;
-        return part(await run(paths, claimed, me, ctx));
+        const out = await run(paths, claimed, me, ctx);
+        return part(out.run, out.ended);
       }
     }
     if (r.state === 'running') {
@@ -288,7 +278,7 @@ function claim(paths: Paths, id: string, me: Member, t: number): Round | null {
  * Runs the round's reader, then writes each member's result: its session was read when its last_read_at
  * moved, and its share of the cost follows its share of the reads.
  */
-async function run(paths: Paths, r: Round, me: Member, ctx: RoundCtx): Promise<ReaderRun> {
+async function run(paths: Paths, r: Round, me: Member, ctx: RoundCtx): Promise<{ run: ReaderRun; ended: number }> {
   const reads = r.members.flatMap((m) => m.reads);
   let out: ReaderRun;
   try {
@@ -316,7 +306,7 @@ async function run(paths: Paths, r: Round, me: Member, ctx: RoundCtx): Promise<R
     cur.cost_usd = out.cost_usd;
     cur.error = out.error;
   });
-  return results[me.session] ?? failed(`the read round gave no result for ${me.session}`);
+  return { run: results[me.session] ?? failed(`the read round gave no result for ${me.session}`), ended: t };
 }
 
 const READER_PROMPT =

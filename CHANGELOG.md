@@ -5,7 +5,7 @@
 - The followers due at the same moment share one reader process instead of starting one each: each read round makes every due session's `RemoteTrigger` calls in a single `claude -p`, so a machine with many open sessions runs one reader at a time rather than one per session.
   Only followers of the same Claude account (`CLAUDE_CONFIG_DIR`) share a round, and a round holds at most 20 sessions; more split into a few.
   The hook stores and classifies each answer as before, an answer that fails is recorded for its session alone, and a session the reader made no call for is a failed read for that session only.
-  The read interval (15 to 60 seconds) is now counted from when a read began, on a grid the followers share, so the sessions due about the same time stay in one round; `reader_cost_usd` is each follower's share of its rounds.
+  The read interval (15 to 60 seconds) is still counted from when the last answer came, and moved to a grid the followers share, so the sessions due about the same time stay in one round; `reader_cost_usd` is each follower's share of its rounds.
   The rounds are kept in `rounds.json` of the state folder for a minute after they end.
   A follower started by an earlier kharos still reads on its own.
 

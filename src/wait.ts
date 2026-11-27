@@ -16,7 +16,7 @@ import { loadLogin, saveLogin } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
 import { appendMark, buildEvent, enqueue, type AlertRef } from './events.ts';
-import { headlessRead, onGrid, PLUGIN_ROOT, readInRound, type Read, type Reader } from './round.ts';
+import { headlessRead, PLUGIN_ROOT, readInRound, type Read, type Reader } from './round.ts';
 
 export { headlessRead, PLUGIN_ROOT, READER_ROLE, ROLE_ENV, type Read, type Reader, type ReaderRun } from './round.ts';
 
@@ -46,15 +46,14 @@ export function currentAccount(paths: Paths, now: number, env: NodeJS.ProcessEnv
 }
 
 /**
- * When the next read is due after one at `last`: the latest moment on the grid of the interval that is not
- * past an interval after it, so a read is never further apart than the interval, and the followers at the
- * same interval, whose grids the shorter intervals divide, read in one round. When that moment comes sooner
- * than the shortest interval after `last`, the read waits for the shortest interval, and the one after it is on
- * the grid.
+ * When the next read is due after the answer of one came at `last`: the first moment on the grid of the
+ * interval that is an interval after it, less one shortest interval but never less than the shortest
+ * interval. The followers at the same interval, whose grids the shorter intervals divide, then read in one
+ * round, and a read never comes sooner than the shortest interval after the last answer.
  */
 export function dueAfter(last: number, interval: number, minInterval: number): number {
-  const on = interval > 0 ? Math.floor((last + interval) / interval) * interval : last + interval;
-  return on - last >= minInterval || minInterval <= 0 ? on : Math.ceil((last + minInterval) / minInterval) * minInterval;
+  const gap = Math.max(interval - minInterval, minInterval);
+  return interval > 0 ? Math.ceil((last + gap) / interval) * interval : last + gap;
 }
 
 /** How often a wait looks at the registry between its own reads, to see what another process recorded. */
@@ -264,9 +263,10 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   let cost = 0;
   let failures = 0;
   let lastError = '';
-  // The moment on the grid of this wait's last read that landed, and the last_read_at it left: while that
-  // read is still the last, the next one is counted from that moment rather than from when its answer came.
-  let anchor: { tick: number; landed: string | null } | null = null;
+  // When the round of this wait's last read that landed ended, and the last_read_at it left: while that read
+  // is still the last, the next one is counted from the round's end, the same for all its followers, rather
+  // than from when this session's own answer came.
+  let anchor: { ended: number; landed: string | null } | null = null;
   let leased = false;
   // A wait that returns for the next one to go on hands its lease over; an end or an error gives it back.
   let handover = false;
@@ -285,27 +285,27 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       // The lease says this wait follows the session from its first look, not only from its first read.
       const holds = takeLease(paths, id, t, process.pid, opts.follower ?? 'agent');
       leased ||= holds;
-      const lastRead = anchor && anchor.landed === s.last_read_at ? anchor.tick : s.last_read_at ? onGrid(Date.parse(s.last_read_at), opts.minIntervalMs) : 0;
+      const lastRead = anchor && anchor.landed === s.last_read_at ? anchor.ended : s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
       const dueAt = fresh ? nextOwnRead : Math.max(dueAfter(lastRead, interval, opts.minIntervalMs), nextOwnRead);
       if (holds && t >= dueAt) {
         const lastEvent = s.last_event_at;
         let landed = false;
+        let ended: number | null = null;
         if (!switchedAccount(paths, s, t, opts)) {
           const planned = readsFor(s);
-          let tick: number | null = null;
           let ran = false;
           if (planned.length > 0) {
             const part = await readInRound(
               paths,
-              { session: id, reads: planned, seen: s.last_read_at, deadline: start + opts.maxMs, stepMs: opts.minIntervalMs },
+              { session: id, reads: planned, seen: s.last_read_at, deadline: start + opts.maxMs },
               { env: opts.env, now, sleep, read, beat: (at) => takeLease(paths, id, at, process.pid, opts.follower ?? 'agent') },
             );
             ran = part.ran;
             if (ran) reads += planned.length;
             cost += part.run.cost_usd ?? 0;
             if (!part.run.ok) lastError = part.run.error ?? 'the reader failed';
-            tick = part.tick;
+            ended = part.ended;
           }
           const after = find();
           // A read that never reached the hook leaves last_read_at as it was.
@@ -317,7 +317,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           } else {
             failures = 0;
             landed = true;
-            anchor = tick === null ? null : { tick, landed: after.last_read_at };
+            anchor = ended === null ? null : { ended, landed: after.last_read_at };
           }
           interval = after.last_event_at !== lastEvent ? opts.minIntervalMs : Math.min(Math.max(interval * 2, opts.minIntervalMs), opts.maxIntervalMs);
         }
@@ -326,7 +326,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
         if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;
         // A read that landed moves last_read_at, which sets the next one; anything else waits an interval,
         // to the grid's next round.
-        nextOwnRead = landed ? now() : dueAfter(now(), interval, opts.minIntervalMs);
+        nextOwnRead = landed ? now() : dueAfter(ended ?? now(), interval, opts.minIntervalMs);
         continue;
       }
       const left = opts.maxMs - (now() - start);
