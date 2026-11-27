@@ -133,15 +133,21 @@ export function sameErrorRun(events: readonly LogEvent[]): number {
 // inside the turn, so it wakes nothing. Observed: the call's result names the task, and the task's end
 // comes back as a `user` event `<task-notification> <task-id>ID</task-id> ... <status>completed</status>`
 // (or failed, or killed); a Monitor's last notice says it expired, and its start says when it would.
+// A session can also learn the end itself: a wait on the task's output returns
+// `<task_id>ID</task_id> ... <status>completed</status>` (or failed, or killed), and a stop that worked says
+// `Successfully stopped task: ID` (or `Successfully killed shell: ID`).
 const TASK_START_RE = /^(?:Command (?:is )?running in (?:the )?background|Command (?:was )?moved to (?:the )?background|Async agent launched)/i;
 const TASK_ID_RE = /^Command (?:is )?running in (?:the )?background with ID: ([\w-]+)|^Command (?:was )?moved to (?:the )?background with ID: ([\w-]+)|^Async agent launched[^]*?agentId: ([\w-]+)/i;
 const MONITOR_RE = /^Monitor started \(task ([\w-]+)(?:, expires in (\d+) ?m)?/i;
 const TASK_END_RE = /<task-id>([\w-]+)<\/task-id>[^]*?(?:<status>\w+<\/status>|Monitor expired)/;
+const TASK_OUTPUT_END_RE = /<task_id>([\w-]+)<\/task_id>[^]*?<status>(?:completed|failed|killed)<\/status>/;
+const TASK_STOPPED_RE = /Successfully (?:stopped task|killed shell): ([\w-]+)/;
 
 /**
  * How many background tasks may still wake the session: started, by the results the log shows, with no
- * notice of their end yet, and for a Monitor not past the time it expires. A start whose result names no
- * task cannot be matched with its end, so one in the current turn counts while that turn lasts.
+ * notice of their end yet (a notification, a wait that saw it end, or a stop that worked), and for a
+ * Monitor not past the time it expires. A start whose result names no task cannot be matched with its
+ * end, so one in the current turn counts while that turn lasts.
  */
 export function openBackgroundTasks(events: readonly LogEvent[], now: number): number {
   const open = new Map<string, number>();
@@ -154,7 +160,12 @@ export function openBackgroundTasks(events: readonly LogEvent[], now: number): n
       }
       const id = TASK_ID_RE.exec(e.text);
       const task = id?.[1] ?? id?.[2] ?? id?.[3];
-      if (task) open.set(task, Infinity);
+      if (task) {
+        open.set(task, Infinity);
+        continue;
+      }
+      const end = TASK_OUTPUT_END_RE.exec(e.text) ?? TASK_STOPPED_RE.exec(e.text);
+      if (end) open.delete(end[1] as string);
     } else if (e.kind === 'user') {
       const end = TASK_END_RE.exec(e.text);
       if (end) open.delete(end[1] as string);

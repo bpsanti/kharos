@@ -29,7 +29,7 @@ The rules are checked in this order, and the first that matches wins.
 | `usage_limit` | a plan usage limit in the last events of the turn, in text the service writes (an error `result`, an environment or system line), seen on two reads | yes |
 | `failed` | an environment error (setup or clone) in the current turn before the first `init` | yes, terminal |
 | `turn_closed` | the last event is a `result` with `is_error=true` | `turn_error`, a warning: a message can wake the session again |
-| `probably_finished` | the last event is a `result` with no mark, quiet for `unmarked_end_min` (3), and no background task left that could wake it (below); checked before the deadline, since a session that ended is not running past it | yes, terminal, with the last message; raised once, and its notice stays open, so a session that resumes says `session.back` |
+| `probably_finished` | the last event is a `result` with no mark, quiet for `unmarked_end_min` (5), and no background task left that could wake it (below); checked before the deadline, since a session that ended is not running past it | yes, terminal, with the last message; raised once, and its notice stays open, so a session that resumes says `session.back` |
 | `overdue` | running for longer than the launch's deadline (`--deadline`, or the profile's `deadline_min`), counted from the open of the cloud session; raised once per session and repeated while it stays open, unless a check below it has a notice to raise, which replaces it; once it closes, a session a message reopens past its deadline is read by the checks below it (looping, silent, `quiet_unmarked`) | yes |
 | `looping` | `loop_failures` calls in a row failed with the same tool and the same error (numbers, paths and ids removed), seen on two reads | yes |
 | `provisioning` | no `init` line yet, when the stored events reach the start of the session | after `provision_min` |
@@ -44,6 +44,7 @@ A background task may still wake the session while the log shows it started and 
 - It started when a call's result names it: `Command running in background with ID: <id>`, `Command was moved to the background with ID: <id>`, `Monitor started (task <id>, expires in <n>m ...)`, or `Async agent launched ... agentId: <id>`.
   A foreground agent returns its report inside the turn, so it wakes nothing.
 - It ended when a `user` event `<task-notification>` names it with a `<status>` (`completed`, `failed`, `killed`), or says that the Monitor expired; a Monitor past the time its start gave has ended too.
+- It ended too when the session learned it itself: a `tool_result` of a wait on its output names it as `<task_id>ID</task_id>` with a final `<status>` (`completed`, `failed`, `killed`; `running` leaves it open), or a stop that worked says `Successfully stopped task: ID` or `Successfully killed shell: ID`.
 - A start whose result names no task cannot be matched with its end, so it counts while its turn lasts.
 
 A session that probably finished:

@@ -67,11 +67,11 @@ test('classify: a ten-minute foreground command is quiet, not silent', () => {
 
 test('classify: a closed turn with nothing left to wake it is probably finished after unmarked_end_min', () => {
   const events = log([...START, [200, 'assistant', null, 'all done'], [201, 'result', null, 'success is_error=false turns=9 — all done']]);
-  assert.deepEqual(at(events, 201 + 2 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed' });
-  assert.deepEqual(at(events, 201 + 4 * 60), {
+  assert.deepEqual(at(events, 201 + 4 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed' });
+  assert.deepEqual(at(events, 201 + 6 * 60), {
     state: 'probably_finished',
     notice: 'probably_finished',
-    reason: 'turn closed without the end mark KHAROS-DONE, quiet for 4 min, with no background task left that could wake it',
+    reason: 'turn closed without the end mark KHAROS-DONE, quiet for 6 min, with no background task left that could wake it',
   });
   // Reversible: anything new after it reads as running again.
   const woke = log([...START, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success is_error=false'], [828, 'init', null, 'model=x']]);
@@ -114,24 +114,39 @@ test('classify: once every background task it started has ended, a closed quiet 
   for (const started of STARTS) {
     for (const status of ['completed', 'failed', 'killed']) {
       const events = log([...START, started, ended(status), [200, 'assistant', null, 'Report: all green'], [201, 'result', null, 'success is_error=false']]);
-      assert.equal(at(events, 201 + 4 * 60).state, 'probably_finished', `${started[3]} ${status}`);
+      assert.equal(at(events, 201 + 6 * 60).state, 'probably_finished', `${started[3]} ${status}`);
     }
   }
   // A Monitor's last notice says it expired.
   const expired: [number, string, string | null, string] = [190, 'user', null, '<task-notification> <task-id>b01</task-id> <summary>Monitor event: "wait for the build"</summary> <event>[Monitor expired after 30m with 2 events delivered. Re-arm it if you still need the watch.]</event> </task-notification>'];
-  assert.equal(at(log([...START, STARTS[1]!, expired, [200, 'assistant', null, 'done'], [201, 'result', null, 'success']]), 201 + 4 * 60).state, 'probably_finished');
+  assert.equal(at(log([...START, STARTS[1]!, expired, [200, 'assistant', null, 'done'], [201, 'result', null, 'success']]), 201 + 6 * 60).state, 'probably_finished');
   // A Monitor's event that is not its last leaves it open, and so does the end of another task.
   const event: [number, string, string | null, string] = [190, 'user', null, '<task-notification> <task-id>b01</task-id> <summary>Monitor event: "wait for the build"</summary> <event>compiling 40%</event> </task-notification>'];
-  assert.equal(at(log([...START, STARTS[1]!, event, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]), 201 + 4 * 60).state, 'turn_closed');
+  assert.equal(at(log([...START, STARTS[1]!, event, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]), 201 + 6 * 60).state, 'turn_closed');
   const other = ended('completed');
   other[3] = other[3].replace('b01', 'b02');
-  assert.equal(at(log([...START, STARTS[0]!, other, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]), 201 + 4 * 60).state, 'turn_closed');
+  assert.equal(at(log([...START, STARTS[0]!, other, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]), 201 + 6 * 60).state, 'turn_closed');
+  // A wait on the task's output that saw it end, or a stop that worked, ends it too; a wait that saw it
+  // still running does not, and neither does one on another task.
+  const waited = (status: string, task = 'b01'): [number, string, string | null, string] => [190, 'tool_result', null, `<retrieval_status>success</retrieval_status> <task_id>${task}</task_id> <task_type>local_bash</task_type> <status>${status}</status> <exit_code>0</exit_code> <output>built</output>`];
+  for (const status of ['completed', 'failed', 'killed']) {
+    const events = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskOutput', '{"task_id":"b01","block":true}'], waited(status), [200, 'assistant', null, 'Report: all green'], [201, 'result', null, 'success is_error=false']]);
+    assert.equal(at(events, 201 + 6 * 60).state, 'probably_finished', status);
+  }
+  const running = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskOutput', '{"task_id":"b01","block":false}'], waited('running'), [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]);
+  assert.equal(at(running, 201 + 6 * 60).state, 'turn_closed');
+  const otherWait = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskOutput', '{"task_id":"b02"}'], waited('completed', 'b02'), [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]);
+  assert.equal(at(otherWait, 201 + 6 * 60).state, 'turn_closed');
+  for (const stopped of ['{"message":"Successfully stopped task: b01 (npm run build)","task_id":"b01"}', '{"message":"Successfully killed shell: b01 (npm run build)","shell_id":"b01"}']) {
+    const events = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskStop', '{"task_id":"b01"}'], [181, 'tool_result', null, stopped], [200, 'assistant', null, 'Stopped the build'], [201, 'result', null, 'success is_error=false']]);
+    assert.equal(at(events, 201 + 6 * 60).state, 'probably_finished', stopped);
+  }
   // A foreground agent returns its report inside the turn, so nothing is left to wake it.
   const foreground = log([...START, [150, 'tool_use', 'Agent', '{"description":"Search the code","prompt":"..."}'], [180, 'tool_result', null, 'The parser lives in src/logparse.ts.'], [200, 'assistant', null, 'Found it'], [201, 'result', null, 'success is_error=false']]);
-  assert.equal(at(foreground, 201 + 4 * 60).state, 'probably_finished');
+  assert.equal(at(foreground, 201 + 6 * 60).state, 'probably_finished');
   // A result that only mentions background work started none.
   const mention = log([...START, [150, 'tool_use', 'Agent', '{"description":"Check the server"}'], [180, 'tool_result', null, 'The dev server is running in the background on port 3000, launched in the background by the setup script.'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success is_error=false']]);
-  assert.equal(at(mention, 201 + 4 * 60).state, 'probably_finished');
+  assert.equal(at(mention, 201 + 6 * 60).state, 'probably_finished');
 });
 
 test('classify: repeated calls that succeed, or a hook that blocks one, are not a loop', () => {

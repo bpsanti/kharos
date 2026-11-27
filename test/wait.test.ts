@@ -598,8 +598,8 @@ test('wait: a turn closed without the end mark, with no background task left, is
   assert.match(o.key, /^session\.probably_finished\|/);
   assert.equal(o.state, 'probably_finished');
   // The first turn closed while its build ran, so its quiet then was no end; the last one is said within
-  // unmarked_end_min (3) of quiet plus one read at most 60 s apart.
-  assert.ok(c.now() - LAST_RESULT > 3 * MIN && c.now() - LAST_RESULT <= 3 * MIN + 65_000, `noticed ${(c.now() - LAST_RESULT) / 1000} s after the turn closed`);
+  // unmarked_end_min (5) of quiet plus one read at most 60 s apart.
+  assert.ok(c.now() - LAST_RESULT > 5 * MIN && c.now() - LAST_RESULT <= 5 * MIN + 65_000, `noticed ${(c.now() - LAST_RESULT) / 1000} s after the turn closed`);
   assert.equal(o.last_message, 'The build passes and the typo is fixed in README.md.');
   const lines = o.report.split('\n');
   assert.deepEqual(lines.slice(0, 5), [
@@ -617,7 +617,7 @@ test('wait: a turn closed without the end mark, with no background task left, is
   const ev = journal(sb).find((e) => e.event === 'session.probably_finished')!;
   assert.equal(ev.class, 'terminal');
   assert.equal(ev.last_message, 'The build passes and the typo is fixed in README.md.');
-  assert.match(ev.reason, /^turn closed without the end mark KHAROS-DONE, quiet for 3 min, with no background task left that could wake it$/);
+  assert.match(ev.reason, /^turn closed without the end mark KHAROS-DONE, quiet for 5 min, with no background task left that could wake it$/);
 
   // It holds no slot, is still followed, and list, show, result and the doctor say what it is.
   const reg = loadRegistry(sb.paths);
@@ -685,17 +685,17 @@ test('wait: a session that probably finished is closed at its deadline, after it
     reg.sessions[id]!.deadline_min = 5;
   });
   const read = (now: number) => postToolUse(sb.ctx(now), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, pageAt(UNMARKED, now)), 'reader'));
-  read(LAST_RESULT + 4 * MIN);
+  read(LAST_RESULT + 6 * MIN);
   let s = loadRegistry(sb.paths).sessions[id]!;
   assert.equal(s.state, 'probably_finished');
   assert.equal(s.step, 'open');
   assert.deepEqual(journal(sb).map((e) => e.event).filter((e) => e !== 'session.opened' && e !== undefined), ['session.probably_finished']);
-  read(LAST_RESULT + 5 * MIN);
+  read(LAST_RESULT + 7 * MIN);
   s = loadRegistry(sb.paths).sessions[id]!;
   assert.equal(s.step, 'closed');
-  assert.equal(s.closed_at, new Date(LAST_RESULT + 5 * MIN).toISOString());
+  assert.equal(s.closed_at, new Date(LAST_RESULT + 7 * MIN).toISOString());
   assert.equal(isFollowed(s), false);
-  const o = await clocked(sb, LAST_RESULT + 5 * MIN, reader(sb, () => UNMARKED), { since: 'session.probably_finished|x' }).run();
+  const o = await clocked(sb, LAST_RESULT + 7 * MIN, reader(sb, () => UNMARKED), { since: 'session.probably_finished|x' }).run();
   assert.equal(o.key, 'end:closed');
   assert.equal(o.reads, 0);
   assert.match(o.report, /^k-0001 is closed: it probably finished, without the end mark, and its deadline passed, so kharos no longer reads it\. Details: \/kharos:result k-0001/);
@@ -706,9 +706,9 @@ test('close: a closing session that probably finishes frees its slot at once, an
   const id = openOne(sb);
   close(sb.paths, id, T0 + 60_000);
   assert.equal(activeCount(loadRegistry(sb.paths), T0 + 60_000), 1);
-  postToolUse(sb.ctx(LAST_RESULT + 4 * MIN), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, UNMARKED), 'reader'));
+  postToolUse(sb.ctx(LAST_RESULT + 6 * MIN), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, UNMARKED), 'reader'));
   const s = loadRegistry(sb.paths).sessions[id]!;
   assert.equal(s.step, 'closed');
-  assert.equal(activeCount(loadRegistry(sb.paths), LAST_RESULT + 4 * MIN), 0);
+  assert.equal(activeCount(loadRegistry(sb.paths), LAST_RESULT + 6 * MIN), 0);
   assert.equal(journal(sb).some((e) => e.event === 'session.probably_finished'), false);
 });

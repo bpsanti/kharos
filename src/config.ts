@@ -125,7 +125,7 @@ export const DEFAULT_WATCH: WatchConfig = {
   silence_min: 15,
   silence_severe_min: 45,
   quiet_end_min: 40,
-  unmarked_end_min: 3,
+  unmarked_end_min: 5,
   loop_failures: 4,
   renotify_min: 60,
   max_open: 10,

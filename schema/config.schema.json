@@ -157,7 +157,7 @@
         "unmarked_end_min": {
           "type": "integer",
           "minimum": 1,
-          "default": 3,
+          "default": 5,
           "description": "Minutes of quiet after a turn closed without an end mark, with no background task left that could wake it, before kharos reports the session as probably finished (session.probably_finished)."
         },
         "loop_failures": {
