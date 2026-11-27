@@ -15,6 +15,7 @@ import {
   logPath,
   routineUrl,
   sessionUrlFromId,
+  TERMINAL_STATES,
   updateRegistry,
   type Registry,
   type Session,
@@ -293,8 +294,9 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
           );
         }
         if (row?.url) s.url = row.url;
-        if (row?.status === 'archived' && s.step === 'open' && s.state !== 'finished' && s.state !== 'failed') {
-          settle(ctx, s, { state: 'ended_unmarked', notice: 'ended_unmarked', reason: 'the session was archived without an end mark' });
+        if (row?.status === 'archived' && s.step === 'open') {
+          s.archived_at ??= new Date(ctx.now).toISOString();
+          s.end_probe_due = null;
         }
         return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
       }));
@@ -401,8 +403,19 @@ function applyRuns(ctx: Ctx, s: Session, row: { status: string | null; worker_st
   return `kharos: ${s.id} run ${row.status ?? 'unknown'}, worker ${row.worker_status ?? 'unknown'}.`;
 }
 
-/** Stores a log page and updates the session; returns the one-line answer for the model. */
+/**
+ * Stores a log page and updates the session; returns the one-line answer for the model. A session list_runs
+ * saw archived ends unmarked here when a page of its log was read and still leaves it without an end; a
+ * failed or empty read leaves it as it is.
+ */
 function readLogInto(ctx: Ctx, s: Session, r: ReturnType<typeof readToolResponse>, ti: Record<string, unknown>): string {
+  const out = readLogPage(ctx, s, r, ti);
+  if (!s.archived_at || s.read_failures > 0 || s.step !== 'open' || TERMINAL_STATES.has(s.state)) return out;
+  settle(ctx, s, { state: 'ended_unmarked', notice: 'ended_unmarked', reason: 'the session was archived without an end mark' });
+  return `${out} The session was archived without an end mark.`;
+}
+
+function readLogPage(ctx: Ctx, s: Session, r: ReturnType<typeof readToolResponse>, ti: Record<string, unknown>): string {
   s.last_read_at = new Date(ctx.now).toISOString();
   s.reads++;
   if (r.status !== 200) {

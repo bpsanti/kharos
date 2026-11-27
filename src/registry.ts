@@ -132,6 +132,8 @@ export interface Session {
    * send failed when it did.
    */
   end_probe?: { for: string; at: string; error?: string | null } | null;
+  /** When list_runs first showed the session archived; the next log read without an end mark ends it unmarked. */
+  archived_at?: string | null;
   /** A closed turn a read found to ask about: the key of its result. The follower that holds the lease sends the question. */
   end_probe_due?: string | null;
   /** Alerts (notices and ends) that no follower handed on yet, oldest first; the next follower sends them. */

@@ -37,6 +37,8 @@ export interface Paths {
   confirmations: string;
   /** One lease file per session a follower (`kharos wait`) reads, so only one process reads it at a time. */
   followers: string;
+  /** The read rounds open now: the followers due at the same moment share one reader process. */
+  rounds: string;
   /** Records that this account's files were taken out of the shared ones, once. */
   migration: string;
 }
@@ -77,6 +79,7 @@ function layout(home: string, account: string | null, configDir: string, state: 
     preflight: path.join(state, 'preflight.jsonl'),
     confirmations: path.join(state, 'org-confirmations.json'),
     followers: path.join(state, 'followers'),
+    rounds: path.join(state, 'rounds.json'),
     migration: path.join(state, 'migration.json'),
   };
 }

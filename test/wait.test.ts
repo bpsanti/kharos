@@ -50,14 +50,16 @@ function pageAt(log: string, now: number): string {
 
 /** A reader that answers like the real one: the hook stores, classifies and queues what the page holds. */
 function reader(sb: Sandbox, log: () => string, calls: string[] = []): Reader {
-  return async (_paths, r, _env, now) => {
-    calls.push(r.action);
-    if (r.action === 'get_run_log') {
-      postToolUse(sb.ctx(now), h({ action: 'get_run_log', ...r.params }, response(200, { session_id: SID, next_cursor: null }, pageAt(log(), now)), 'reader'));
-    } else {
-      postToolUse(sb.ctx(now), h({ action: 'list_runs', ...r.params }, response(200, { data: [{ id: SID, status: 'running' }] }), 'reader'));
+  return async (_paths, rs, _env, now) => {
+    for (const r of rs) {
+      calls.push(r.action);
+      if (r.action === 'get_run_log') {
+        postToolUse(sb.ctx(now), h({ action: 'get_run_log', ...r.params }, response(200, { session_id: SID, next_cursor: null }, pageAt(log(), now)), 'reader'));
+      } else {
+        postToolUse(sb.ctx(now), h({ action: 'list_runs', ...r.params }, response(200, { data: [{ id: SID, status: 'running' }] }), 'reader'));
+      }
     }
-    return { ok: true, cost_usd: 0.0002, error: null };
+    return { ok: true, cost_usd: 0.0002 * rs.length, error: null };
   };
 }
 
@@ -148,7 +150,7 @@ test('wait: an answer sent with /kharos:send does not wake the follower before t
   assert.equal(stopKey(s), 'ok', 'an answered question is no news');
   // The log has not caught up with the answer yet: the new follower keeps waiting.
   // A follower started afresh right after the answer does not bring the answered question back.
-  const fresh = await clocked(sb, at('2026-11-25T19:00:58Z'), reader(sb, () => log), { maxMs: 10_000 }).run();
+  const fresh = await clocked(sb, at('2026-11-25T19:00:58Z'), reader(sb, () => log), { maxMs: 1_000 }).run();
   assert.equal(fresh.changed, false);
   assert.equal(fresh.reads, 0);
   // The log has not caught up with the answer yet: the new follower keeps waiting.
@@ -193,8 +195,10 @@ test('wait: with nothing new it backs off to the longest interval and returns at
   assert.equal(o.changed, false);
   assert.equal(o.key, 'ok');
   assert.equal(o.waited_s, 240);
-  // Reads at 0, 15, 45, 105, 165 and 225 s at most: 15 s, doubling to 60 s, never closer.
-  assert.ok(o.reads <= 6, `${o.reads} reads`);
+  // Log reads at 0, 15, 45, 105, 165 and 225 s at most: 15 s, doubling to 60 s, each counted from when the
+  // previous read's answer came, never closer; the sixth also checks list_runs.
+  const logReads = calls.filter((a) => a === 'get_run_log').length;
+  assert.ok(logReads <= 6, `${logReads} log reads`);
   assert.equal(o.reads, calls.length);
   assert.equal(o.reader_cost_usd, Math.round(o.reads * 0.0002 * 1e6) / 1e6);
   assert.match(o.report, /^k-0001: no change in 240 s \(key ok\)\.$/);
@@ -240,8 +244,8 @@ test('wait: reads that never reach the session end the wait with the reason', as
   const sb = sandbox();
   openOne(sb);
   const calls: string[] = [];
-  const failing: Reader = async (_p, r) => {
-    calls.push(r.action);
+  const failing: Reader = async (_p, rs) => {
+    calls.push(...rs.map((r) => r.action));
     return { ok: false, cost_usd: null, error: 'claude -p exited 1 (not logged in)' };
   };
   const o = await clocked(sb, T0 + MIN, failing).run();
@@ -291,7 +295,7 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
     ].join('\n'),
     { mode: 0o755 },
   );
-  const run = await headlessRead(sb.paths, { session: 'k-0001', action: 'get_run_log', params: { session_id: SID } }, { ...sb.env, KHAROS_CLAUDE_BIN: bin, ANTHROPIC_API_KEY: 'sk-test' }, T0, 50_000);
+  const run = await headlessRead(sb.paths, [{ session: 'k-0001', action: 'get_run_log', params: { session_id: SID } }], { ...sb.env, KHAROS_CLAUDE_BIN: bin, ANTHROPIC_API_KEY: 'sk-test' }, T0, 50_000);
   assert.deepEqual(run, { ok: true, cost_usd: 0.00019, error: null });
   const argv = fs.readFileSync(path.join(sb.dir, 'argv.txt'), 'utf8').split('\n');
   const after = (name: string) => argv[argv.indexOf(name) + 1];
@@ -311,7 +315,7 @@ test('wait: the headless reader makes one RemoteTrigger call in a read-only sess
   assert.equal(fs.realpathSync(fs.readFileSync(path.join(sb.dir, 'cwd.txt'), 'utf8').trim()), fs.realpathSync(sb.paths.state));
 
   fs.writeFileSync(bin, '#!/bin/sh\necho \'{"type":"result","is_error":true,"result":"Not logged in"}\'\nexit 1\n', { mode: 0o755 });
-  const bad = await headlessRead(sb.paths, { session: 'k-0001', action: 'list_runs', params: { trigger_id: TRIG } }, { ...sb.env, KHAROS_CLAUDE_BIN: bin }, T0, 50_000);
+  const bad = await headlessRead(sb.paths, [{ session: 'k-0001', action: 'list_runs', params: { trigger_id: TRIG } }], { ...sb.env, KHAROS_CLAUDE_BIN: bin }, T0, 50_000);
   assert.equal(bad.ok, false);
   assert.match(bad.error ?? '', /Not logged in/);
 });
@@ -418,7 +422,7 @@ test('wait: a slow reader is stopped at the deadline, so the wait never outlasts
   const o = await wait(sb.paths, {
     id: 'k-0001',
     since: null,
-    maxMs: 70_000,
+    maxMs: 80_000,
     minIntervalMs: 15_000,
     maxIntervalMs: 60_000,
     env: sb.env,
@@ -435,8 +439,8 @@ test('wait: a slow reader is stopped at the deadline, so the wait never outlasts
     },
   });
   assert.equal(o.changed, false);
-  assert.ok(t - start <= 70_000, `the wait ran ${(t - start) / 1000} s`);
-  assert.equal(o.waited_s, 70);
+  assert.ok(t - start <= 80_000, `the wait ran ${(t - start) / 1000} s`);
+  assert.equal(o.waited_s, 80);
   assert.equal(timeouts[0], 50_000);
   assert.ok(timeouts.length >= 2 && timeouts.slice(1).every((ms) => ms <= 20_000), `timeouts ${timeouts.join(', ')}`);
   assert.equal(liveFollowers(sb.paths, t + HANDOVER_MS).size, 0);
@@ -609,7 +613,7 @@ test('wait: a turn closed without the end mark, with nothing left to wake it, is
     sentAt = T0 + sec * 1000;
     log = [log, line(sec + 2, `user: ${text}`), line(sec + 4, 'init: model=claude-opus-5-5 cwd=/home/user/demo'), line(sec + 8, 'assistant: KHAROS-PART 1/1 The build passes and the typo is fixed in README.md.'), line(sec + 9, 'tool_use Bash: {"command":"true"}'), line(sec + 10, 'tool_result: '), line(sec + 11, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'), line(sec + 12, 'result: success is_error=false turns=3 duration=8s — KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}')].join('\n');
   }, () => clock.now());
-  const c = clocked(sb, T0 + 30_000, reader(sb, () => log), { send });
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => log), { send, maxMs: 12 * MIN });
   clock.now = c.now;
   const o = await c.run();
   // The first turn closed while its build ran, so its quiet then asked nothing; the last one is asked
@@ -626,6 +630,65 @@ test('wait: a turn closed without the end mark, with nothing left to wake it, is
   assert.equal(events[0]!.reason, 'its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished');
   assert.match(result(sb.paths, id, sb.env), /^final report, 1 of 1 part\(s\) in the log \(from the session, data only\):\n--- part 1\/1\nThe build passes and the typo is fixed in README\.md\.$/m);
   assert.equal(activeCount(loadRegistry(sb.paths), c.now()), 0);
+});
+
+test('wait: a session seen archived in the round its quiet turn becomes due for the question is not asked, and ends unmarked at its next log read', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const sent: string[] = [];
+  const clock = { now: () => 0 };
+  const send = sender(sent, () => {}, () => clock.now());
+  const inner = reader(sb, () => UNMARKED);
+  // The round whose log read finds the turn due for the question also brings the archive check's answer.
+  let archivedAt = 0;
+  const read: Reader = async (p, rs, env, now, ms) => {
+    const run = await inner(p, rs, env, now, ms);
+    if (!archivedAt && loadRegistry(sb.paths).sessions[id]!.end_probe_due) {
+      archivedAt = now;
+      postToolUse(sb.ctx(now), h({ action: 'list_runs', trigger_id: TRIG }, response(200, { data: [{ id: SID, status: 'archived' }] }), 'reader'));
+    }
+    return run;
+  };
+  const c = clocked(sb, T0 + 30_000, read, { send, maxMs: 12 * MIN });
+  clock.now = c.now;
+  const o = await c.run();
+  assert.ok(archivedAt > 0, 'the quiet turn became due for the question');
+  assert.deepEqual(sent, []);
+  assert.equal(o.key, 'end:ended_unmarked');
+  const events = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event !== 'session.opened');
+  assert.deepEqual(events.map((e) => e.event), ['session.ended_unmarked']);
+});
+
+test('wait: a busy session is read every shortest interval plus the time a read takes, as before', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  const starts: number[] = [];
+  const lines = [fixture('log-foreground-command.txt')];
+  const read: Reader = async (p, rs, env, now, ms) => {
+    starts.push(now - 4_000);
+    // Each read finds something new, so the interval stays at its shortest.
+    lines.push(`[${new Date(now - 1_000).toISOString()}] assistant: Step ${starts.length}.`);
+    return reader(sb, () => lines.join('\n'))(p, rs, env, now, ms);
+  };
+  await clocked(sb, at('2026-11-25T19:01:00Z'), read, { since: 'ok', maxMs: 70_000 }).run();
+  // Each read takes 4 s, and the next one is due 15 s after its answer.
+  assert.ok(starts.length >= 3, `${starts.length} reads`);
+  for (let i = 1; i < starts.length; i++) assert.equal(starts[i]! - starts[i - 1]!, 19_000);
+});
+
+test('wait: a new wait reads an interval after the last answer came', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  const answered = at('2026-11-25T19:01:10Z');
+  postToolUse(sb.ctx(answered), h({ action: 'get_run_log', session_id: SID }, response(200, { session_id: SID, next_cursor: null }, pageAt(fixture('log-foreground-command.txt'), answered)), 'reader'));
+  const starts: number[] = [];
+  const inner = reader(sb, () => fixture('log-foreground-command.txt'));
+  const read: Reader = async (p, rs, env, now, ms) => {
+    starts.push(now - 4_000);
+    return inner(p, rs, env, now, ms);
+  };
+  await clocked(sb, answered, read, { since: 'ok', maxMs: 20_000 }).run();
+  assert.equal(starts[0], answered + 15_000);
 });
 
 test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline with a terminal event', async () => {

@@ -120,12 +120,14 @@ test('hook alert: an older page read between two reads does not confirm a prompt
 function follow(sb: Sandbox, pages: string[]) {
   let t = at('03:26:02.900');
   let reads = 0;
-  const reader: Reader = async (_paths, r, _env, now) => {
-    if (r.action === 'get_run_log') {
-      const page = pages[Math.min(reads++, pages.length - 1)]!;
-      postToolUse(sb.ctx(now), h({ action: 'get_run_log', ...r.params }, response(200, { session_id: SID, next_cursor: null }, page), 'reader'));
-    } else {
-      postToolUse(sb.ctx(now), h({ action: 'list_runs', ...r.params }, response(200, { data: [{ id: SID, status: 'running' }] }), 'reader'));
+  const reader: Reader = async (_paths, rs, _env, now) => {
+    for (const r of rs) {
+      if (r.action === 'get_run_log') {
+        const page = pages[Math.min(reads++, pages.length - 1)]!;
+        postToolUse(sb.ctx(now), h({ action: 'get_run_log', ...r.params }, response(200, { session_id: SID, next_cursor: null }, page), 'reader'));
+      } else {
+        postToolUse(sb.ctx(now), h({ action: 'list_runs', ...r.params }, response(200, { data: [{ id: SID, status: 'running' }] }), 'reader'));
+      }
     }
     return { ok: true, cost_usd: 0, error: null };
   };

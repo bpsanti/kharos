@@ -37,16 +37,34 @@ An answer sent with `/kharos:send` does not wake the follower: the next report i
 
 The log of a cloud session can only be read through the `RemoteTrigger` tool (`get_run_log`), and only a model calls a tool.
 `claude -p --cloud <id>` only sends a message, and kharos uses no endpoint or token of its own.
-So each read is one separate, minimal `claude -p`:
+So a read is a minimal `claude -p`, a reader:
 
 - the Haiku model (`watch.model`), no settings, no MCP servers, no slash commands, no saved transcript;
-- only the `RemoteTrigger` tool, allowed for that one call, with a three-line system prompt;
-- the kharos plugin loaded, so its hook stores the page, classifies it, and queues the events, and the reader model sees one short line instead of the log;
+- only the `RemoteTrigger` tool, allowed for the calls it is asked to make, with a short system prompt;
+- the kharos plugin loaded, so its hook stores each page, classifies it, and queues the events, and the reader model sees one short line per call instead of the log;
 - started with `KHAROS_ROLE=reader`, so the hook denies it any launch, fire or change of a kharos routine.
 
-Each read is a fraction of a cent.
 The interval starts at 15 seconds, doubles while nothing new comes, stops at 60 seconds, and goes back to 15 seconds when new events come.
+It is counted from when the last read's answer came, as before.
+A read due within 5 seconds joins a round another follower has open, so it may come up to 5 seconds sooner than its interval, never later.
 `kharos wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s]` takes other values for tests.
+
+### Read rounds
+
+Each reader is a whole Claude Code process, so the followers due at the same moment share one, in a read round:
+
+1. The first follower that is due opens a round (`rounds.json` in the state folder) and waits two seconds for the others; a follower alone reads at once.
+2. Each follower due then, or within the next 5 seconds, joins it with its reads, up to 20 sessions; more followers open another round.
+3. The follower whose wait ends last runs one reader for the whole round, asked for the numbered list of its calls, so no other follower's deadline cuts it.
+   A session's archive check (`list_runs`) comes in a second list, after the log reads; whatever order the answers come in, an archive is settled only by the session's next log read, so an end mark in the log is never taken for an archive without one.
+4. The hook stores and classifies each answer exactly as for a read alone, and each follower knows from the registry whether its own session was read.
+
+A round is for one Claude account: only followers that would start the same reader (the same `CLAUDE_CONFIG_DIR` and the same `claude` binary) share one, and the reader runs with that account's folder.
+An answer that fails or cannot be read (an HTTP error, an unknown shape) is recorded for its session alone, as it would be for a read alone.
+A session the reader made no call for is a failed read for that session only, and its follower reads it again an interval later; after three in a row its wait ends with the reason, as before.
+A round whose reader stops, or whose followers are all gone, fails only that round's reads.
+The round's cost is shared out by reads, and each follower's JSON line has its share in `reader_cost_usd`.
+A read costs a fraction of a cent, and a round of several sessions less than as many reads alone.
 
 Its JSON line has the session's `key`, `changed`, `state`, `notice`, `url`, the `question` or the permission's `tool` when there is one, the `result` at the end, how long it waited, how many reads it made and what they cost, and the `report`.
 The key is the open notice and when it opened, or `end:<state>` at the end, so the same open notice does not wake the next follower; a notice reported again after `renotify_min` does.
@@ -115,4 +133,4 @@ kharos never sets that variable itself.
 - A follower agent lives as long as the Claude Code session that started it.
   A headless Claude Code (`claude -p`, the Agent SDK) stops its background agents 10 minutes after its last turn (`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`), so there kharos starts no agent and follows each session with a process of its own (see [Headless launches](#headless-launches)).
 - In the `default` permission mode, the first `kharos wait` asks for approval in your session, because a plugin agent cannot carry its own permission mode; approve it for the session, or add an allow rule for `Bash(/bin/sh <plugin folder>/scripts/kharos wait:*)` (the folder changes when the plugin is updated).
-- Each open session has its own follower; `watch.max_open` still caps the open sessions.
+- Each open session has its own follower; `watch.max_open` still caps the open sessions, and the followers due at the same moment share one reader process for up to 20 sessions ([Read rounds](#read-rounds)).
