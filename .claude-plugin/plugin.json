@@ -1,6 +1,6 @@
 {
   "name": "kharos",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Launch cloud sessions of Claude Code from the terminal, follow them, message them mid-run, and get notified when one needs you, is stuck, or is done.",
   "author": {
     "name": "Bruno Santi"
