@@ -237,19 +237,26 @@ test('npm: the kharos command from npm is told the npm command, is not asked abo
   assert.equal(updateNotice(sb.paths, env, T0 + 1000, () => {}, '0.3.1', { kind: 'npm' }), 'kharos 0.4.0 is available (you have 0.3.1); to update it, run `npm install -g kharos@0.4.0`.');
 });
 
-test('npm: npm is asked about its kharos at most once a day', async () => {
+test('npm: npm is asked about its kharos at most once a day while it is current, and each time while it is outdated', async () => {
   const sb = sandbox();
   const root = fs.mkdtempSync(path.join(sb.dir, 'plugins-'));
   const dir = path.join(root, 'plugins', 'cache', 'kharos', 'kharos', '0.3.1');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'kharos', version: '0.3.1' }));
   let asked = 0;
-  const deps = { fetcher: github('v0.4.0'), root: dir, npmVersion: () => (asked++, '0.3.0') };
+  let npm = '0.3.0';
+  const deps = { fetcher: github('v0.4.0'), root: dir, npmVersion: () => (asked++, npm) };
   assert.equal((await readReleaseView(sb.paths, online(sb), T0, deps)).npm, '0.3.0');
-  assert.equal((await readReleaseView(sb.paths, online(sb), T0 + RELEASE_TTL_MS - 1, deps)).npm, '0.3.0');
-  assert.equal(asked, 1);
-  await readReleaseView(sb.paths, online(sb), T0 + RELEASE_TTL_MS, deps);
+  npm = '0.4.0';
+  const after = await readReleaseView(sb.paths, online(sb), T0 + 1000, deps);
+  assert.equal(after.npm, '0.4.0', 'the person ran the npm command the doctor gave');
+  writeConfig(sb);
+  assert.doesNotMatch(formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env, release: after }, DOCTOR_DEPS)), /kharos npm/);
   assert.equal(asked, 2);
+  assert.equal((await readReleaseView(sb.paths, online(sb), T0 + RELEASE_TTL_MS - 1, deps)).npm, '0.4.0');
+  assert.equal(asked, 2);
+  await readReleaseView(sb.paths, online(sb), T0 + 1000 + RELEASE_TTL_MS, deps);
+  assert.equal(asked, 3);
 });
 
 test('update: refused, with nothing run, unless the version said yes to is the latest and newer', () => {

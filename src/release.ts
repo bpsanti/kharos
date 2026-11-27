@@ -270,12 +270,16 @@ export function npmGlobalVersion(env: NodeJS.ProcessEnv): string | null {
   }
 }
 
-/** The global npm kharos version, asked of npm at most once a day; any failure counts as none. */
-function npmVersionCached(paths: Paths, now: number, probe: () => string | null): string | null {
+/**
+ * The global npm kharos version, asked of npm at most once a day while it has nothing to report; an answer
+ * older than `latest` is asked again each time, so it clears once the person updates. Any failure counts as none.
+ */
+function npmVersionCached(paths: Paths, now: number, latest: string, probe: () => string | null): string | null {
   try {
     const v: unknown = JSON.parse(fs.readFileSync(paths.npm, 'utf8'));
     if (isObject(v) && typeof v.checked_at === 'string' && now - Date.parse(v.checked_at) < RELEASE_TTL_MS) {
-      return parseVersion(v.version)?.join('.') ?? null;
+      const kept = parseVersion(v.version)?.join('.') ?? null;
+      if (!kept || compareVersions(kept, latest) >= 0) return kept;
     }
   } catch {
     // no answer kept yet
@@ -318,7 +322,7 @@ export async function readReleaseView(paths: Paths, env: NodeJS.ProcessEnv, now:
     const text = await readChangelog(env, latest, deps.fetcher, DOCTOR_TIMEOUT_MS);
     changes = text === null ? null : changesBetween(text, installed, latest) || null;
   }
-  const npm = latest && install.kind !== 'npm' ? npmVersionCached(paths, now, deps.npmVersion) : null;
+  const npm = latest && install.kind !== 'npm' ? npmVersionCached(paths, now, latest, deps.npmVersion) : null;
   return { installed, install, latest, error: 'error' in r ? r.error : null, changes, npm };
 }
 
