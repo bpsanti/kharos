@@ -215,6 +215,25 @@ test('round: more followers than a round holds split into two reader processes i
   assert.deepEqual(first.flatMap((c) => c.sessions).sort(), ids);
 });
 
+test('round: idle followers whose intervals doubled at different moments read in one reader once both are at 60 s', async () => {
+  const sb = sandbox();
+  const ids = openMany(sb, 2);
+  const clock = virtualClock(START);
+  const calls: Call[] = [];
+  // k-0002 writes once more after its first read, so its interval starts doubling one round after k-0001's.
+  const more = [page(2), `[${new Date(START + 10_000).toISOString()}] assistant: Still on typo 2.`].join('\n');
+  const read = roundReader(sb, clock, calls, (r) => (r.session === 'k-0002' && r.action === 'get_run_log' && clock.now() > START + 10_000 ? response(200, { session_id: r.params.session_id, next_cursor: null }, more) : undefined));
+  const out = await followAll(sb, ids, clock, read, () => ({ maxMs: 8 * MIN }));
+  for (const o of out) assert.equal(o.error, undefined);
+  // The doubling went apart: some round read one session alone.
+  assert.ok(calls.some((c) => c.sessions.length === 1));
+  // From the fourth minute both read every 60 s, on the minute, in one process.
+  const late = calls.filter((c) => c.at >= START + 4 * MIN);
+  assert.ok(late.length >= 3, `${late.length} late rounds`);
+  for (const c of late) assert.deepEqual([...c.sessions].sort(), ids, `a round at ${(c.at - START) / 1000} s`);
+  for (let i = 1; i < late.length; i++) assert.equal(late[i]!.at - late[i - 1]!.at, MIN);
+});
+
 test('round: a round the wait has to leave before its reader starts counts no read', async () => {
   const sb = sandbox();
   const ids = openMany(sb, 2);

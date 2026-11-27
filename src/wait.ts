@@ -45,6 +45,18 @@ export function currentAccount(paths: Paths, now: number, env: NodeJS.ProcessEnv
   return account;
 }
 
+/**
+ * When the next read is due after one at `last`: the latest moment on the grid of the interval that is not
+ * past an interval after it, so a read is never further apart than the interval, and the followers at the
+ * same interval, whose grids the shorter intervals divide, read in one round. When that moment comes sooner
+ * than the shortest interval after `last`, the read waits for the shortest interval, and the one after it is on
+ * the grid.
+ */
+export function dueAfter(last: number, interval: number, minInterval: number): number {
+  const on = interval > 0 ? Math.floor((last + interval) / interval) * interval : last + interval;
+  return on - last >= minInterval || minInterval <= 0 ? on : Math.ceil((last + minInterval) / minInterval) * minInterval;
+}
+
 /** How often a wait looks at the registry between its own reads, to see what another process recorded. */
 const SLICE_MS = 5_000;
 /** Reads in a row that did not reach the registry before the wait gives up and says why. */
@@ -275,9 +287,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       leased ||= holds;
       const lastRead = anchor && anchor.landed === s.last_read_at ? anchor.tick : s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
-      // On the grid of the shortest interval, so the followers whose sessions are due about the same time
-      // read in one round.
-      const dueAt = fresh ? nextOwnRead : Math.max(onGrid(lastRead + interval, opts.minIntervalMs), nextOwnRead);
+      const dueAt = fresh ? nextOwnRead : Math.max(dueAfter(lastRead, interval, opts.minIntervalMs), nextOwnRead);
       if (holds && t >= dueAt) {
         const lastEvent = s.last_event_at;
         let landed = false;
@@ -316,7 +326,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
         if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;
         // A read that landed moves last_read_at, which sets the next one; anything else waits an interval,
         // to the grid's next round.
-        nextOwnRead = landed ? now() : onGrid(now() + interval, opts.minIntervalMs);
+        nextOwnRead = landed ? now() : dueAfter(now(), interval, opts.minIntervalMs);
         continue;
       }
       const left = opts.maxMs - (now() - start);
@@ -337,7 +347,7 @@ function askIfDue(paths: Paths, id: string, now: number, opts: WaitOptions): boo
   const due = updateRegistry(paths, (reg) => {
     const s = reg.sessions[id];
     const key = s?.end_probe_due;
-    if (!s || !key || s.closing_at || s.step !== 'open' || s.end_probe?.for === key) return null;
+    if (!s || !key || s.closing_at || s.archived_at || s.step !== 'open' || s.end_probe?.for === key) return null;
     s.end_probe = { for: key, at: iso };
     s.end_probe_due = null;
     return key;

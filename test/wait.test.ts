@@ -632,6 +632,33 @@ test('wait: a turn closed without the end mark, with nothing left to wake it, is
   assert.equal(activeCount(loadRegistry(sb.paths), c.now()), 0);
 });
 
+test('wait: a session seen archived in the round its quiet turn becomes due for the question is not asked, and ends unmarked at its next log read', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const sent: string[] = [];
+  const clock = { now: () => 0 };
+  const send = sender(sent, () => {}, () => clock.now());
+  const inner = reader(sb, () => UNMARKED);
+  // The round whose log read finds the turn due for the question also brings the archive check's answer.
+  let archivedAt = 0;
+  const read: Reader = async (p, rs, env, now, ms) => {
+    const run = await inner(p, rs, env, now, ms);
+    if (!archivedAt && loadRegistry(sb.paths).sessions[id]!.end_probe_due) {
+      archivedAt = now;
+      postToolUse(sb.ctx(now), h({ action: 'list_runs', trigger_id: TRIG }, response(200, { data: [{ id: SID, status: 'archived' }] }), 'reader'));
+    }
+    return run;
+  };
+  const c = clocked(sb, T0 + 30_000, read, { send, maxMs: 12 * MIN });
+  clock.now = c.now;
+  const o = await c.run();
+  assert.ok(archivedAt > 0, 'the quiet turn became due for the question');
+  assert.deepEqual(sent, []);
+  assert.equal(o.key, 'end:ended_unmarked');
+  const events = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event !== 'session.opened');
+  assert.deepEqual(events.map((e) => e.event), ['session.ended_unmarked']);
+});
+
 test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline with a terminal event', async () => {
   const sb = sandbox();
   const id = openOne(sb);

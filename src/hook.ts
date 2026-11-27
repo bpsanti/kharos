@@ -294,7 +294,10 @@ export function postToolUse(ctx: Ctx, input: HookInput): HookOutput {
           );
         }
         if (row?.url) s.url = row.url;
-        if (row?.status === 'archived' && s.step === 'open') s.archived_at ??= new Date(ctx.now).toISOString();
+        if (row?.status === 'archived' && s.step === 'open') {
+          s.archived_at ??= new Date(ctx.now).toISOString();
+          s.end_probe_due = null;
+        }
         return reshape(r.status, { kharos: s.id, step: s.step, run_status: row?.status ?? null }, applyRuns(ctx, s, row ?? null, rows.length));
       }));
     });
