@@ -195,8 +195,8 @@ test('wait: with nothing new it backs off to the longest interval and returns at
   assert.equal(o.changed, false);
   assert.equal(o.key, 'ok');
   assert.equal(o.waited_s, 240);
-  // Log reads at 0, 15, 45, 105, 165 and 225 s at most: 15 s, doubling to 60 s, counted from when each read
-  // began, never closer; the sixth also checks list_runs.
+  // Log reads at 0, 15, 45, 105, 165 and 225 s at most: 15 s, doubling to 60 s, each counted from when the
+  // previous read's answer came, never closer; the sixth also checks list_runs.
   const logReads = calls.filter((a) => a === 'get_run_log').length;
   assert.ok(logReads <= 6, `${logReads} log reads`);
   assert.equal(o.reads, calls.length);
