@@ -15,7 +15,6 @@ import {
   installedVersion,
   installOf,
   loadReleaseCache,
-  noticeText,
   readLatest,
   readReleaseView,
   refreshRelease,
@@ -115,8 +114,8 @@ test('notice: with no read yet it starts one in the background and says nothing;
   assert.equal(updateNotice(sb.paths, env, T0 + 1000, refresh, '0.3.1'), null, 'the read under way counts as today\'s');
   assert.equal(spawned, 1);
   writeCache(sb, { checked_at: new Date(T0).toISOString(), latest: '0.3.2' });
-  assert.equal(updateNotice(sb.paths, env, T0 + 2000, refresh, '0.3.1'), noticeText('0.3.2', '0.3.1'));
-  assert.match(noticeText('0.3.2', '0.3.1'), /^kharos 0\.3\.2 is available \(you have 0\.3\.1\); \/kharos:doctor/);
+  const plugin = { kind: 'plugin', marketplace: 'kharos' } as const;
+  assert.equal(updateNotice(sb.paths, env, T0 + 2000, refresh, '0.3.1', plugin), 'kharos 0.3.2 is available (you have 0.3.1); /kharos:doctor shows what changed and updates it.');
   assert.equal(spawned, 1);
 });
 
@@ -176,6 +175,7 @@ test('install: a plugin of a marketplace, a git checkout, or anything else', () 
   assert.deepEqual(installOf('/home/p/.claude-work/plugins/cache/kharos/kharos/0.3.1'), { kind: 'plugin', marketplace: 'kharos' });
   assert.deepEqual(installOf('/home/p/.claude/plugins/cache/team-tools/kharos/0.3.1'), { kind: 'plugin', marketplace: 'team-tools' });
   assert.deepEqual(installOf(path.resolve(import.meta.dirname, '..')), { kind: 'git' });
+  assert.deepEqual(installOf('/usr/local/lib/node_modules/kharos'), { kind: 'npm' });
   assert.equal(installedVersion(path.resolve(import.meta.dirname, '..')), JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8')).version);
 });
 
@@ -217,6 +217,39 @@ test('doctor: a git checkout is told to pull, with no update offer', () => {
   const v = view({ install: { kind: 'git' } });
   assert.doesNotMatch(formatRelease(v), new RegExp(UPDATE_OFFER));
   assert.match(applyUpdate(v, '0.3.2', () => assert.fail('nothing runs')).lines.join('\n'), /not installed as a Claude Code plugin; run `git pull`/);
+});
+
+test('npm: the kharos command from npm is told the npm command, is not asked about itself, and never offered the plugin update', async () => {
+  const sb = sandbox();
+  const dir = path.join(sb.dir, 'prefix', 'lib', 'node_modules', 'kharos');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'kharos', version: '0.3.1' }));
+  const v = await readReleaseView(sb.paths, online(sb), T0, { fetcher: github('v0.4.0'), root: dir, npmVersion: () => assert.fail('this kharos is the npm one') });
+  assert.equal(v.npm, null);
+  writeConfig(sb);
+  const text = formatChecks(runDoctor(sb.paths, { now: T0, env: sb.env, release: v }, DOCTOR_DEPS));
+  assert.match(text, /^warn  kharos: 0\.3\.1 installed; 0\.4\.0 is the latest release\n {6}To update it, run `npm install -g kharos@0\.4\.0`\.$/m);
+  assert.doesNotMatch(text, /kharos npm|reinstall|install it again|restart Claude Code/);
+  assert.doesNotMatch(formatRelease(v), new RegExp(UPDATE_OFFER));
+  assert.match(applyUpdate(v, '0.4.0', () => assert.fail('nothing runs')).lines[0] as string, /not installed as a Claude Code plugin; run `npm install -g kharos@0\.4\.0`$/);
+  const env = online(sb);
+  writeCache(sb, { checked_at: new Date(T0).toISOString(), latest: '0.4.0' });
+  assert.equal(updateNotice(sb.paths, env, T0 + 1000, () => {}, '0.3.1', { kind: 'npm' }), 'kharos 0.4.0 is available (you have 0.3.1); to update it, run `npm install -g kharos@0.4.0`.');
+});
+
+test('npm: npm is asked about its kharos at most once a day', async () => {
+  const sb = sandbox();
+  const root = fs.mkdtempSync(path.join(sb.dir, 'plugins-'));
+  const dir = path.join(root, 'plugins', 'cache', 'kharos', 'kharos', '0.3.1');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'kharos', version: '0.3.1' }));
+  let asked = 0;
+  const deps = { fetcher: github('v0.4.0'), root: dir, npmVersion: () => (asked++, '0.3.0') };
+  assert.equal((await readReleaseView(sb.paths, online(sb), T0, deps)).npm, '0.3.0');
+  assert.equal((await readReleaseView(sb.paths, online(sb), T0 + RELEASE_TTL_MS - 1, deps)).npm, '0.3.0');
+  assert.equal(asked, 1);
+  await readReleaseView(sb.paths, online(sb), T0 + RELEASE_TTL_MS, deps);
+  assert.equal(asked, 2);
 });
 
 test('update: refused, with nothing run, unless the version said yes to is the latest and newer', () => {
@@ -298,7 +331,7 @@ test('cli: list adds the notice once, from the cache, and not when it is turned 
   const env = online(sb);
   writeCache(sb, { checked_at: new Date().toISOString(), latest: '99.0.0' });
   const first = await captured(() => main(['list'], env, () => ''));
-  assert.match(first.stdout, /^kharos 99\.0\.0 is available \(you have .*\); \/kharos:doctor shows what changed and updates it\.$/m);
+  assert.match(first.stdout, /^kharos 99\.0\.0 is available \(you have .*\); to update it, run `git pull` in its folder, then restart Claude Code\.$/m, 'this kharos runs from a git checkout');
   const second = await captured(() => main(['list'], env, () => ''));
   assert.doesNotMatch(second.stdout, /is available/);
   writeCache(sb, { checked_at: new Date().toISOString(), latest: '99.0.0' });

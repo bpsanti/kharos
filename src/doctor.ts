@@ -121,7 +121,7 @@ function checkRelease(v: ReleaseView, add: Add): void {
   if (!v.latest) add('info', 'kharos', `${v.installed}; the latest release could not be read (${v.error ?? 'no answer'})`);
   else if (updateAvailable(v)) {
     add('warn', 'kharos', `${v.installed} installed; ${v.latest} is the latest release`, [
-      v.install.kind === 'plugin' ? 'What changed is listed below, and /kharos:doctor offers to update it.' : `To update it, ${manualUpdate(v)}, then restart Claude Code.`,
+      v.install.kind === 'plugin' ? 'What changed is listed below, and /kharos:doctor offers to update it.' : `To update it, ${manualUpdate(v.install, v.latest)}.`,
     ]);
   } else add('ok', 'kharos', `${v.installed}, the latest release`);
   const npm = npmUpdate(v);

@@ -165,12 +165,14 @@ export function installedVersion(root: string = kharosRoot()): string | null {
 }
 
 /** How this kharos was installed, which decides how it is updated. */
-export type Install = { kind: 'plugin'; marketplace: string } | { kind: 'git' } | { kind: 'other' };
+export type Install = { kind: 'plugin'; marketplace: string } | { kind: 'npm' } | { kind: 'git' } | { kind: 'other' };
 
-/** Claude Code keeps an installed plugin in <config dir>/plugins/cache/<marketplace>/<plugin>/<version>. */
+/** Claude Code keeps an installed plugin in <config dir>/plugins/cache/<marketplace>/<plugin>/<version>; npm keeps a package in node_modules/<name>. */
 export function installOf(root: string): Install {
-  const m = path.resolve(root).split(path.sep).join('/').match(/\/plugins\/cache\/([^/]+)\/kharos\/[^/]+$/);
+  const p = path.resolve(root).split(path.sep).join('/');
+  const m = p.match(/\/plugins\/cache\/([^/]+)\/kharos\/[^/]+$/);
   if (m) return { kind: 'plugin', marketplace: m[1] as string };
+  if (p.endsWith('/node_modules/kharos')) return { kind: 'npm' };
   return fs.existsSync(path.join(root, '.git')) ? { kind: 'git' } : { kind: 'other' };
 }
 
@@ -198,8 +200,9 @@ export async function backgroundCheck(paths: Paths, env: NodeJS.ProcessEnv, now:
   await refreshRelease(paths, env, now, fetcher, BACKGROUND_TIMEOUT_MS);
 }
 
-export function noticeText(latest: string, installed: string): string {
-  return `kharos ${latest} is available (you have ${installed}); /kharos:doctor shows what changed and updates it.`;
+export function noticeText(latest: string, installed: string, install: Install): string {
+  const how = install.kind === 'plugin' ? '/kharos:doctor shows what changed and updates it' : `to update it, ${manualUpdate(install, latest)}`;
+  return `kharos ${latest} is available (you have ${installed}); ${how}.`;
 }
 
 /**
@@ -207,7 +210,14 @@ export function noticeText(latest: string, installed: string): string {
  * null otherwise. It reads only the cache: when that is older than a day, a detached process reads GitHub
  * again for the next command. It never throws and never waits for the network.
  */
-export function updateNotice(paths: Paths, env: NodeJS.ProcessEnv, now: number, refresh: RefreshSpawner = detachedRefresh, installed: string | null = installedVersion()): string | null {
+export function updateNotice(
+  paths: Paths,
+  env: NodeJS.ProcessEnv,
+  now: number,
+  refresh: RefreshSpawner = detachedRefresh,
+  installed: string | null = installedVersion(),
+  install: Install = installOf(kharosRoot()),
+): string | null {
   try {
     if (!releasesApi(env)) return null;
     let notify = true;
@@ -227,7 +237,7 @@ export function updateNotice(paths: Paths, env: NodeJS.ProcessEnv, now: number, 
     if (cache.notified_at && now - Date.parse(cache.notified_at) < RELEASE_TTL_MS) return null;
     const fresh = loadReleaseCache(paths) ?? cache;
     saveReleaseCache(paths, { ...fresh, notified_at: new Date(now).toISOString() });
-    return noticeText(cache.latest, installed);
+    return noticeText(cache.latest, installed, install);
   } catch {
     return null;
   }
@@ -242,13 +252,13 @@ export interface ReleaseView {
   error: string | null;
   /** The CHANGELOG sections between the installed version and the latest; null when not newer or not readable. */
   changes: string | null;
-  /** The version of a kharos command installed globally from npm, when there is one. */
+  /** The version of a kharos command installed globally from npm, besides this kharos, when there is one. */
   npm: string | null;
 }
 
-/** The version of the `kharos` npm package installed globally, or null. */
+/** The version of the `kharos` npm package installed globally, or null, also when npm does not answer in time. */
 export function npmGlobalVersion(env: NodeJS.ProcessEnv): string | null {
-  const r = spawnSync('npm', ['ls', '-g', 'kharos', '--depth=0', '--json'], { encoding: 'utf8', timeout: 15_000, env });
+  const r = spawnSync('npm', ['ls', '-g', 'kharos', '--depth=0', '--json'], { encoding: 'utf8', timeout: 2_000, env });
   if (r.error || !r.stdout) return null;
   try {
     const v: unknown = JSON.parse(r.stdout);
@@ -258,6 +268,25 @@ export function npmGlobalVersion(env: NodeJS.ProcessEnv): string | null {
   } catch {
     return null;
   }
+}
+
+/** The global npm kharos version, asked of npm at most once a day; any failure counts as none. */
+function npmVersionCached(paths: Paths, now: number, probe: () => string | null): string | null {
+  try {
+    const v: unknown = JSON.parse(fs.readFileSync(paths.npm, 'utf8'));
+    if (isObject(v) && typeof v.checked_at === 'string' && now - Date.parse(v.checked_at) < RELEASE_TTL_MS) {
+      return parseVersion(v.version)?.join('.') ?? null;
+    }
+  } catch {
+    // no answer kept yet
+  }
+  const version = probe();
+  try {
+    writeJsonAtomic(paths.npm, { checked_at: new Date(now).toISOString(), version });
+  } catch {
+    // a cache that cannot be written only means the next doctor asks again
+  }
+  return version;
 }
 
 export interface ReleaseDeps {
@@ -289,7 +318,8 @@ export async function readReleaseView(paths: Paths, env: NodeJS.ProcessEnv, now:
     const text = await readChangelog(env, latest, deps.fetcher, DOCTOR_TIMEOUT_MS);
     changes = text === null ? null : changesBetween(text, installed, latest) || null;
   }
-  return { installed, install, latest, error: 'error' in r ? r.error : null, changes, npm: latest ? deps.npmVersion() : null };
+  const npm = latest && install.kind !== 'npm' ? npmVersionCached(paths, now, deps.npmVersion) : null;
+  return { installed, install, latest, error: 'error' in r ? r.error : null, changes, npm };
 }
 
 /** Whether a newer release than the installed kharos is out. */
@@ -340,7 +370,7 @@ export function applyUpdate(v: ReleaseView, expect: string, run: ClaudeRunner): 
   if (!v.latest) return { ok: false, lines: [`not updated: the latest release could not be read (${v.error ?? 'no answer'})`] };
   if (!updateAvailable(v)) return { ok: false, lines: [`not updated: kharos ${v.installed ?? 'of unknown version'} is already the latest release (${v.latest})`] };
   if (want !== v.latest) return { ok: false, lines: [`not updated: the latest release is ${v.latest}, not ${want}; run /kharos:doctor again`] };
-  if (v.install.kind !== 'plugin') return { ok: false, lines: [`not updated: this kharos is not installed as a Claude Code plugin; ${manualUpdate(v)}`] };
+  if (v.install.kind !== 'plugin') return { ok: false, lines: [`not updated: this kharos is not installed as a Claude Code plugin; ${manualUpdate(v.install, v.latest)}`] };
   const lines: string[] = [];
   for (const args of updateCommands(v.install.marketplace)) {
     const r = run(args);
@@ -356,9 +386,10 @@ export function applyUpdate(v: ReleaseView, expect: string, run: ClaudeRunner): 
   return { ok: true, lines };
 }
 
-/** How to update a kharos that is not a plugin of a marketplace. */
-export function manualUpdate(v: ReleaseView): string {
-  return v.install.kind === 'git' ? 'run `git pull` in its folder' : `install it again from https://github.com/${RELEASE_REPO}`;
+/** How to update a kharos that is not a plugin of a marketplace to `latest`. */
+export function manualUpdate(install: Install, latest: string): string {
+  if (install.kind === 'npm') return `run \`npm install -g kharos@${latest}\``;
+  return `${install.kind === 'git' ? 'run `git pull` in its folder' : `install it again from https://github.com/${RELEASE_REPO}`}, then restart Claude Code`;
 }
 
 /** The command that updates a kharos command installed from npm, when it is older than the latest release. */

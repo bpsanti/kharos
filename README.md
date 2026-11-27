@@ -71,7 +71,8 @@ npm install -g kharos
 `/kharos:doctor` shows the installed kharos and the latest release on GitHub, and when a newer one is out, what changed between them from `CHANGELOG.md`.
 It then asks once whether to update; on yes it runs `claude plugin marketplace update kharos` and `claude plugin update kharos@kharos` for the Claude account in use, and you restart Claude Code to load the new version.
 Nothing is updated without that yes.
-A `kharos` command installed from npm gets its own line with the `npm install -g` command to run.
+A `kharos` command installed from npm gets its own line with the `npm install -g` command to run; npm is asked about it at most once a day.
+Run from that npm command itself, `kharos doctor` and the daily line give that `npm install -g` command instead of the plugin update.
 
 `/kharos:run` and `/kharos:list` add one line when a newer release is out, such as `kharos 0.3.2 is available (you have 0.3.1); /kharos:doctor shows what changed and updates it.`, at most once a day.
 The release is read from GitHub at most once a day, in a background process, so it never slows a command; without a network it says nothing.

@@ -43,6 +43,8 @@ export interface Paths {
   migration: string;
   /** The latest kharos release, as the last daily read found it, and when its notice was last shown. */
   release: string;
+  /** The version of a kharos installed globally from npm, as npm last answered, kept a day. */
+  npm: string;
 }
 
 function expand(p: string, home: string): string {
@@ -84,6 +86,7 @@ function layout(home: string, account: string | null, configDir: string, state: 
     rounds: path.join(state, 'rounds.json'),
     migration: path.join(state, 'migration.json'),
     release: path.join(state, 'release.json'),
+    npm: path.join(state, 'npm.json'),
   };
 }
 
