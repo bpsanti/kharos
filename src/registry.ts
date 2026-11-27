@@ -78,6 +78,8 @@ export interface Session {
   prs_opened?: string[];
   /** Where each of those pull requests stood when kharos last asked GitHub, while the session sat idle. */
   pr_states?: Record<string, { state: PullRequestState; at: string }>;
+  /** When gh last failed to tell where one of those pull requests stands, and why; gh is not asked again before PR_STATE_TTL_MS. */
+  pr_check_failed?: { at: string; error: string } | null;
   /** When session.overdue was raised, once per session: a session a message reopens past its deadline does not raise it again. */
   overdue_at?: string | null;
   /** When list_runs last came back empty while the launch was firing; a person may re-arm it after that. */

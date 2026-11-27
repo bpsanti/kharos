@@ -981,3 +981,35 @@ test('pr close: every pull request the session opened must have ended', async ()
   assert.equal(ev.reason, `closed because every pull request it opened ended (${PR} merged, ${second} merged), and it sits idle: its turn closed, with nothing left that could wake it`);
   assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'closed');
 });
+
+test('pr close: while gh fails, the pull request is asked about once per cache time, not on every read, and the session closes once gh answers', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const calls: number[] = [];
+  let state: 'merged' | null = null;
+  let clock = () => 0;
+  const read = (url: string) => {
+    calls.push(clock());
+    return prReader(() => state)(url);
+  };
+  // Reads land about once a minute while it sits idle; gh fails on each try.
+  const c = clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send: () => {}, pullRequest: read, maxMs: 12 * MIN });
+  clock = c.now;
+  const first = await c.run();
+  assert.notEqual(first.key, 'end:closed');
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'open', 'a failing gh closes nothing');
+  assert.equal(s.pr_check_failed?.error, 'gh: HTTP 502');
+  assert.ok(s.reads >= 8, `${s.reads} reads`);
+  assert.equal(calls.length, 2, `gh asked ${calls.length} times in ${s.reads} reads`);
+  for (let i = 1; i < calls.length; i++) assert.ok(calls[i]! - calls[i - 1]! >= 5 * MIN, 'retried only after the cache time');
+  // gh answers again: the next try after the cache time closes the session.
+  state = 'merged';
+  const c2 = clocked(sb, c.now(), reader(sb, () => PR_OPENED), { send: () => {}, since: first.key, pullRequest: read, maxMs: 7 * MIN });
+  clock = c2.now;
+  const o = await c2.run();
+  assert.equal(calls.length, 3);
+  assert.ok(calls[2]! - calls[1]! >= 5 * MIN);
+  assert.equal(o.key, 'end:closed');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.pr_check_failed, null);
+});

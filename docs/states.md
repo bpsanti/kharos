@@ -51,7 +51,7 @@ A session that opened a pull request (`session.pr_opened`) is closed by its foll
 
 Then the follower closes it instead of asking it whether it finished.
 It asks GitHub through the person's own `gh` (`gh pr view <url> --json state`), only while the conditions above hold, and keeps each answer on the session for 5 minutes; a merge is final and never asked again.
-A `gh` that fails closes nothing, and a read that lands while `gh` answers and shows new events keeps the session open.
+A `gh` that fails closes nothing and is asked again only after those 5 minutes, not on every read, and a read that lands while `gh` answers and shows new events keeps the session open.
 A session the person closed already (`closing`) is closed the same way, with no event, as its other ends are.
 The session is never stopped: kharos only stops following it, and the cloud session stays as it is.
 

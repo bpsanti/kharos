@@ -36,14 +36,28 @@ export function idleForPrClose(s: Session, events: readonly LogEvent[], now: num
   return !(s.end_probe && now - Date.parse(s.end_probe.at) <= watch.unmarked_end_min * MIN);
 }
 
+interface Asked {
+  fresh: Record<string, { state: PullRequestState; at: string }>;
+  /** Why gh could not tell, when it could not. */
+  failed: string | null;
+}
+
 /** Where the pull request stands, from the cache while it is fresh, else from GitHub; null when gh cannot tell. */
-function stateOf(s: Session, pr: string, now: number, read: PullRequestReader, fresh: Record<string, { state: PullRequestState; at: string }>): PullRequestState | null {
+function stateOf(s: Session, pr: string, now: number, read: PullRequestReader, asked: Asked): PullRequestState | null {
   const cached = s.pr_states?.[pr];
   if (cached && (cached.state === 'merged' || now - Date.parse(cached.at) < PR_STATE_TTL_MS)) return cached.state;
   const r = read(pr);
-  if (!r.ok) return null;
-  fresh[pr] = { state: r.state, at: new Date(now).toISOString() };
+  if (!r.ok) {
+    asked.failed = r.error;
+    return null;
+  }
+  asked.fresh[pr] = { state: r.state, at: new Date(now).toISOString() };
   return r.state;
+}
+
+/** gh failed lately: it is asked again only after PR_STATE_TTL_MS, so a gh that keeps failing does not hold up every read. */
+function backingOff(s: Session, now: number): boolean {
+  return Boolean(s.pr_check_failed && now - Date.parse(s.pr_check_failed.at) < PR_STATE_TTL_MS);
 }
 
 function closeReason(prs: readonly string[], states: Record<string, PullRequestState>): string {
@@ -62,12 +76,13 @@ export function closeIfPrEnded(paths: Paths, id: string, now: number, watch: Wat
   const prs = s?.prs_opened ?? [];
   if (!s || prs.length === 0) return false;
   const events = readStoredEvents(logPath(paths, id));
-  if (!idleForPrClose(s, events, now, watch)) return false;
-  const fresh: Record<string, { state: PullRequestState; at: string }> = {};
+  if (!idleForPrClose(s, events, now, watch) || backingOff(s, now)) return false;
+  const asked: Asked = { fresh: {}, failed: null };
+  const { fresh } = asked;
   const states: Record<string, PullRequestState> = {};
   let ended = true;
   for (const pr of prs) {
-    const state = stateOf(s, pr, now, read, fresh);
+    const state = stateOf(s, pr, now, read, asked);
     if (state === null || state === 'open') {
       ended = false;
       break;
@@ -78,6 +93,7 @@ export function closeIfPrEnded(paths: Paths, id: string, now: number, watch: Wat
     const cur = reg.sessions[id];
     if (!cur) return false;
     if (Object.keys(fresh).length) cur.pr_states = { ...cur.pr_states, ...fresh };
+    cur.pr_check_failed = asked.failed === null ? null : { at: new Date(now).toISOString(), error: asked.failed };
     // A read that landed meanwhile may show the session at work again.
     if (!ended || cur.last_event_at !== s.last_event_at || cur.state !== s.state || cur.step !== 'open' || (cur.prs_opened?.length ?? 0) !== prs.length) return false;
     if (!cur.closing_at) enqueue(paths, transition(cur, { state: cur.state, notice: 'auto_closed', reason: closeReason(prs, states) }, now, watch.renotify_min, false));

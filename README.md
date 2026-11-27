@@ -129,6 +129,7 @@ A session frees its slot by itself in two cases, with nobody running `/kharos:cl
 - It opened a pull request, every pull request it opened is merged or closed, and it sits idle: its turn closed, no call is open, no background task it started can still wake it, and it has been quiet for `watch.unmarked_end_min` (5 minutes).
   The follower then closes it with `session.auto_closed` (`terminal`), which names the pull request and whether it was merged, instead of asking it whether it finished.
   The follower asks GitHub through your own `gh`, only while the session sits idle, and keeps the answer for 5 minutes; a merge is never asked again.
+  While `gh` fails, it is asked again only after those 5 minutes, so a `gh` that is logged out or offline does not hold up every read.
   A session that is working is never closed this way, however its pull request stands, and a session that opened no pull request is never closed this way.
   Closing it never stops the cloud session; kharos only stops following it.
 
@@ -202,7 +203,7 @@ See [docs/follow.md](docs/follow.md) for how it works and its limits.
 ### What a follower reports
 
 Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
-Only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+A session ends with its own `KHAROS-DONE` mark (also as its answer to the question below), at its deadline after that question brought no mark, or once every pull request it opened is merged or closed while it sits idle ([Closing a session](#closing-a-session)); "could not read" is never taken for "finished".
 When a turn closes without the mark and stays quiet for `watch.unmarked_end_min` (5 minutes), with no background task left that could wake it (every task it started, a background command, a `Monitor` or a background agent, has ended, by its notice of the end, a wait on its output that saw it end, or a stop that worked), the follower asks the session once whether it finished: one short message that asks for the final report in `KHAROS-PART` messages and the `KHAROS-DONE` line, or to go on with its work.
 The session ends when it answers with `KHAROS-DONE`, and is `running` again when it goes on working; with no answer, or an answer with neither, it stays `turn_closed` with the `session.quiet_unmarked` warning, keeps its `watch.max_open` slot, and is closed at its deadline with `session.deadline_closed` (`terminal`), which carries its last message.
 It is asked once per quiet period, never past its deadline, and never once you closed it.
