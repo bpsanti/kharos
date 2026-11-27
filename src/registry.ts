@@ -254,6 +254,9 @@ export function activeCount(reg: Pick<Registry, 'sessions'>, now: number = Date.
 /** Tries of one queued launch before kharos stops firing it and asks the person. */
 export const MAX_FIRE_TRIES = 3;
 
+/** How `error` of a launch starts after the auto mode classifier refused its run. */
+export const CLASSIFIER_REFUSED = 'the auto mode classifier refused the run';
+
 /** A launch made with --queue whose fires are used up: it waits for a person, and no longer for a slot. */
 export function leftToPerson(s: Session): boolean {
   return s.queue !== undefined && s.queue.tries >= MAX_FIRE_TRIES;

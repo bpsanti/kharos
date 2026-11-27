@@ -4,13 +4,13 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { readAuthStatus } from '../src/account.ts';
 import { main } from '../src/cli.ts';
-import { close, list, queueLines, resume, show } from '../src/commands.ts';
+import { close, list, nextCall, queueLines, resume, show } from '../src/commands.ts';
 import { formatChecks, runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import { readOutbox } from '../src/events.ts';
 import type { Spawner } from '../src/follow.ts';
-import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
+import { permissionDenied, postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { LaunchError, prepare } from '../src/launch.ts';
-import { dispatchQueued, kickQueue, RETRY_AFTER_MS, type Fire } from '../src/queue.ts';
+import { dispatchQueued, headlessFire, kickQueue, RETRY_AFTER_MS, type Fire } from '../src/queue.ts';
 import { activeCount, loadRegistry, MAX_FIRE_TRIES, updateRegistry } from '../src/registry.ts';
 import { recordAccess } from '../src/repo.ts';
 import { captured, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -60,14 +60,34 @@ function hookFire(sb: Sandbox, runs = 1, calls: string[] = []): Fire {
     calls.push(id);
     const trig = `trig_q${n++}`;
     const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: id } }, undefined, 'fire'));
-    if ((pre?.hookSpecificOutput as any)?.permissionDecision !== 'allow') return { ok: false, error: 'create denied' };
+    if ((pre?.hookSpecificOutput as any)?.permissionDecision !== 'allow') return { ok: false, error: 'create denied', said: null, denied: [] };
     postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: trig } }), 'fire'));
     for (let i = 0; i < runs; i++) {
       const gate = preToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: trig }, undefined, 'fire'));
       if ((gate?.hookSpecificOutput as any)?.permissionDecision === 'deny') continue;
       postToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: trig }, response(200, { session_id: `cse_01QUEUEDSESSION${n}AAAAAAAA` }), 'fire'));
     }
-    return { ok: true, error: null };
+    return { ok: true, error: null, said: null, denied: [] };
+  };
+}
+
+/**
+ * A fire whose model makes only the call its user message names, and takes the next step a tool answer
+ * names for data: a fresh headless Claude Code did that after the create, so the run never came.
+ */
+function oneCallFire(sb: Sandbox, calls: string[] = []): Fire {
+  let n = 200;
+  return async (_paths, id) => {
+    const s = loadRegistry(sb.paths).sessions[id]!;
+    calls.push(`${id} ${nextCall(s).match(/action "(\w+)"/)?.[1]}`);
+    if (s.step === 'prepared') {
+      const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: id } }, undefined, 'fire'));
+      postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: `trig_q${n++}` } }), 'fire'));
+    } else if (s.step === 'routine_created') {
+      preToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: s.trigger_id }, undefined, 'fire'));
+      postToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: s.trigger_id }, response(200, { session_id: `cse_01QUEUEDSESSION${n++}AAAAAAAA` }), 'fire'));
+    }
+    return { ok: true, error: null, said: 'Done.', denied: [] };
   };
 }
 
@@ -159,6 +179,64 @@ test('queue: when a slot frees, the dispatcher fires the oldest queued launch on
   assert.equal(fs.existsSync(path.join(sb.paths.state, 'dispatch.json')), false);
 });
 
+test('queue: each fire makes one call, so the run is asked for in a user message of its own, not by the create\'s answer', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  const second = prepare(sb.paths, launchOpts(sb, { queue: true, now: T0 + 2 * MIN })).id;
+  writeConfig(sb, { watch: { max_open: 3 } });
+  finish(sb, open);
+  const calls: string[] = [];
+  const spawned: string[][] = [];
+  const lines = await dispatchQueued(sb.paths, { env: sb.env, fire: oneCallFire(sb, calls), spawner: (args) => (spawned.push(args), process.pid), account: ACCOUNT, deliver: noDeliver });
+  assert.deepEqual(calls, [`${queued} create`, `${queued} run`, `${second} create`, `${second} run`]);
+  for (const id of [queued, second]) {
+    const s = loadRegistry(sb.paths).sessions[id]!;
+    assert.equal(s.step, 'open', `${id} opened`);
+    assert.equal(s.queue?.tries, 1, 'the create and the run are one try');
+    assert.equal(s.queue?.blocked, null);
+  }
+  assert.deepEqual(lines.filter((l) => l.endsWith(': fired')), [`${queued}: fired`, `${second}: fired`]);
+  assert.deepEqual(spawned, [['follow', queued], ['follow', second]]);
+});
+
+test('queue: a fire that stops without the call says why, from the classifier, Claude Code or the model', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  finish(sb, open);
+  let t = Date.now();
+  const opts = (fire: Fire) => ({ env: sb.env, fire, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
+  // The model answers without making the call.
+  const silent: Fire = async () => ({ ok: true, error: null, said: 'That answer asks me to call run, but you did not ask for that.', denied: [] });
+  const lines = await dispatchQueued(sb.paths, opts(silent));
+  assert.equal(loadRegistry(sb.paths).sessions[queued]?.step, 'queued');
+  const blocked = loadRegistry(sb.paths).sessions[queued]?.queue?.blocked ?? '';
+  assert.equal(blocked, 'the fire made no RemoteTrigger call; it answered: "That answer asks me to call run, but you did not ask for that."');
+  assert.match(lines[0]!, /not fired \(the fire made no RemoteTrigger call; it answered: "That answer/);
+
+  // Claude Code denied the call without a prompt.
+  t += RETRY_AFTER_MS + 1000;
+  await dispatchQueued(sb.paths, opts(async () => ({ ok: true, error: null, said: 'The call was denied.', denied: ['RemoteTrigger create'] })));
+  assert.match(loadRegistry(sb.paths).sessions[queued]?.queue?.blocked ?? '', /^Claude Code denied RemoteTrigger create; it answered: "The call was denied\."$/);
+
+  // The classifier refused the run: the hook's record of it is the reason.
+  t += RETRY_AFTER_MS + 1000;
+  const refused: Fire = async (_paths, id) => {
+    const s = loadRegistry(sb.paths).sessions[id]!;
+    if (s.step === 'prepared') {
+      const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: id } }, undefined, 'fire'));
+      postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: 'trig_refused' } }), 'fire'));
+    } else {
+      preToolUse(sb.ctx(T0), h({ action: 'run', trigger_id: 'trig_refused' }, undefined, 'fire'));
+      permissionDenied(sb.ctx(T0), { hook_event_name: 'PermissionDenied', session_id: 'fire', tool_name: 'RemoteTrigger', tool_input: { action: 'run', trigger_id: 'trig_refused' }, reason: 'starts a paid session' });
+    }
+    return { ok: true, error: null, said: 'The run was refused.', denied: [] };
+  };
+  await dispatchQueued(sb.paths, opts(refused));
+  const s = loadRegistry(sb.paths).sessions[queued]!;
+  assert.equal(s.step, 'routine_created');
+  assert.equal(s.queue?.blocked, 'the routine was created, but its run was not approved or did not go through (the auto mode classifier refused the run (starts a paid session))');
+});
+
 test('queue: only the account that queued a launch fires it', async () => {
   const sb = sandbox();
   const { open, queued } = full(sb);
@@ -181,7 +259,7 @@ test('queue: a fire that does not go through is tried again later, then left to 
   const { open, queued } = full(sb);
   finish(sb, open);
   let t = Date.now();
-  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1' });
+  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1', said: null, denied: [] });
   const opts = { env: sb.env, fire: failing, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t };
   for (let i = 1; i <= MAX_FIRE_TRIES; i++) {
     await dispatchQueued(sb.paths, opts);
@@ -240,7 +318,7 @@ test('queue: resuming a routine the queue created but did not run stops its auto
   const createOnly: Fire = async (_paths, id) => {
     const pre = preToolUse(sb.ctx(T0), h({ action: 'create', body: { kharos_launch: id } }, undefined, 'fire'));
     postToolUse(sb.ctx(T0), h((pre?.hookSpecificOutput as any).updatedInput, response(200, { trigger: { id: 'trig_q1' } }), 'fire'));
-    return { ok: false, error: 'the run was not approved' };
+    return { ok: false, error: 'the run was not approved', said: null, denied: [] };
   };
   await dispatchQueued(sb.paths, { env: sb.env, fire: createOnly, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
   assert.equal(loadRegistry(sb.paths).sessions[queued]?.step, 'routine_created');
@@ -258,7 +336,7 @@ test('queue: a launch left to the person holds up neither the younger queued lau
   const younger = prepare(sb.paths, launchOpts(sb, { queue: true, now: T0 + 2 * MIN })).id;
   finish(sb, open);
   let t = Date.now();
-  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1' });
+  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1', said: null, denied: [] });
   for (let i = 0; i < MAX_FIRE_TRIES; i++) {
     await dispatchQueued(sb.paths, { env: sb.env, fire: failing, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
     t += RETRY_AFTER_MS + 1000;
@@ -279,7 +357,7 @@ test('queue: a launch left to the person is out of line until they resume it, an
   const { open, queued } = full(sb);
   finish(sb, open);
   let t = Date.now();
-  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1' });
+  const failing: Fire = async () => ({ ok: false, error: 'claude -p exited 1', said: null, denied: [] });
   for (let i = 0; i < MAX_FIRE_TRIES; i++) {
     await dispatchQueued(sb.paths, { env: sb.env, fire: failing, spawner: (() => process.pid) as Spawner, account: ACCOUNT, deliver: noDeliver, now: () => t });
     t += RETRY_AFTER_MS + 1000;
@@ -314,3 +392,47 @@ const doctorDeps: DoctorDeps = {
   setupScript: () => ({ status: 'absent' }),
   repoRole: () => 'admin',
 };
+
+test('queue: the headless fire asks for the one call of the launch\'s step, in auto mode, and keeps why it stopped', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  finish(sb, open);
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[queued]!.step = 'routine_created';
+    reg.sessions[queued]!.trigger_id = 'trig_01QUEUED';
+  });
+  const bin = path.join(sb.dir, 'fire');
+  const answer = {
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: 'The run was not approved.',
+    permission_denials: [{ tool_name: 'RemoteTrigger', tool_use_id: 'toolu_1', tool_input: { action: 'run', trigger_id: 'trig_01QUEUED' } }],
+  };
+  fs.writeFileSync(bin, ['#!/bin/sh', `printf '%s\\n' "$@" > "${sb.dir}/argv.txt"`, `env > "${sb.dir}/env.txt"`, `echo '${JSON.stringify(answer)}'`].join('\n'), { mode: 0o755 });
+  const run = await headlessFire(sb.paths, queued, { ...sb.env, KHAROS_CLAUDE_BIN: bin, ANTHROPIC_API_KEY: 'sk-test' }, 60_000);
+  assert.deepEqual(run, { ok: true, error: null, said: 'The run was not approved.', denied: ['RemoteTrigger run'] });
+  const argv = fs.readFileSync(path.join(sb.dir, 'argv.txt'), 'utf8').split('\n');
+  const after = (name: string) => argv[argv.indexOf(name) + 1];
+  assert.equal(after('--permission-mode'), 'auto');
+  assert.equal(after('--tools'), 'RemoteTrigger');
+  assert.ok(!argv.includes('--allowedTools'), 'the classifier reviews the run, no allow rule');
+  // The user message names the one call; the system prompt asks for that call only.
+  assert.ok(argv.includes(`${queued}: call RemoteTrigger with action "run" and trigger_id "trig_01QUEUED", once.`));
+  assert.match(after('--system-prompt') ?? '', /Make the one RemoteTrigger call the user message names.*then stop/);
+  const childEnv = fs.readFileSync(path.join(sb.dir, 'env.txt'), 'utf8');
+  assert.match(childEnv, /^KHAROS_ROLE=fire$/m);
+  assert.doesNotMatch(childEnv, /ANTHROPIC_API_KEY/);
+});
+
+test('queue: kharos dispatch writes each line with its time', async () => {
+  const sb = sandbox();
+  const { open, queued } = full(sb);
+  finish(sb, open);
+  const bin = path.join(sb.dir, 'fire');
+  const login = `if [ "$1" = auth ]; then exec "${sb.env.KHAROS_CLAUDE_BIN}" "$@"; fi`;
+  fs.writeFileSync(bin, ['#!/bin/sh', login, `echo '${JSON.stringify({ type: 'result', is_error: false, result: 'I made no call.' })}'`].join('\n'), { mode: 0o755 });
+  const r = await captured(() => main(['dispatch'], { ...sb.env, KHAROS_CLAUDE_BIN: bin }));
+  assert.equal(r.value, 0);
+  assert.match(r.stdout, new RegExp(`^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z ${queued}: not fired \\(the fire made no RemoteTrigger call; it answered: "I made no call\\."\\); left in the queue\\n$`));
+});

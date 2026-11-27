@@ -11,6 +11,7 @@ import {
   bodyPath,
   byTrigger,
   bySessionId,
+  CLASSIFIER_REFUSED,
   loadRegistry,
   logPath,
   routineUrl,
@@ -377,7 +378,7 @@ export function permissionDenied(ctx: Ctx, input: HookInput): HookOutput {
     s.step = 'routine_created';
     s.fired_at = null;
     s.runs_seen_empty_at = null;
-    s.error = `the auto mode classifier refused the run (${why})`;
+    s.error = `${CLASSIFIER_REFUSED} (${why})`;
     return s.id;
   });
   if (!id) return null;
@@ -390,7 +391,7 @@ function openSession(s: Session, sessionId: string, url: string | null, now: num
   s.step = 'open';
   s.opened_at = new Date(now).toISOString();
   // A refused run before this one is no longer the news.
-  if (s.error?.startsWith('the auto mode classifier refused the run')) s.error = null;
+  if (s.error?.startsWith(CLASSIFIER_REFUSED)) s.error = null;
   if (s.state === 'launching') {
     s.state = 'provisioning';
     s.state_since = new Date(now).toISOString();

@@ -11,6 +11,14 @@
   The release is read at most once a day, in a background process, and any network failure is silent.
 - New configuration key `update.notify` (on by default) turns that line off.
 
+### Fixes
+
+- A queued launch now fires by itself when a slot frees.
+  Its fire used to stop after creating the routine, with `not fired (no RemoteTrigger call)`: the `run` was asked for only in the answer to the `create`, which the fire's model takes for data.
+  Each step is now a headless Claude Code of its own, whose user message names the one call: the `create`, then the `run`, in the same try.
+- A queued fire that does not go through now says why: the error, the auto mode classifier's refusal, a call Claude Code denied, or what the model answered instead of the call.
+  Each line of `logs/dispatch.log` now starts with its time.
+
 ## 0.3.1
 
 No command or configuration changes.
