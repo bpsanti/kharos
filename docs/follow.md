@@ -55,7 +55,7 @@ Each reader is a whole Claude Code process, so the followers due at the same mom
 1. The first follower that is due opens a round (`rounds.json` in the state folder) and waits two seconds for the others; a follower alone reads at once.
 2. Each follower due then joins it with its reads, up to 20 sessions; more followers open another round.
 3. The follower whose wait ends last runs one reader for the whole round, asked for the numbered list of its calls, so no other follower's deadline cuts it.
-   A session's archive check (`list_runs`) comes in a second list, made only once the log reads have answered, so its log is stored first, as when the reads were made one by one.
+   A session's archive check (`list_runs`) comes in a second list, after the log reads; whatever order the answers come in, an archive is settled only by the session's next log read, so an end mark in the log is never taken for an archive without one.
 4. The hook stores and classifies each answer exactly as for a read alone, and each follower knows from the registry whether its own session was read.
 
 A round is for one Claude account: only followers that would start the same reader (the same `CLAUDE_CONFIG_DIR` and the same `claude` binary) share one, and the reader runs with that account's folder.

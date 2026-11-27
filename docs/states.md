@@ -37,7 +37,7 @@ The rules are checked in this order, and the first that matches wins.
 | `turn_closed` | the last event is a `result` with no mark | `quiet_unmarked`, a warning, after `quiet_end_min` (40) while a background task the session started may still wake it; with none, the question above |
 | `running` | anything else | no |
 
-A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal.
+A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal, at its next log read: an end mark that read brings still makes it `finished` or `failed`.
 
 A background task may still wake the session while the log shows it started and not its end:
 

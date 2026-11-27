@@ -99,12 +99,32 @@ test('reads: two failed reads in a row make the session invisible', () => {
   assert.equal(loadRegistry(sb.paths).sessions[id]?.state, 'invisible');
 });
 
-test('reads: an archived run without an end mark is a terminal event', () => {
+const archived = () => response(200, { data: [{ id: SID, status: 'archived' }] });
+
+test('reads: an archived run without an end mark is a terminal event at its next log read', () => {
   const sb = sandbox();
   const id = openOne(sb);
-  postToolUse(sb.ctx(T0 + MIN), h({ action: 'list_runs', trigger_id: TRIG }, response(200, { data: [{ id: SID, status: 'archived' }] })));
+  postToolUse(sb.ctx(Date.parse('2026-11-25T19:02:00Z')), h({ action: 'list_runs', trigger_id: TRIG }, archived(), 'reader'));
+  assert.notEqual(loadRegistry(sb.paths).sessions[id]?.state, 'ended_unmarked');
+  assert.match(readLog(sb, Date.parse('2026-11-25T19:02:01Z'), fixture('log-foreground-command.txt')), /archived without an end mark/);
   assert.equal(loadRegistry(sb.paths).sessions[id]?.state, 'ended_unmarked');
+  assert.equal(readOutbox(sb.paths).at(-1)?.event.event, 'session.ended_unmarked');
   assert.equal(readOutbox(sb.paths).at(-1)?.event.class, 'terminal');
+});
+
+test('reads: an archive check answered before the log that carries KHAROS-DONE still ends the session finished', () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  // One reader made both calls of a sixth read, and the archive check's answer reached the hook first.
+  const at = Date.parse('2026-11-25T19:04:00Z');
+  postToolUse(sb.ctx(at), h({ action: 'list_runs', trigger_id: TRIG }, archived(), 'reader'));
+  readLog(sb, at, fixture('log-question-background-done.txt'));
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.state, 'finished');
+  assert.equal(s.result.summary, 'BANANA AVOCADO');
+  const events = readOutbox(sb.paths).map((x) => x.event.event);
+  assert.ok(events.includes('session.finished'));
+  assert.ok(!events.includes('session.ended_unmarked'));
 });
 
 test('reads: an empty log for a session that had events is a failed read', () => {
