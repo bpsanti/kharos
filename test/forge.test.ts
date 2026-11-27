@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { ghForge, ghSpawnError, realGh } from '../src/forge.ts';
+import { ghForge, ghSpawnError, pullRequestReader, realGh } from '../src/forge.ts';
 import { sandbox } from './helpers.ts';
 
 /** A fake gh on PATH that runs `body` as a shell script. */
@@ -45,4 +45,14 @@ test('forge: only a gh that is not there reads as not installed; other failures 
   assert.equal(slow.error, 'gh did not answer within 1 s');
   const failed = ghForge(realGh(fakeGh('sleep 5'), 300)).snapshot('https://github.com/example/demo', 'main', () => []);
   assert.deepEqual(failed, { ok: false, error: 'gh did not answer within 1 s' });
+});
+
+test('forge: a pull request state is read with gh pr view, and anything else is a failure, never a state', () => {
+  const pr = 'https://github.com/example/demo/pull/7';
+  const read = (body: string) => pullRequestReader(realGh(fakeGh(body)))(pr);
+  assert.deepEqual(read(`[ "$*" = "pr view ${pr} --json state --jq .state" ] && echo MERGED`), { ok: true, state: 'merged' });
+  assert.deepEqual(read('echo OPEN'), { ok: true, state: 'open' });
+  assert.deepEqual(read('echo CLOSED'), { ok: true, state: 'closed' });
+  assert.deepEqual(read('echo DRAFT'), { ok: false, error: 'gh gave no pull request state' });
+  assert.deepEqual(read('echo "HTTP 404: Not Found" >&2; exit 1'), { ok: false, error: 'HTTP 404: Not Found' });
 });

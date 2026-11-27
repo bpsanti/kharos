@@ -39,6 +39,22 @@ The rules are checked in this order, and the first that matches wins.
 
 A session archived in `list_runs` without an end mark becomes `ended_unmarked`, terminal, at its next log read: an end mark that read brings still makes it `finished` or `failed`.
 
+The read that brings `KHAROS-DONE` frees the session's `watch.max_open` slot: `finished` and `failed` are terminal, so the session holds no slot from that read on and its follower stops, with nobody running `/kharos:close`; a `closing` session is closed on that same read.
+
+### Closed once its pull requests ended
+
+A session that opened a pull request (`session.pr_opened`) is closed by its follower, with `session.auto_closed` (`terminal`), when all of these hold on a read:
+
+- every pull request it opened is merged or closed on GitHub;
+- it sits idle: the state is `turn_closed`, the last event is a `result`, so no call is open, and no background task it started can still wake it (below);
+- it has been quiet for `unmarked_end_min` (5), so a turn that the merge itself woke shows on a read first, and no question whether it finished went to it in the last `unmarked_end_min`.
+
+Then the follower closes it instead of asking it whether it finished.
+It asks GitHub through the person's own `gh` (`gh pr view <url> --json state`), only while the conditions above hold, and keeps each answer on the session for 5 minutes; a merge is final and never asked again.
+A `gh` that fails closes nothing, and a read that lands while `gh` answers and shows new events keeps the session open.
+A session the person closed already (`closing`) is closed the same way, with no event, as its other ends are.
+The session is never stopped: kharos only stops following it, and the cloud session stays as it is.
+
 A background task may still wake the session while the log shows it started and not its end:
 
 - It started when a call's result names it: `Command running in background with ID: <id>`, `Command was moved to the background with ID: <id>`, `Monitor started (task <id>, expires in <n>m ...)`, or `Async agent launched ... agentId: <id>`.
@@ -94,12 +110,14 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "permission":{"tool":"Bash","category":"org_ask_rule"}}
 ```
 
-- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`, `session.deadline_closed`); `session.end_asked` (`progress`) says kharos asked a session whose turn closed without the end mark whether it finished.
+- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`, `session.deadline_closed`, `session.auto_closed`); `session.end_asked` (`progress`) says kharos asked a session whose turn closed without the end mark whether it finished.
 - `session.queued` (`progress`) says a launch made with `--queue` waits for a slot; `session.not_fired` (`needs_you`) says kharos did not fire a queued launch by itself (another account is logged in, a refusal, or fires that did not go through) and the person decides.
 - `session.pr_opened` (`progress`) says the session opened a pull request, with its URL in `pr`, as soon as a read shows the result of the call that created it (`gh pr create`, or a GitHub tool that creates one); once per pull request.
+- `session.auto_closed` (`terminal`) says kharos closed an idle session once every pull request it opened was merged or closed ([above](#closed-once-its-pull-requests-ended)); `pr` is the last one it opened, `pr_state` is `merged` when all of them were merged and `closed` otherwise, and `reason` names each pull request with how it ended.
 - `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.
 - `reason` is a fixed text written by the classifier; it never copies the log, except the name of the tool a permission prompt is for, with the fixed text of its category.
   Only `session.waiting_answer` carries `question`, and only `session.finished` carries `summary`, both cleaned of control characters and cut.
+  The pull request URLs in the reason of `session.auto_closed` are the ones `session.pr_opened` carried, which only match `https://github.com/<owner>/<repo>/pull/<n>`.
 - Only `session.waiting_permission` carries `permission`: the name of the tool the prompt is for, and a fixed `category` of why it asks ([permissions.md](permissions.md#why-a-prompt-asks)).
   The tool's input (the command, the file, the URL, the query) is never copied into an event; the person reads it on the session's page.
 - `url` is the direct link to the session, `https://claude.ai/code/session_<id>`.

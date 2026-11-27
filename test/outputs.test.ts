@@ -195,6 +195,16 @@ test('firstmate: the dedicated mode writes done only with a session sheet', () =
   assert.ok((statusLine(event({ event: 'session.finished', summary: 'fixed' }), 'dedicated', T0, long) ?? '').endsWith(` ${long}`));
 });
 
+test('firstmate: a session closed after its pull request ended is a note in the shared mode, and needs a look in the dedicated one', () => {
+  const pr = 'https://github.com/example/demo/pull/7';
+  const reason = `closed because the pull request it opened, ${pr}, was merged, and it sits idle: its turn closed, with nothing left that could wake it`;
+  const ev = (over: Partial<KharosEvent>) => event({ event: 'session.auto_closed', class: 'terminal', pr, pr_state: 'merged', reason, ...over });
+  assert.equal(statusLine(ev({}), 'shared', T0, null), `note [at=${Math.floor(T0 / 1000)}]: kharos k-0001 ${reason} PR ${pr}`);
+  assert.match(statusLine(ev({ open_notice: 'session.quiet_unmarked' }), 'shared', T0, null) ?? '', /^resolved \[key=kharos-k-0001\] /);
+  assert.match(statusLine(ev({}), 'dedicated', T0, null) ?? '', /^blocked \[key=kharos-k-0001\] .*it gave no end mark, so there is no session sheet PR https:/);
+  assert.match(statusLine(ev({ pr_state: 'closed' }), 'dedicated', T0, null) ?? '', /^failed \[at=/);
+});
+
 test('firstmate: writes one line to the given file only, calls the ledger, and refuses other paths', () => {
   const sb = sandbox();
   const { home, status } = fmHome(sb);

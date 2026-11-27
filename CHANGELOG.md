@@ -11,6 +11,15 @@
   The release is read at most once a day, in a background process, and any network failure is silent.
 - New configuration key `update.notify` (on by default) turns that line off.
 
+### Sessions free their slot by themselves
+
+- A session that opened a pull request is closed by its follower once every pull request it opened is merged or closed and the session sits idle: its turn closed, no call open, no background task left that could wake it, and quiet for `watch.unmarked_end_min`.
+  The new terminal event `session.auto_closed` names the pull request, says whether it was merged (`pr_state`), and frees the session's `watch.max_open` slot; the session is closed instead of being asked whether it finished.
+  The follower reads the pull request's state through your own `gh`, only while the session sits idle, and keeps it for 5 minutes.
+  A session that is working is never closed this way, and a session that opened no pull request is unaffected.
+- The firstmate output writes `session.auto_closed` as a `note` in shared mode, and as `blocked` (merged, with no session sheet) or `failed` (closed unmerged) in dedicated mode.
+- Tests now cover that a session writing `KHAROS-DONE` frees its slot and stops its follower on the read that sees the mark, while it runs and when it was closed with or without `--ask-stop`, with nobody running `/kharos:close`.
+
 ### Fixes
 
 - A queued launch now fires by itself when a slot frees.

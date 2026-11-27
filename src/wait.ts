@@ -17,6 +17,8 @@ import { settle, watchConfig } from './track.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
 import { appendMark, buildEvent, enqueue, type AlertRef } from './events.ts';
 import { headlessRead, JOIN_AHEAD_MS, PLUGIN_ROOT, readInRound, roundOpen, type Read, type Reader } from './round.ts';
+import { pullRequestReader, realGh, type PullRequestReader } from './forge.ts';
+import { closeIfPrEnded } from './pr-close.ts';
 
 export { headlessRead, PLUGIN_ROOT, READER_ROLE, ROLE_ENV, type Read, type Reader, type ReaderRun } from './round.ts';
 
@@ -49,6 +51,8 @@ export function currentAccount(paths: Paths, now: number, env: NodeJS.ProcessEnv
 const SLICE_MS = 5_000;
 /** How often a wait whose read is due within JOIN_AHEAD_MS looks for a round it may join. */
 const JOIN_POLL_MS = 500;
+/** How long one gh read of a pull request's state may take, well inside a follower's lease. */
+const PR_READ_TIMEOUT_MS = 20_000;
 /** Reads in a row that did not reach the registry before the wait gives up and says why. */
 const MAX_READER_FAILURES = 3;
 
@@ -87,6 +91,8 @@ export interface WaitOptions {
   account?: () => string | null;
   /** Sends a message into the session (the question whether it finished); throws a CommandError when it does not go through. */
   send?: (paths: Paths, id: string, text: string, env: NodeJS.ProcessEnv) => void;
+  /** Reads where a pull request the session opened stands; GitHub through gh by default. */
+  pullRequest?: PullRequestReader;
   /**
    * Who reads the report: a kharos:follow agent, which is told how to start the next one, or the shell
    * loop of `kharos follow`, which goes on by itself.
@@ -137,10 +143,13 @@ function words(v: string): string {
 /** The alerts a report names besides the change it is about: the ones raised while no follower handed them on. */
 function earlier(s: Session, o: Omit<WaitOutcome, 'report'>): string[] {
   const current = s.notice;
-  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && (a.event === `session.${s.state}` || a.event === 'session.deadline_closed')));
+  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && (a.event === `session.${s.state}` || CLOSED_BY_KHAROS.has(a.event))));
   if (rest.length === 0) return [];
   return [`Raised earlier, while no follower handed it on (${rest.length}): ${rest.map((a) => `${a.at.slice(11, 16)} UTC ${words(a.event)}: ${a.reason}`).join('; ')}`];
 }
+
+/** The ends where kharos closed the session itself, whose report gives the reason. */
+const CLOSED_BY_KHAROS: ReadonlySet<string> = new Set(['session.deadline_closed', 'session.auto_closed']);
 
 function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   const lines = buildMain(s, o, root, follower);
@@ -155,7 +164,11 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
 function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; once it is fixed, the next turn end of a Claude Code session with kharos starts a follower again, or kharos follow ${s.id} --detach does now.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
-  if (o.key === 'end:closed' && s.last_notice?.event === 'session.deadline_closed') return `${s.id} was ${clean(s.unacked?.findLast((a) => a.event === 'session.deadline_closed')?.reason ?? 'closed at its deadline', 400)}\nkharos no longer follows it. Session: ${o.url ?? 'no link'}`;
+  const by = s.last_notice?.event;
+  if (o.key === 'end:closed' && by && CLOSED_BY_KHAROS.has(by)) {
+    const fallback = by === 'session.deadline_closed' ? 'closed at its deadline' : 'closed after the pull requests it opened ended';
+    return `${s.id} was ${clean(s.unacked?.findLast((a) => a.event === by)?.reason ?? fallback, 400)}\nkharos no longer follows it. Session: ${o.url ?? 'no link'}`;
+  }
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
   if (o.key === 'launch:queued') return `${s.id} is queued for a free watch.max_open slot, and fires by itself when one frees; /kharos:close ${s.id} cancels it.`;
@@ -307,6 +320,8 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           }
           interval = after.last_event_at !== lastEvent ? opts.minIntervalMs : Math.min(Math.max(interval * 2, opts.minIntervalMs), opts.maxIntervalMs);
         }
+        // An idle session whose pull requests ended is closed rather than asked whether it finished.
+        if (landed && closeIfPrEnded(paths, id, now(), watchConfig(paths), opts.pullRequest ?? pullRequestReader(realGh(opts.env, PR_READ_TIMEOUT_MS)))) continue;
         // The question whether it finished, when the read found a closed turn to ask about; its answer is
         // read soon after.
         if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;
