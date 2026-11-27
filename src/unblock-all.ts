@@ -10,6 +10,10 @@
 // apply it only with that token, part by part in that order, skip what is on (or off) already, and stop at the
 // first part that fails, saying which parts are on then. `on` records which parts it turned on, and the switches
 // as they were, so `off` takes back only those and leaves what the person had set before as it was.
+// With no copy of the organization's managed settings, parts 1 and 2 are not available, and `show` says why and the
+// one check to make; it also offers a second token, for the same change with the person's statement that this account
+// has no organization settings (--no-org-settings). With it the settings read as empty, with a fingerprint of their own,
+// so a copy that appears later stops the preset until the person confirms again. kharos never fetches them itself.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -18,8 +22,8 @@ import { ACCOUNT_AUTO_CAVEAT, ACCOUNT_AUTO_EFFECT, applyAccountMode, approveAcco
 import { CommandError } from './commands.ts';
 import { ConfigError, loadConfig, saveConfig, type Config } from './config.ts';
 import { isObject, readState, writeJsonAtomic } from './fsutil.ts';
-import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
-import { confirmationState, describeConfirmation, forgetConfirmation, loadConfirmation, policyFingerprint, saveConfirmation } from './org-confirmations.ts';
+import { declaredEmpty, hooksBlocked, mirrorRefusal, noCopyText, type ManagedPolicy } from './managed-policy.ts';
+import { confirmationState, describeConfirmation, forgetConfirmation, loadConfirmation, policyFingerprint, readAccountPolicy, saveConfirmation } from './org-confirmations.ts';
 import { unblockOpens } from './permission-hook.ts';
 import { unifiedDiff } from './settings.ts';
 import type { Paths } from './paths.ts';
@@ -123,6 +127,7 @@ function record(paths: Paths, id: PartId, turnedOn: boolean, config?: Switches):
 
 /** Why the unblock preset is not available under this policy, or null. */
 function presetRefusal(policy: ManagedPolicy): string | null {
+  if (policy.status === 'absent') return "there is no copy of the organization's settings for this account, and kharos never guesses them";
   const refusal = mirrorRefusal(policy)?.replace(/^(mirroring is unavailable|refused): /, '') ?? null;
   return refusal ?? hooksBlocked(policy) ?? (policy.status === 'found' ? null : "the organization's managed settings cannot be read");
 }
@@ -138,11 +143,12 @@ function loadedConfig(paths: Paths): Config {
 }
 
 /** Where each of the three parts stands for this account now. */
-export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy = readManagedPolicy(env), config: Config = loadedConfig(paths)): UnblockAllState {
+export function readUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy = readAccountPolicy(paths, env), config: Config = loadedConfig(paths)): UnblockAllState {
   const preset = presetRefusal(policy);
   const turned = readBefore(paths)?.parts ?? [];
   const saved = loadConfirmation(paths, 'unblock');
-  const confirmed = confirmationState(saved, policy);
+  const undeclared = policy.status === 'found' && policy.noCopy && !loadConfirmation(paths, 'no-org-settings');
+  const confirmed = undeclared ? ({ state: 'none' } as const) : confirmationState(saved, policy);
   const auto = config.permission_hook && config.preflight_auto && config.permission_unblock;
   const acct = readAccountMode(env);
   const acctAuto = !('error' in acct) && acct.mode === 'auto';
@@ -210,6 +216,26 @@ interface Plan {
   token: string | null;
 }
 
+/**
+ * The policy for a change made with the person's statement that this account has no organization settings: empty,
+ * with a fingerprint of the absent copy. Refused when there is a copy, which kharos reads instead.
+ */
+export function withNoOrgSettings(policy: ManagedPolicy, declared: boolean): ManagedPolicy {
+  if (!declared || (policy.status === 'found' && policy.noCopy)) return policy;
+  if (policy.status === 'absent') return declaredEmpty(policy.file);
+  throw new CommandError(
+    `--no-org-settings is only for an account with no copy of the organization's settings, and there is one at ${policy.file}${policy.status === 'unreadable' ? ` (it cannot be read: ${policy.error})` : ', which kharos reads instead'}; nothing was changed`,
+  );
+}
+
+/** The check to make, and what the statement means, while there is no copy of the organization's settings. */
+function noCopyLines(file: string): string[] {
+  return [
+    `No copy of the organization's settings: ${noCopyText(file)}.`,
+    '  Check first: open an interactive Claude Code session with this account (it downloads the organization\'s settings when it starts, and keeps a copy there when there are any), then show this again.',
+  ];
+}
+
 function token(fields: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(fields)).digest('hex').slice(0, 12);
 }
@@ -268,9 +294,18 @@ function onLines(p: Plan, paths: Paths): string[] {
   const { policy, parts } = p.state;
   const [confirm, auto, account] = parts as [Part, Part, Part];
   const fp = policy.status === 'found' ? ` (fingerprint ${policyFingerprint(policy)})` : '';
+  const declared = policy.status === 'found' && policy.noCopy ? loadConfirmation(paths, 'no-org-settings') : null;
   const lines = [
     `kharos permissions unblock-all: frees every permission prompt kharos can free for this Claude account, in one step, after you confirm once.`,
     `now ${describeUnblockAll(parts).text}`,
+    ...(policy.status === 'absent' ? noCopyLines(policy.file) : []),
+    ...(policy.status === 'found' && policy.noCopy
+      ? [
+          declared
+            ? `The organization's settings: none for this account, as you confirmed on ${declared.confirmed_at.slice(0, 10)}; there is no copy at ${policy.file}, so kharos reads them as empty (0 ask rules, 0 deny rules) and asks again when a copy appears.`
+            : `With your statement that this account has no organization settings: there is no copy at ${policy.file}, so kharos reads them as empty (0 ask rules, 0 deny rules) from now on, and when a copy appears there it stops applying the preset until you confirm again.`,
+        ]
+      : []),
     'In this order:',
     `  1. ${confirm.title}${fp}: ${stateWord(confirm, p.todo, 'on')}`,
     `  2. ${auto.title} (permission_hook, preflight_auto and permission_unblock in ${paths.config}): ${stateWord(auto, p.todo, 'on')}`,
@@ -302,7 +337,7 @@ function offLines(p: Plan, paths: Paths): string[] {
   const restore = b ? `; ${switchesText(b)}, as they were before \`kharos permissions unblock-all on\`` : '';
   const lines = [
     'kharos permissions unblock-all off: takes back what `kharos permissions unblock-all on` turned on, and leaves what was set before it as it is, in this order:',
-    `  1. forgets your confirmation of the unblock preset: ${stateWord(confirm, p.todo, 'off')}`,
+    `  1. forgets your confirmation of the unblock preset${loadConfirmation(paths, 'no-org-settings') ? ', and your statement that this account has no organization settings' : ''}: ${stateWord(confirm, p.todo, 'off')}`,
     `  2. turns automatic unblock off (in ${paths.config}${restore}): ${stateWord(auto, p.todo, 'off')}`,
     `  3. this account's sessions start as before: ${p.accountProblem ? `cannot be taken back here: ${p.accountProblem}` : stateWord(account, p.todo, 'off')}`,
     'Afterwards cloud sessions wait at permission prompts until a person answers them, and each launch asks for your approval again.',
@@ -313,16 +348,43 @@ function offLines(p: Plan, paths: Paths): string[] {
 }
 
 /** What `on` (or `off`) would change, every part of it in plain words, and the token of that exact change. */
-export function showUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, policy: ManagedPolicy = readManagedPolicy(env)): string {
+export function showUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, policy: ManagedPolicy = readAccountPolicy(paths, env)): string {
   return preview(paths, env, target, policy).text;
 }
 
-/** The text of `show`, with the token it names (null when there is nothing to change) and where each part stands. */
-export function preview(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, policy: ManagedPolicy = readManagedPolicy(env)): { text: string; token: string | null; parts: Part[] } {
+/** The same change with the statement that this account has no organization settings: offered only while there is no copy of them. */
+function noOrgSettingsLines(paths: Paths, env: NodeJS.ProcessEnv, policy: ManagedPolicy): { lines: string[]; token: string } | null {
+  if (policy.status !== 'absent') return null;
+  const empty = declaredEmpty(policy.file);
+  const p = plan(paths, env, 'on', empty);
+  if (!p.token) return null;
+  const lines = [
+    '',
+    `If there is still no copy after that check, and this account has no organization settings, say so in this same confirmation instead: kharos then reads them as empty (0 ask rules, 0 deny rules; fingerprint ${policyFingerprint(empty)}), so the unblock preset and automatic unblock are available too; if a copy appears at ${policy.file} later, kharos stops applying the preset until you confirm again. Choose this only when you know the account has no organization settings: kharos cannot check it.`,
+  ];
+  if (p.todo.includes('confirm') || p.todo.includes('auto')) {
+    lines.push('With that statement, the unblock preset frees, in every cloud session kharos launches:', ...unblockOpens(empty).map((l) => `  ${l}`), '  at each launch kharos writes the preset to a side branch kharos/<id>, and /kharos:close deletes it');
+  }
+  if (p.todo.includes('account')) lines.push(`and this account's sessions start in auto mode, with the change to its settings shown above.`);
+  lines.push(
+    `change ${p.token}, with the statement "this account has no organization settings": nothing changes until the person confirms all of the above, that statement included; then run \`kharos permissions unblock-all on --no-org-settings --expect ${p.token}\`. \`${UNBLOCK_ALL_UNDO}\` shows how to take back what it turns on, the statement included.`,
+  );
+  return { lines, token: p.token };
+}
+
+/** The text of `show`, with the token it names (null when there is nothing to change) and where each part stands; `noOrgSettings` is the token of the same change with the statement that this account has no organization settings, while there is no copy of them. */
+export function preview(
+  paths: Paths,
+  env: NodeJS.ProcessEnv,
+  target: UnblockTarget,
+  policy: ManagedPolicy = readAccountPolicy(paths, env),
+): { text: string; token: string | null; parts: Part[]; noOrgSettings: string | null } {
   const p = plan(paths, env, target, policy);
   const lines = target === 'on' ? onLines(p, paths) : offLines(p, paths);
+  const alt = target === 'on' ? noOrgSettingsLines(paths, env, policy) : null;
   if (!p.token) {
     if (target === 'off') lines.push('nothing to take back.');
+    else if (alt) lines.push('without that statement, nothing to change: every part that is available here is on already.');
     else if (describeUnblockAll(p.state.parts).overall === 'on') lines.push(`nothing to change: all of it is on. \`${UNBLOCK_ALL_UNDO}\` shows how to take back what \`kharos permissions unblock-all on\` turned on.`);
     else lines.push(`nothing to change: every part that is available here is on already. \`${UNBLOCK_ALL_UNDO}\` shows how to take back what \`kharos permissions unblock-all on\` turned on.`);
   } else {
@@ -332,11 +394,12 @@ export function preview(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTar
         : `change ${p.token}: nothing changes until the person confirms it; then run \`kharos permissions unblock-all off --expect ${p.token}\`.`,
     );
   }
-  return { text: lines.join('\n'), token: p.token, parts: p.state.parts };
+  if (alt) lines.push(...alt.lines);
+  return { text: lines.join('\n'), token: p.token, parts: p.state.parts, noOrgSettings: alt?.token ?? null };
 }
 
 /** The token a `show` printed, checked against everything as it is now; throws, having changed nothing, when it no longer matches. */
-export function approveUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, expect: string | undefined, policy: ManagedPolicy = readManagedPolicy(env)): Plan {
+export function approveUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, expect: string | undefined, policy: ManagedPolicy = readAccountPolicy(paths, env)): Plan {
   if (!expect) throw new CommandError(`--expect needs the change token that \`kharos permissions unblock-all show${target === 'off' ? ' off' : ''}\` printed, so only what the person confirmed changes`);
   const p = plan(paths, env, target, policy);
   if (p.token !== null && p.token !== expect) {
@@ -348,17 +411,21 @@ export function approveUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: 
 }
 
 /** Turns on, or takes back, every part in order; each part that fails stops the rest, and the error says which parts are on. */
-export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, expect: string | undefined, now: number, policy: ManagedPolicy = readManagedPolicy(env)): string {
+export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: UnblockTarget, expect: string | undefined, now: number, policy: ManagedPolicy = readAccountPolicy(paths, env)): string {
   const p = approveUnblockAll(paths, env, target, expect, policy);
   const out: string[] = [];
   const steps: Record<PartId, () => string> =
     target === 'on'
       ? {
           confirm: () => {
-            if (p.state.policy.status !== 'found') throw new CommandError("the organization's managed settings cannot be read");
-            const c = saveConfirmation(paths, 'unblock', p.state.policy, now);
+            const policy = p.state.policy;
+            if (policy.status !== 'found') throw new CommandError("the organization's managed settings cannot be read");
+            if (policy.noCopy && !loadConfirmation(paths, 'no-org-settings')) saveConfirmation(paths, 'no-org-settings', policy, now);
+            const c = saveConfirmation(paths, 'unblock', policy, now);
             record(paths, 'confirm', true);
-            return `confirmed the unblock preset for the organization's managed settings with fingerprint ${c.fingerprint}; kharos asks again when they change`;
+            return policy.noCopy
+              ? `confirmed that this account has no organization settings, read as empty while there is no copy at ${policy.file}, and the unblock preset for them, with fingerprint ${c.fingerprint}; kharos asks again when a copy appears`
+              : `confirmed the unblock preset for the organization's managed settings with fingerprint ${c.fingerprint}; kharos asks again when they change`;
           },
           auto: () => {
             const c = loadedConfig(paths);
@@ -374,7 +441,9 @@ export function applyUnblockAll(paths: Paths, env: NodeJS.ProcessEnv, target: Un
         }
       : {
           confirm: () => {
-            const done = forgetConfirmation(paths, 'unblock') ? 'forgot your confirmation of the unblock preset' : 'no confirmation of the unblock preset was remembered';
+            const forgot = forgetConfirmation(paths, 'unblock');
+            const statement = forgetConfirmation(paths, 'no-org-settings') ? ', and your statement that this account has no organization settings' : '';
+            const done = forgot ? `forgot your confirmation of the unblock preset${statement}` : `no confirmation of the unblock preset was remembered${statement ? `; forgot your statement that this account has no organization settings` : ''}`;
             record(paths, 'confirm', false);
             return done;
           },

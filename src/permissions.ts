@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { CommandError } from './commands.ts';
 import { ConfigError, loadConfig, pickProfile, repoSlug, type Config } from './config.ts';
 import { GH_MAX_BUFFER, ghForge, ghSpawnError, realGh, type Forge, type RepoSnapshot } from './forge.ts';
-import { readManagedPolicy } from './managed-policy.ts';
+import { readAccountPolicy } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, hasHookEntry, UNBLOCK_RISK, type HookFiles } from './permission-hook.ts';
 import { sharedPaths, type Paths } from './paths.ts';
 import { unmigratedNote } from './accounts.ts';
@@ -78,7 +78,7 @@ function loaded(paths: Paths): Config {
 /** The permission prompts a launch's cloud session is likely to hit, each with the narrow rule that answers it. */
 export function preflight(paths: Paths, req: PreflightRequest, env: NodeJS.ProcessEnv): string {
   const config = loaded(paths);
-  const policy = readManagedPolicy(env);
+  const policy = readAccountPolicy(paths, env);
   let picked;
   try {
     picked = pickProfile(config, req.profile);

@@ -22,9 +22,10 @@ import { dispatchQueued, kickQueue } from './queue.ts';
 import { LaunchError, preflightLine, prepare, readInstruction } from './launch.ts';
 import { ghForge, realGh } from './forge.ts';
 import { resolvePaths, sharedPaths, type Paths } from './paths.ts';
+import { readAccountPolicy } from './org-confirmations.ts';
 import { formatSetup, parseScheduleView, runSetup, SetupError } from './setup.ts';
 import { formatHookDecisions } from './approvals.ts';
-import { applyUnblockAll, showUnblockAll } from './unblock-all.ts';
+import { applyUnblockAll, showUnblockAll, withNoOrgSettings } from './unblock-all.ts';
 import { preflight, readRemoteFile } from './permissions.ts';
 import { initialCommit, readRemoteHeads } from './repo.ts';
 import { addIntent } from './state.ts';
@@ -62,11 +63,11 @@ export const COMMAND_FLAGS: Record<string, FlagSpec> = {
   'env-guide': { booleans: ['copy', 'open'], values: ['repo', 'revision', 'profile'] },
   doctor: { booleans: ['no-remote-tool', 'verbose'], values: ['profile'] },
   setup: {
-    booleans: ['from-schedule', 'confirmed', 'no-remote-tool'],
+    booleans: ['from-schedule', 'confirmed', 'no-remote-tool', 'no-org-settings'],
     values: ['repo', 'profile', 'revision', 'environment', 'permissions', 'max-open', 'unblock-expect', 'adopt'],
   },
   'repo-init': NO_FLAGS,
-  'permissions unblock-all': { booleans: [], values: ['expect'] },
+  'permissions unblock-all': { booleans: ['no-org-settings'], values: ['expect'] },
   'permissions preflight': { booleans: ['stdin'], values: ['profile', 'revision', 'file'] },
   'permissions approvals': { booleans: ['all'], values: ['session', 'limit'] },
   wait: { booleans: [], values: ['since', 'max', 'min-interval', 'max-interval'] },
@@ -175,8 +176,8 @@ const USAGE = `usage: kharos <command>
   doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open] | repo-init <owner/name>
   setup --repo owner/name [--profile name] [--revision r] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
-        [--permissions <as-is|unblock-all [--unblock-expect token]>] [--adopt <profile,...|none>] [--max-open n] [--no-remote-tool]
-  permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token>   (everything kharos can free for this account, in one step, or what it turned on taken back)
+        [--permissions <as-is|unblock-all [--unblock-expect token [--no-org-settings]]>] [--adopt <profile,...|none>] [--max-open n] [--no-remote-tool]
+  permissions unblock-all show [on|off] | permissions unblock-all <on|off> --expect <token> [--no-org-settings, with on]   (everything kharos can free for this account, in one step, or what it turned on taken back)
   permissions preflight [--profile p] [--revision r] (--stdin | --file f)   (the prompts a launch is likely to hit; the instruction on stdin or in a file)
   permissions approvals [--all] [--session k-0001] [--limit n]   (what the permission hook allowed, as kharos read it from the session logs)
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id] | health
@@ -296,6 +297,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
             ...(flag(args, 'permissions') !== undefined ? { permissions: flag(args, 'permissions') as string } : {}),
             ...(intFlag(args, 'max-open') !== undefined ? { maxOpen: intFlag(args, 'max-open') as number } : {}),
             ...(flag(args, 'unblock-expect') !== undefined ? { unblockExpect: flag(args, 'unblock-expect') as string } : {}),
+            ...(args.flags['no-org-settings'] === true ? { noOrgSettings: true } : {}),
             view: args.flags['from-schedule'] === true ? parseScheduleView(stdin()) : null,
             here: currentRepo(env),
             shared: sharedPaths(env),
@@ -319,9 +321,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         const sub = args.positional[0];
         if (sub === 'unblock-all') {
           const [what, target] = [args.positional[1], args.positional[2]];
-          if (what === 'show' && (target === undefined || target === 'on' || target === 'off')) out(showUnblockAll(paths, env, target ?? 'on'));
-          else if ((what === 'on' || what === 'off') && target === undefined) out(applyUnblockAll(paths, env, what, flag(args, 'expect'), now));
-          else throw new cmd.CommandError('permissions unblock-all takes show [on|off], or on or off with --expect <token>');
+          const statement = args.flags['no-org-settings'] === true;
+          if (statement && what !== 'on') throw new cmd.CommandError('--no-org-settings goes only with on: it is a statement made when unblock all is turned on');
+          const policy = withNoOrgSettings(readAccountPolicy(paths, env), statement);
+          if (what === 'show' && (target === undefined || target === 'on' || target === 'off')) out(showUnblockAll(paths, env, target ?? 'on', policy));
+          else if ((what === 'on' || what === 'off') && target === undefined) out(applyUnblockAll(paths, env, what, flag(args, 'expect'), now, policy));
+          else throw new cmd.CommandError('permissions unblock-all takes show [on|off], or on or off with --expect <token> (on also with --no-org-settings, when show offered it)');
         } else if (sub === 'preflight') {
           if (args.positional[1] !== undefined) throw new cmd.CommandError('permissions preflight reads the branch a launch profile starts on, not a checkout folder');
           const file = flag(args, 'file');

@@ -14,7 +14,7 @@ import { sharedPaths, type Paths } from './paths.ts';
 import { activeCount, bodyPath, collectGarbage, formatId, queuedLaunches, slotHolders, updateRegistry, type Session } from './registry.ts';
 import { buildEvent, enqueue } from './events.ts';
 import { hooksBlocked, mirrorRefusal, readManagedPolicy, type ManagedPolicy } from './managed-policy.ts';
-import { confirmationState, describeConfirmation, loadConfirmation } from './org-confirmations.ts';
+import { accountPolicy, confirmationState, describeConfirmation, loadConfirmation, readAccountPolicy } from './org-confirmations.ts';
 import { HOOK_RULES_PATH, HOOK_SCRIPT_PATH, HookError, hookSnapshot, parseRulesText, planHook, type FileChange } from './permission-hook.ts';
 import { SETTINGS_PATH, SettingsError } from './settings.ts';
 import { readRemoteHookFiles, type RemoteHookFiles } from './permissions.ts';
@@ -128,7 +128,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   // With the opt-in permission hook, the rules on the branch now are the ones the session's hook uses,
   // so kharos can attribute its decisions. An unreadable branch gives no rules, and no attribution;
   // nor does a managed policy that runs no repository hook.
-  const policy = config.permission_hook || config.preflight_auto ? (opts.managedPolicy ?? (() => readManagedPolicy(env)))() : null;
+  const policy = config.permission_hook || config.preflight_auto ? accountPolicy(paths, (opts.managedPolicy ?? (() => readManagedPolicy(env)))()) : null;
   let hookRules = null;
   if (config.permission_hook && policy && !hooksBlocked(policy)) {
     const found = (opts.hookFiles ?? ((r, rev) => readRemoteHookFiles(r, rev, env)))(profile.repo, profile.revision);
@@ -139,7 +139,7 @@ export function prepare(paths: Paths, opts: PrepareOptions): Session {
   const repoAsk = recentRepoRules(paths, profile.repo, profile.revision, opts.now);
 
   // A queued launch is fired later from a headless Claude Code in auto mode, where Claude Code's classifier approves the fire.
-  const autoOff = opts.queue ? autoModeRefusal(readManagedPolicy(env)) : null;
+  const autoOff = opts.queue ? autoModeRefusal(readAccountPolicy(paths, env)) : null;
   const prepared = updateRegistry(paths, (reg) => {
     // Each launch also deletes what sessions closed more than 14 days ago left on disk.
     collectGarbage(paths, reg, opts.now);

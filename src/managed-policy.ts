@@ -3,6 +3,9 @@
 // docs); a cloud session gets the same settings from Anthropic's servers when it starts.
 // kharos reads only the permission rules, whether bypass mode or auto mode is disabled and whether only
 // managed hooks run, never any other key, and never writes the file. With no readable copy, nothing is guessed: what depends on it is unavailable.
+// Claude Code writes no copy for an account whose organization has no managed settings, so with no copy at all the
+// person can say so, once, in the confirmation of `kharos permissions unblock-all`: kharos then reads the settings as
+// empty, marked `noCopy`, until a copy appears (org-confirmations.ts keeps that declaration). It never fetches them itself.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,9 +13,31 @@ import path from 'node:path';
 import { broadRuleWhy } from '../cloud/kharos-permission.mjs';
 
 export type ManagedPolicy =
-  | { status: 'found'; file: string; ask: string[]; deny: string[]; bypassDisabled: boolean; managedHooksOnly: boolean; autoModeDisabled?: boolean }
+  | {
+      status: 'found';
+      file: string;
+      ask: string[];
+      deny: string[];
+      bypassDisabled: boolean;
+      managedHooksOnly: boolean;
+      autoModeDisabled?: boolean;
+      /** There is no copy at `file`: the person declared that this account has no organization settings, so they read as empty. */
+      noCopy?: true;
+    }
   | { status: 'absent'; file: string }
   | { status: 'unreadable'; file: string; error: string };
+
+export type FoundPolicy = Extract<ManagedPolicy, { status: 'found' }>;
+
+/** Why there may be no copy, and the one check that tells; the words every command uses for an absent copy. */
+export function noCopyText(file: string): string {
+  return `Claude Code keeps no copy of the organization's settings for this account at ${file}: either the account has none, or Claude Code has not downloaded them on this machine`;
+}
+
+/** The settings of an account whose person declared it has no organization settings: empty, and marked so that a copy appearing later reads as a change. */
+export function declaredEmpty(file: string): FoundPolicy {
+  return { status: 'found', file, ask: [], deny: [], bypassDisabled: false, managedHooksOnly: false, autoModeDisabled: false, noCopy: true };
+}
 
 export function managedPolicyFile(env: NodeJS.ProcessEnv): string {
   const dir = env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude');
@@ -71,7 +96,7 @@ export function readManagedPolicy(env: NodeJS.ProcessEnv): ManagedPolicy {
 /** Why a managed policy cannot be mirrored, or null when it can. */
 export function mirrorRefusal(policy: ManagedPolicy): string | null {
   if (policy.status === 'absent') {
-    return `mirroring is unavailable: there is no copy of the organization's managed settings at ${policy.file} (this account has none, or Claude Code has not fetched them on this machine yet); kharos never guesses them`;
+    return `mirroring is unavailable: ${noCopyText(policy.file)}; kharos never guesses them`;
   }
   if (policy.status === 'unreadable') return `mirroring is unavailable: ${policy.file} cannot be read (${policy.error}); kharos never guesses the organization's rules`;
   if (policy.bypassDisabled) {
