@@ -1,42 +1,62 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-- Unblock all with no copy of the organization's managed settings (`remote-settings.json`, which Claude Code does not write for an account whose organization has none) no longer stops at "kharos never guesses them": `show` says what the missing copy means and the one check to make, and offers a second token for the same change with the statement that the account has no organization settings (`--no-org-settings`, also in `/kharos:setup`).
-  With it the settings read as empty, with a fingerprint of their own, so a copy that appears later stops the preset until you confirm again; `unblock-all off` forgets the statement, and `/kharos:doctor` names it in its `managed policy` line.
-  kharos still never fetches the settings itself.
-- Fewer commands: the slash commands are `/kharos:setup`, `/kharos:doctor`, `/kharos:run`, `/kharos:list`, `/kharos:log`, `/kharos:send`, `/kharos:result`, `/kharos:close` and `/kharos:permissions`, and `/kharos` alone lists only those.
-  `/kharos:permissions [on|off|state]` is unblock all, its undo, and where it stands.
-  Removed, since nothing uses them today: the watcher (`/kharos:watch`, `kharos due`, `kharos pass-end`, and `watch.interval_min`), `/kharos:follow` (the Stop hook starts a follower process for each open session nobody follows, and `kharos follow <id> --detach` does it from a shell), `/kharos:list --refresh`, `kharos env-wait`, `kharos log --cached`, `kharos doctor --json`, the `kharos setup` flags `--model`, `--deadline`, `--tools`, `--connectors`, `--no-connectors`, `--default`, `--account-mode`, `--account-expect` and `--json`, the per-checkout and per-part `kharos permissions` subcommands (`show`, `diff`, `write`, `hook ...`, `unblock ...`, `auto ...`, `account-mode ...`, `preflight <folder>` and `preflight --launch`), and the setup permission modes `standard`, `hook`, `standard+hook`, `auto-preflight` and `unblock`.
-  kharos no longer changes a repository's own `.claude/settings.json`: unblock all works on a side branch of each launch.
-  `kharos health` and the line at the start of a Claude Code session now check only that each open session has a live follower.
-  The README lists the shell commands scripts use, under "For scripts", and `docs/watcher.md` is now `docs/states.md`.
-  Each command refuses a flag it does not read, instead of taking it for the next flag's value or ignoring it; a removed flag's error says what replaces it.
-- Compatibility: a configuration that still sets `watch.interval_min` loads, and the next write drops it.
-  A profile that stored a removed permission mode reads as `as-is`.
-- `kharos permissions unblock-all` (`/kharos:permissions`) frees every permission prompt kharos can free for a Claude account in one step: it lists once what it frees, and after one confirmation confirms the unblock preset for the organization's current managed settings, turns on automatic unblock, and starts the account's sessions in auto mode, each part with its own guards, skipping what is on and stopping at a part that fails with the parts that are on named.
-  `unblock-all off` takes back what it turned on.
-  `/kharos:setup` offers it as the `unblock-all` permission mode and no longer asks about the account's mode on its own; `/kharos:doctor` shows one `unblock all` line (on, partly on with what is missing, or off).
-  The parts are not offered one at a time.
-- The protocol footer tells the session that the log kharos reads keeps about 2000 characters of each message, and asks for the final report before the end mark in numbered parts, `KHAROS-PART <i>/<n>`, each a message of its own of at most 1500 characters; a launch that pushes is also asked to put the whole report in the pull request description or a file on its branch.
-  `/kharos:result` puts the parts together, with a part sent again later in its place, and says plainly which parts the log does not have or cut, with the session page and a `/kharos:send` that asks for a missing part again; with no parts, it shows the whole last message as the log returns it. The README's limits name what the tool cannot do: delete a routine, stop a session, list cloud environments outside `/schedule`, and tell kharos of a run refused in a permission dialog.
-- `session.pr_opened` (`progress`): the session opened a pull request, with its URL in `pr`, as soon as a read shows the result of the call that created it, once per pull request; the firstmate output writes it as a `note`.
-- Moving to the files of each Claude account: until `/kharos:setup` ran on an account, a launch and the permission preflight there name the shared files that hold its profiles and the command that moves them, instead of "no configuration yet" or "known: none". `/kharos:setup` moves nothing while a follower reads an open session of the account from the shared files, and says which, so a follower of an earlier kharos does not lose it. `kharos setup --permissions default` is accepted as `as-is`.
-- A session closed while it still runs is `closing`: it keeps its `watch.max_open` slot, and kharos goes on reading it, with no alerts, only to free the slot when the session ends or its deadline passes, whichever comes first; `kharos close <id> --stopped` frees it at once. Freeing the slot never stops the session. `/kharos:close` and `kharos list` say so, and the slots line names when each closing session frees its slot.
-- `kharos permissions approvals --all` now lists a prompt whose log line carries the reason of the prompt instead of the command, decided with the command of its call, so the hook's denials of such prompts are there too.
-  Hook script version 4: the same decisions, with no two-letter names that a repository's own lint rules can flag.
-  Hook script version 5: the same decisions; only its header changes, to describe the side branch of each launch. `/kharos:doctor` shows an older copy as outdated until the next launch writes version 5 on its side branch.
-- When a turn closes without `KHAROS-DONE`, stays quiet for `watch.unmarked_end_min` (5 minutes), and has no background task left that could wake it, the follower asks the session once whether it finished: one short message that asks for the final report in `KHAROS-PART` messages and the end mark, or to go on with its work (`session.end_asked`, `progress`).
-  The session ends only when it answers with `KHAROS-DONE`, is `running` again when it works on, and with no answer stays `turn_closed` with the `session.quiet_unmarked` warning, holding its slot until its deadline, when it is closed and `session.deadline_closed` (`terminal`) says so, with its last message. It is asked once per quiet period, never past its deadline, and never once the person closed it; `kharos show` and `result` say when it was asked.
-  A background task counts until the log shows its end: each start (a command run or moved to the background, a `Monitor`, a background agent) is matched by its id with the `<task-notification>` that ends it, a wait on its output that saw it end (`<task_id>` with a final `<status>`) or a stop that worked, and a `Monitor` also ends when it expires. Before, any background task started since the last message from a person held the warning back for `watch.quiet_end_min` (40), even long after it had ended, and a turn that started none was only warned about, never asked.
-  While a task it started may still wake it, a closed turn is reported as before, as the `session.quiet_unmarked` warning after `watch.quiet_end_min`.
-- `/kharos:run --revision <branch>` starts the session on another branch or tag than the profile's, for that launch only; the permission preflight reads that branch, and the launch checks that it exists every time.
-- A `run` that the auto mode classifier refused goes back to "routine created" (a `PermissionDenied` hook): nothing reached the service, so `/kharos:run --resume` fires it once with no re-arm, a queued launch is tried again, and `kharos show` names the refusal. A refusal in a permission dialog or in a headless session outside auto mode reaches no hook, and keeps the re-arm path.
-- `kharos log <id> [lines]` in a shell prints the events already stored for a session, with no model, and `--full` prints each event's whole stored text instead of its start.
-  `kharos show` names the session's last message and its time, which tells a turn closed on the session's own build from one that stopped.
-- `/kharos:result` says the last message is cut only when the message itself is, not when only the result line that repeats it is.
-- `/kharos:close <id> --ask-stop` sends the session a request to stop (start nothing new, commit and push what is worth keeping unless the launch was `--no-push`, end the turn) before it is released; when the request cannot be sent, the session stays followed. Without it, the output of `/kharos:close` on a running session says how to ask.
-- The deadline counts from the moment the cloud session opened, not from the preparation of the launch: the wait for an approval, a refused fire or a place in the queue no longer count. `session.overdue` is raised once per session, and not again at once when a message reopens a session past its deadline; such a session is then still told when it loops, goes silent or closes a turn without an end mark, also while the overdue notice is still open.
+### Upgrading from 0.2.0
+
+- The watcher is gone: stop any session that runs `/loop 10m /kharos:watch`, and change scripts that use a [removed command](#removed-commands).
+- The permission hook script is now version 5, with the same decisions as before.
+  Each launch with unblock all writes it to its side branch.
+  A branch that has an older copy from an earlier kharos keeps it until its maintainers change or remove its files, and `/kharos:doctor` reports it as outdated.
+- A configuration that still sets `watch.interval_min` loads, and the next write drops it.
+- The permission mode `auto-unblock` is now named `unblock-all`, and the old name is still read.
+  A profile that stored a [removed mode](#removed-commands) reads as `as-is`.
+
+### Removed commands
+
+| Stop using | Use instead |
+|---|---|
+| `/kharos:watch`, `kharos due`, `kharos pass-end`, `watch.interval_min` | Nothing to run: each launch has its own follower |
+| `/kharos:follow` | Nothing to run: a Stop hook follows any open session nobody follows; from a shell, `kharos follow <id> --detach` |
+| `/kharos:list --refresh` | `/kharos:list` (followers keep it fresh) |
+| `kharos log --cached` | `kharos log <id> [lines]` in a shell |
+| `/kharos:permissions` with `default`, `standard`, `hook`, `preflight`, `unblock` or `account-mode`; `kharos permissions show`, `diff`, `write`, `hook`, `unblock`, `auto`, `account-mode`, `preflight <folder>` | `/kharos:permissions [on\|off\|state]`; each launch runs its own preflight |
+| Setup permission modes `standard`, `hook`, `standard+hook`, `auto-preflight`, `unblock` | `as-is` or `unblock-all` |
+| `kharos setup --account-mode`, `--account-expect` | `/kharos:permissions` |
+| `kharos setup --model`, `--deadline` | `/kharos:run --model`, `--deadline`, or the configuration file |
+| `kharos setup --tools`, `--connectors`, `--no-connectors`, `--default`, `--json`; `kharos doctor --json`; `kharos env-wait` | No replacement |
+
+### Permissions
+
+- `/kharos:permissions` is unblock all: one list of everything kharos can free for a Claude account and one confirmation; `off` takes back what it turned on, `state` shows where it stands.
+  `/kharos:setup` offers it as the `unblock-all` mode (`docs/permissions.md`).
+- Unblock all also works for an account whose organization has no managed settings, once you state that in the confirmation (`--no-org-settings`).
+- kharos no longer changes a repository's own `.claude/settings.json`: what unblock all needs goes to a side branch of each launch.
+- `kharos permissions approvals --all` also lists denials of prompts whose log line has the reason instead of the command.
+
+### Commands
+
+- The slash commands are `setup`, `doctor`, `run`, `list`, `log`, `send`, `result`, `close` and `permissions`.
+  Each CLI command now refuses a flag it does not read.
+- `/kharos:run --revision <branch>` starts one launch on another branch or tag than the profile's.
+- `/kharos:close <id> --ask-stop` asks the session to stop before releasing it.
+- A session closed while it still runs is `closing` and keeps its slot until it ends or its deadline passes; `kharos close <id> --stopped` frees it at once.
+- `kharos log <id> [lines] [--full]` prints a session's stored events from a shell, with no model.
+- `kharos health` and the line at the start of a Claude Code session check only that each open session has a live follower.
+
+### Follow and end detection
+
+- A turn that closes without `KHAROS-DONE` and stays quiet for 5 minutes, with no background task left that could wake it, gets one message asking the session whether it finished (`session.end_asked`).
+  With no end mark in reply, it is closed at its deadline (`session.deadline_closed`).
+- New event `session.pr_opened`, with the pull request's URL.
+- The deadline counts from the moment the cloud session opened, and `session.overdue` is raised once.
+- A `run` refused by the auto mode classifier goes back to "routine created", so `/kharos:run --resume` fires it with no re-arm.
+- `/kharos:setup` no longer moves an account's files while a follower reads an open session from the shared ones.
+
+### Reports
+
+- Sessions are asked to send the final report in numbered `KHAROS-PART` messages, and `/kharos:result` puts them together and names the missing or cut ones.
+- `/kharos:result` calls the last message cut only when it is, and `kharos show` names the last message and its time.
 
 ## 0.2.0
 
