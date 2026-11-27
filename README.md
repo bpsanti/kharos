@@ -137,6 +137,7 @@ The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}`
 
 By default, `/kharos:run` ends by starting the plugin's `kharos:follow` agent in the background, one per session, and you go on working.
 The follower is a small Haiku agent that sits inside `kharos wait <id>`, which reads the session's log every 15 to 60 seconds and returns only when its state changes.
+The followers due at the same moment read together, in one reader process per round of up to `watch.reader_batch` sessions (10 by default).
 Its report reaches your session like the result of any background subagent:
 
 - a question from the session, which you answer with `/kharos:send <id> "<answer>"`;
@@ -171,7 +172,7 @@ What to expect:
 - kharos cannot stop a cloud session (the tool has no stop action): `/kharos:send` can ask it to stop, and its page stops it.
 - Permission prompts are answered by a person on the session page, as before.
 - The work comes back as a branch or a pull request, not as files in your checkout.
-- Each read is one minimal headless `claude -p` call on Haiku, a fraction of a cent, because only a model can call the `RemoteTrigger` tool that reads a cloud session.
+- Reads go through a minimal headless `claude -p` on Haiku, a fraction of a cent, because only a model can call the `RemoteTrigger` tool that reads a cloud session; one such process reads every session whose read is due in the same round.
 
 See [docs/follow.md](docs/follow.md) for how it works and its limits.
 
@@ -229,6 +230,7 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/events.jsonl` | The journal: every event, with its `delivered` and `acknowledged` marks |
 | `~/.local/state/kharos/logs/<id>.jsonl` | The events read from each session, deleted 14 days after it is closed |
 | `~/.local/state/kharos/followers/<id>.json` | The lease of the follower that reads a session now: its process id, its kind (agent or process) and a heartbeat, or a handover while the next follower starts |
+| `~/.local/state/kharos/rounds.json` | The read rounds of the last minute: which followers share a reader, with each one's result and share of the cost, never a log |
 | `~/.local/state/kharos/repo-rules.json` | The ask rules of each launch branch's `.claude/settings.json`, as the last launch preflight read them, to tell a repository prompt from the rest |
 | `~/.local/state/kharos/setups.json` | The cloud environments you confirmed, by account, repository and revision |
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions, as kharos read them: time, session, tool, decision and matched rule, never the command |

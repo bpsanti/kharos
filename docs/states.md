@@ -9,7 +9,7 @@ A follower ([follow.md](follow.md)) makes the reads; the hooks store, classify a
 - `kharos wait` reads a session's log every 15 to 60 seconds: the interval starts at 15 seconds, doubles while nothing new comes, and goes back to 15 seconds when new events come.
 - A read is `get_run_log` for a session, or `list_runs` while the session id is unknown and every sixth read, to see whether the session was archived.
 - When more than 200 events happened between two reads, the newest page does not reach the stored events; the hook asks for older pages until one reaches them, at most two.
-- Each read is made by a kharos reader, the minimal headless `claude -p` a follower starts for that one read.
+- Each read is made by a kharos reader, the minimal headless `claude -p` that one of the followers due at that moment starts for all their reads (a read round, [follow.md](follow.md#read-rounds)).
   A reader may only read: its hook denies `create`, `run`, `update` and `create_webhook_trigger` on a kharos routine.
   Routines outside kharos pass untouched.
 - A machine that sleeps loses no notice for good: the first read after it wakes classifies the current state.
