@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Updating kharos
+
+- `/kharos:doctor` shows the installed kharos and the latest release on GitHub, and when a newer one is out, the `CHANGELOG.md` sections between them.
+  It then asks once whether to update, and on yes runs `claude plugin marketplace update` and `claude plugin update` for the plugin's marketplace, then says to restart Claude Code.
+  Nothing is updated without that yes; a `kharos` command installed from npm gets its own line with the `npm install -g` command to run, and is told that command when it runs the doctor itself.
+- `/kharos:run` and `/kharos:list` add one line when a newer release is out, at most once a day.
+  The release is read at most once a day, in a background process, and any network failure is silent.
+- New configuration key `update.notify` (on by default) turns that line off.
+
 ## 0.3.1
 
 No command or configuration changes.

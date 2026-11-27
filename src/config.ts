@@ -118,6 +118,13 @@ export interface Config {
    * "auto" (kharos wrote it to the account's user settings after they approved the diff) or "as-is".
    */
   account_mode?: 'auto' | 'as-is';
+  update: UpdateConfig;
+}
+
+/** What kharos says about its own new releases. */
+export interface UpdateConfig {
+  /** On by default: run and list add one line, at most once a day, when a newer kharos release is out. */
+  notify: boolean;
 }
 
 export const DEFAULT_WATCH: WatchConfig = {
@@ -171,6 +178,7 @@ export function defaultConfig(): Config {
     permission_hook: false,
     preflight_auto: false,
     permission_unblock: false,
+    update: { notify: true },
   };
 }
 
@@ -306,6 +314,9 @@ export function parseConfig(v: unknown): Config {
   if (o.preflight_auto !== undefined && typeof o.preflight_auto !== 'boolean') throw new ConfigError('config.preflight_auto must be true or false');
   if (o.permission_unblock !== undefined && typeof o.permission_unblock !== 'boolean') throw new ConfigError('config.permission_unblock must be true or false');
   if (o.account_mode !== undefined && o.account_mode !== 'auto' && o.account_mode !== 'as-is') throw new ConfigError('config.account_mode must be auto or as-is');
+  const u = obj(o.update ?? {}, 'config.update');
+  for (const k of Object.keys(u)) if (k !== 'notify') throw new ConfigError(`update.${k} is not a known field`);
+  if (u.notify !== undefined && typeof u.notify !== 'boolean') throw new ConfigError('update.notify must be true or false');
   return {
     version: 1,
     default_profile: defaultProfile,
@@ -316,6 +327,7 @@ export function parseConfig(v: unknown): Config {
     preflight_auto: o.preflight_auto === true,
     permission_unblock: o.permission_unblock === true,
     ...(o.account_mode !== undefined ? { account_mode: o.account_mode as 'auto' | 'as-is' } : {}),
+    update: { notify: u.notify !== false },
   };
 }
 

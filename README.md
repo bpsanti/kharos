@@ -66,12 +66,24 @@ To run it from your own shell too (see [For scripts](#for-scripts)), install it 
 npm install -g kharos
 ```
 
+### Updating
+
+`/kharos:doctor` shows the installed kharos and the latest release on GitHub, and when a newer one is out, what changed between them from `CHANGELOG.md`.
+It then asks once whether to update; on yes it runs `claude plugin marketplace update kharos` and `claude plugin update kharos@kharos` for the Claude account in use, and you restart Claude Code to load the new version.
+Nothing is updated without that yes.
+A `kharos` command installed from npm gets its own line with the `npm install -g` command to run; npm is asked about it at most once a day while it is current, and again on each doctor while it is outdated.
+Run from that npm command itself, `kharos doctor` and the daily line give that `npm install -g` command instead of the plugin update.
+
+`/kharos:run` and `/kharos:list` add one line when a newer release is out, such as `kharos 0.3.2 is available (you have 0.3.1); /kharos:doctor shows what changed and updates it.`, at most once a day.
+The release is read from GitHub at most once a day, in a background process, so it never slows a command; without a network it says nothing.
+Set `"update": { "notify": false }` in the configuration to turn the line off.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/kharos:setup [owner/repo] [--profile p] [--revision branch]` | Takes this Claude account from zero to ready for a repository, once, then writes its launch profile |
-| `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; `--verbose` adds limits and policy counts |
+| `/kharos:doctor [--profile p] [--verbose]` | Checks login, plan, configuration, repository, Claude access, environment and permission rules, with the action for each gap; shows a newer kharos release, with what changed, and updates the plugin on your yes ([Updating](#updating)); `--verbose` adds limits and policy counts |
 | `/kharos:run "<instruction>" [--profile p] [--revision branch] [--model m] [--title t] [--deadline min] [--file path] [--no-push] [--queue]` | Launches one cloud session, records it, and starts its follower in the background; `--revision` starts it on another branch or tag than the profile's; `--no-push` leaves out the footer line that asks the session to push work in progress; `--queue` queues a launch that finds every slot taken |
 | `/kharos:list [--all]` | Lists followed sessions from the local registry, with their followers and the open slots |
 | `/kharos:log <id> [lines]` | Shows the last lines of a session's log |
@@ -236,6 +248,8 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/approvals.jsonl` | The permission hook's decisions, as kharos read them: time, session, tool, decision and matched rule, never the command |
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
 | `~/.local/state/kharos/org-confirmations.json` | Your confirmation of the unblock preset, with the fingerprint of the managed settings it holds for |
+| `~/.local/state/kharos/release.json` | The latest kharos release, as the last daily read found it, and when its notice was last shown |
+| `~/.local/state/kharos/npm.json` | The version of a `kharos` installed globally from npm, as npm last answered, so the doctor asks npm at most once a day while it is current |
 
 Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/.claude`, they are under `accounts/<folder>-<hash>/` of both folders, and the first `/kharos:setup` there moves that account's profiles and sessions out of the files every account shared before.
 `KHAROS_HOME` puts everything under one folder of your choice instead.

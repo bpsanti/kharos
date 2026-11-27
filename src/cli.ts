@@ -35,6 +35,7 @@ import { checkTarget, DEDICATED_FOOTER } from './outputs/firstmate.ts';
 import path from 'node:path';
 import { detachFollower, followLoop, health, startFollowers } from './follow.ts';
 import { acknowledge, wait, WAIT_DEFAULTS } from './wait.ts';
+import { applyUpdate, backgroundCheck, formatRelease, readReleaseView, realClaudeRunner, realReleaseDeps, updateNotice } from './release.ts';
 
 /** The flags each command reads: the rest are refused, so none is taken for another's value or ignored. */
 interface FlagSpec {
@@ -61,7 +62,8 @@ export const COMMAND_FLAGS: Record<string, FlagSpec> = {
   dispatch: NO_FLAGS,
   environments: { booleans: [], values: ['session', 'repo'] },
   'env-guide': { booleans: ['copy', 'open'], values: ['repo', 'revision', 'profile'] },
-  doctor: { booleans: ['no-remote-tool', 'verbose'], values: ['profile'] },
+  doctor: { booleans: ['no-remote-tool', 'verbose'], values: ['profile', 'update'] },
+  'release-check': NO_FLAGS,
   setup: {
     booleans: ['from-schedule', 'confirmed', 'no-remote-tool', 'no-org-settings'],
     values: ['repo', 'profile', 'revision', 'environment', 'permissions', 'max-open', 'unblock-expect', 'adopt'],
@@ -173,7 +175,7 @@ const USAGE = `usage: kharos <command>
           [--output firstmate --status-file <home>/state/<task>.status --firstmate-home <home> [--firstmate-mode shared|dedicated]]
   resume <id> | rearm <id> | show <id> | list [--all] | log <id> [lines] [--full] (stored events, from a shell) | log <id> [lines] --session id (a read, from Claude Code)
   send <id>   (text on stdin) | result <id> | close <id> [--ask-stop] [--stopped]
-  doctor [--profile p] [--no-remote-tool] [--verbose] | environments --session id [--repo url]
+  doctor [--profile p] [--no-remote-tool] [--verbose] | doctor --update <version>   (updates the kharos plugin to that release, after the person said yes) | environments --session id [--repo url]
   env-guide (--repo url [--revision r] | [--profile p]) [--copy] [--open] | repo-init <owner/name>
   setup --repo owner/name [--profile name] [--revision r] [--from-schedule (what /schedule listed, on stdin)] [--environment <name|env_...|new>] [--confirmed]
         [--permissions <as-is|unblock-all [--unblock-expect token [--no-org-settings]]>] [--adopt <profile,...|none>] [--max-open n] [--no-remote-tool]
@@ -182,7 +184,7 @@ const USAGE = `usage: kharos <command>
   permissions approvals [--all] [--session k-0001] [--limit n]   (what the permission hook allowed, as kharos read it from the session logs)
   wait <id> [--since key] [--max s] [--min-interval s] [--max-interval s] | followers [id] | health
   follow <id> [--detach]   (the follower's loop without a model: one JSON line per change, until the session ends)
-  action [name] [--session id] | dispatch | hook <pre-tool-use|post-tool-use|post-tool-use-failure|permission-denied|session-start|stop>   (used by the plugin itself)`;
+  action [name] [--session id] | dispatch | release-check | hook <pre-tool-use|post-tool-use|post-tool-use-failure|permission-denied|session-start|stop>   (used by the plugin itself)`;
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env, stdin: () => string = readStdin): Promise<number> {
   const paths = resolvePaths(env);
@@ -197,6 +199,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
     const spec = Object.hasOwn(COMMAND_FLAGS, name) ? COMMAND_FLAGS[name] : undefined;
     const args: Args = spec ? parseArgs(rest, spec, name) : { positional: rest, flags: {} };
     const out = (text: string) => process.stdout.write(text.endsWith('\n') ? text : text + '\n');
+    // The line about a newer kharos, at most once a day, on the commands a person runs to launch and look.
+    const notice = () => {
+      const line = updateNotice(paths, env, now);
+      if (line) out(line);
+    };
     switch (command) {
       case 'prepare': {
         const extra = launchOutputs(args);
@@ -220,9 +227,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
           out(
             `${s.id} queued: every watch.max_open slot is taken. It fires by itself when one frees: kharos then creates and runs it from a headless Claude Code in auto mode, a paid action with nobody present, and a follower process follows it.${pre ? `\n${pre}` : ''}\nkharos list shows its place; /kharos:close ${s.id} cancels it. Do not call RemoteTrigger for it now.`,
           );
+          notice();
           return 0;
         }
         out(`${s.id} prepared: ${s.profile}, ${s.model}, deadline ${s.deadline_min} min${s.no_push ? ', no push asked' : ''}.${pre ? `\n${pre}` : ''}\nNext: call RemoteTrigger with action "create" and body {"kharos_launch":"${s.id}"}.`);
+        notice();
         return 0;
       }
       case 'action':
@@ -239,6 +248,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         return 0;
       case 'list':
         out(cmd.list(paths, { all: args.flags.all === true, now }));
+        notice();
         return 0;
       case 'log': {
         const lines = args.positional[1] ? Number(args.positional[1]) : 15;
@@ -275,13 +285,27 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
       case 'env-guide':
         out(envGuide(args, paths, env));
         return 0;
+      case 'release-check':
+        // Started detached by kharos itself, at most once a day; it prints nothing.
+        await backgroundCheck(paths, env, now);
+        return 0;
       case 'doctor': {
+        const release = await readReleaseView(paths, env, now, realReleaseDeps(env));
+        const expect = flag(args, 'update');
+        if (expect !== undefined) {
+          if (flag(args, 'profile') !== undefined || args.flags.verbose === true || args.flags['no-remote-tool'] === true) throw new cmd.CommandError('doctor --update takes no other flag');
+          const r = applyUpdate(release, expect, realClaudeRunner(env));
+          out(r.lines.join('\n'));
+          return r.ok ? 0 : 1;
+        }
         const checks = runDoctor(
           paths,
-          { ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), noRemoteTool: args.flags['no-remote-tool'] === true, shared: sharedPaths(env), now, env },
+          { ...(flag(args, 'profile') !== undefined ? { profile: flag(args, 'profile') as string } : {}), noRemoteTool: args.flags['no-remote-tool'] === true, shared: sharedPaths(env), release, now, env },
           realDeps(env),
         );
         out(formatChecks(checks, { verbose: args.flags.verbose === true }));
+        const changes = formatRelease(release);
+        if (changes) out(`\n${changes}`);
         return checks.some((c) => c.level === 'fail') ? 1 : 0;
       }
       case 'setup': {

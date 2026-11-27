@@ -39,6 +39,7 @@ Never run `kharos rearm` in any step below, even when an answer mentions a re-ar
    If it prints "not launched", show its output to the person and stop.
    If it prints "queued", show its output to the person and stop: do not call RemoteTrigger and start no follower; kharos fires the launch by itself when a slot frees.
    If it prints a `permission preflight:` line, show that line to the person as it is.
+   If it prints a line that starts with `kharos` and says a newer version is available, show that line to the person as it is.
 4. Call the RemoteTrigger tool with action `create` and body `{"kharos_launch":"<id>"}`, with the id that prepare printed.
    Do not write the routine body yourself: the plugin puts in the stored one.
    If the answer does not start with `kharos:`, the plugin hooks are not active: stop, and tell the person to run /kharos:doctor.

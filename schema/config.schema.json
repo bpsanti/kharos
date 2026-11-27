@@ -50,6 +50,17 @@
       "default": false,
       "description": "Opt-in, with preflight_auto and a remembered confirmation that matches the organization's managed settings: the side branch of each launch gets the unblock preset, which allows every permission prompt in its cloud session. Refused when the organization disabled bypass mode; deny rules are never touched. See docs/permissions.md."
     },
+    "update": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notify": {
+          "type": "boolean",
+          "default": true,
+          "description": "On by default: /kharos:run and /kharos:list add one line, at most once a day, when a newer kharos release is out on GitHub; /kharos:doctor shows what changed and updates it. The release is read at most once a day, in the background, and any network failure is silent."
+        }
+      }
+    },
     "account_mode": {
       "enum": [
         "auto",
