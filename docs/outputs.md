@@ -60,7 +60,7 @@ The adapter writes one line per event to one status file, given at launch and ne
 | pr_opened | `note`, with the pull request | same |
 | waiting_answer | `needs-decision [key=...]` | same |
 | waiting_permission, silent, looping, overdue, usage_limit, invisible, quiet_unmarked, provisioning_slow, unfollowed, not_fired | `blocked [key=...]` | same |
-| probably_finished | `blocked [key=...]`: the end mark is missing, so someone looks; `back` resolves it if the session resumes | same |
+| end_asked | `note`: kharos asked the session whether it finished | same |
 | back | `resolved [key=...]` | same |
 | finished | `resolved [key=...]` if a notice was open, otherwise `note`, with the pull request | `done` with the summary, the pull request and the session sheet |
 | failed, ended_unmarked | `blocked [key=...]` | `failed` |

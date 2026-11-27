@@ -12,7 +12,7 @@ import { accountPolicy, loadConfirmation } from './org-confirmations.ts';
 import { BROAD_RISK, UNBLOCK_RISK, broadRules, hasHookEntry, hookState, HOOK_RULES_PATH, HOOK_SCRIPT_PATH } from './permission-hook.ts';
 import { readRemoteFile, readRemoteHookFiles, readRemoteSettings, type RemoteHookFiles, type RemoteSettings } from './permissions.ts';
 import { activeCount, loadRegistry } from './registry.ts';
-import { followerProblems, probableEndLines, queueLines } from './commands.ts';
+import { followerProblems, queueLines } from './commands.ts';
 import { LEASE_STALE_MS } from './lease.ts';
 import { describePlan, loadMarker, planMigration } from './accounts.ts';
 import { ACCOUNT_AUTO_CAVEAT, autoModeRefusal, readAccountMode } from './account-mode.ts';
@@ -231,7 +231,6 @@ export function runDoctor(paths: Paths, opts: DoctorOptions, deps: DoctorDeps): 
   }
   if (reg) {
     const problems = followerProblems(paths, opts.now);
-    for (const line of probableEndLines(paths)) add('info', 'probably finished', line.replace(/^probably finished, /, ''));
     for (const line of queueLines(paths, opts.now)) add(/not fired/.test(line) ? 'warn' : 'info', 'queue', line.replace(/^queue: /, ''));
     for (const p of problems) add('warn', `follower ${p.id}`, `${p.detail} (a follower beats every few seconds; past ${Math.round(LEASE_STALE_MS / 60_000)} min it counts as stale)`, [p.fix]);
   }

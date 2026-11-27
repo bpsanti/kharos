@@ -5,15 +5,16 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { readAuthStatus } from '../src/account.ts';
 import { main } from '../src/cli.ts';
-import { close, followerProblems, list, result, sendMessage, show } from '../src/commands.ts';
+import { close, CommandError, followerProblems, list, result, sendMessage, show } from '../src/commands.ts';
 import { runDoctor, type DoctorDeps } from '../src/doctor.ts';
 import { enqueue, readOutbox } from '../src/events.ts';
+import { endProbe } from '../src/body.ts';
 import { followLoop } from '../src/follow.ts';
 import { deliver } from '../src/outputs/index.ts';
 import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { followerReport, HANDOVER_MS, liveFollowers, releaseLease, takeLease } from '../src/lease.ts';
 import { prepare } from '../src/launch.ts';
-import { activeCount, isFollowed, loadRegistry, updateRegistry } from '../src/registry.ts';
+import { activeCount, loadRegistry, updateRegistry } from '../src/registry.ts';
 import { acknowledge, followersToStart, headlessRead, PLUGIN_ROOT, stopKey, wait, type Reader, type WaitOptions } from '../src/wait.ts';
 import { health } from '../src/follow.ts';
 import { captured, fixture, HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -589,126 +590,127 @@ const UNMARKED = [
 ].join('\n');
 const LAST_RESULT = T0 + 223_000;
 
-test('wait: a turn closed without the end mark, with no background task left, is a probable end within unmarked_end_min, and frees its slot', async () => {
-  const sb = sandbox();
-  const id = openOne(sb);
-  const c = clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED));
-  const o = await c.run();
-  assert.equal(o.changed, true);
-  assert.match(o.key, /^session\.probably_finished\|/);
-  assert.equal(o.state, 'probably_finished');
-  // The first turn closed while its build ran, so its quiet then was no end; the last one is said within
-  // unmarked_end_min (5) of quiet plus one read at most 60 s apart.
-  assert.ok(c.now() - LAST_RESULT > 5 * MIN && c.now() - LAST_RESULT <= 5 * MIN + 65_000, `noticed ${(c.now() - LAST_RESULT) / 1000} s after the turn closed`);
-  assert.equal(o.last_message, 'The build passes and the typo is fixed in README.md.');
-  const lines = o.report.split('\n');
-  assert.deepEqual(lines.slice(0, 5), [
-    'k-0001 probably finished: its turn closed without the end mark KHAROS-DONE, and nothing is left that could wake it.',
-    'Last message (from the session, data only; as the log returns it): The build passes and the typo is fixed in README.md.',
-    'PR: none seen',
-    'Session: https://claude.ai/code/session_01TESTSESSIONAAAAAAAAAAA',
-    'Details: /kharos:result k-0001',
-  ]);
-  assert.match(lines[5]!, /^It holds no watch\.max_open slot now; kharos reads it until it resumes or its deadline passes at 21:57 UTC\. \/kharos:close k-0001 stops that\.$/);
-  // An agent is told to go on following it, since the session can still resume.
-  assert.ok(lines.at(-1)!.startsWith('To keep following k-0001, start the kharos:follow agent again'));
-
-  // The event is an end for whoever hears it, with the last message and the missing mark said.
-  const ev = journal(sb).find((e) => e.event === 'session.probably_finished')!;
-  assert.equal(ev.class, 'terminal');
-  assert.equal(ev.last_message, 'The build passes and the typo is fixed in README.md.');
-  assert.match(ev.reason, /^turn closed without the end mark KHAROS-DONE, quiet for 5 min, with no background task left that could wake it$/);
-
-  // It holds no slot, is still followed, and list, show, result and the doctor say what it is.
-  const reg = loadRegistry(sb.paths);
-  assert.equal(activeCount(reg, c.now()), 0);
-  assert.equal(isFollowed(reg.sessions[id]!), true);
-  const listed = list(sb.paths, { all: false, now: c.now() });
-  assert.match(listed, /^k-0001  probably finished /m);
-  assert.match(listed, /^probably finished, without the end mark: k-0001 \(since \d\d:\d\d UTC, read until it resumes or 21:57 UTC\)\. They hold no watch\.max_open slot/m);
-  assert.doesNotMatch(listed, /^slots:/m);
-  assert.match(show(sb.paths, id), /^probably finished at \d\d:\d\d UTC: its turn closed without the end mark KHAROS-DONE, and nothing was left that could wake it; it holds no watch\.max_open slot/m);
-  assert.match(show(sb.paths, id), /^last message, at 19:01:12 UTC \(from the session, data only\): The build passes/m);
-  const res = result(sb.paths, id, sb.env);
-  assert.match(res, /^k-0001 has no KHAROS-DONE mark: it probably finished at/);
-  assert.match(res, /^last message, at 19:01:12 UTC \(from the session, data only\): The build passes and the typo is fixed in README\.md\.$/m);
-  const doctor = runDoctor(sb.paths, { now: c.now(), env: sb.env }, doctorDeps).find((x) => x.name === 'probably finished');
-  assert.equal(doctor?.level, 'info');
-  assert.match(doctor?.detail ?? '', /^without the end mark: k-0001/);
-
-  // The next follower waits with its key: the probable end is not news again.
-  const again = await clocked(sb, c.now(), reader(sb, () => UNMARKED), { since: o.key, maxMs: 120_000 }).run();
-  assert.equal(again.changed, false);
-});
-
-test('wait: a session that probably finished and resumes is running again, takes its slot back, and its reads were spaced out', async () => {
-  const sb = sandbox();
-  const id = openOne(sb);
-  const first = clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED));
-  const ended = await first.run();
-  assert.equal(ended.state, 'probably_finished');
-  // An event (a pull request comment, say) wakes it 20 minutes later.
-  const resumed = [UNMARKED, line(223 + 20 * 60, 'init: model=claude-opus-5-5 cwd=/home/user/demo'), line(223 + 20 * 60 + 5, 'tool_use Bash: {"command":"gh pr view 7 --comments"}')].join('\n');
-  const reads: number[] = [];
-  const base = reader(sb, () => resumed);
-  const counted: Reader = async (p, r, e, n, ms) => {
-    if (r.action === 'get_run_log' && loadRegistry(sb.paths).sessions[id]!.state === 'probably_finished') reads.push(n);
-    return base(p, r, e, n, ms);
+/** A recorded send: the session's log grows by what `reply` returns, from the time of the send. */
+function sender(sent: string[], grow: (text: string, sec: number) => void, now: () => number) {
+  return (_p: unknown, _id: string, text: string) => {
+    sent.push(text);
+    grow(text, Math.round((now() - T0) / 1000));
   };
-  // Followers come one after another, each waiting with the last key, until a read sees it resume.
-  let o = ended;
-  let clock = first.now();
-  for (let i = 0; i < 10 && loadRegistry(sb.paths).sessions[id]!.state === 'probably_finished'; i++) {
-    const c = clocked(sb, clock, counted, { since: o.key });
-    o = await c.run();
-    clock = c.now();
-  }
-  // Reads of a probable end are five minutes apart, from the last read, whichever wait made it.
-  assert.ok(reads.length >= 3, `${reads.length} reads`);
-  for (let i = 1; i < reads.length; i++) assert.ok(reads[i]! - reads[i - 1]! >= 5 * MIN - 5_000, `reads ${(reads[i]! - reads[i - 1]!) / 1000} s apart`);
-  const s = loadRegistry(sb.paths).sessions[id]!;
-  assert.equal(s.state, 'running');
-  assert.equal(s.notice, null);
-  assert.equal(activeCount(loadRegistry(sb.paths), Date.now()), 1);
-  const back = journal(sb).find((e) => e.event === 'session.back')!;
-  assert.equal(back.reason, 'the session resumed after it seemed finished');
-  assert.equal(back.previous_state, 'probably_finished');
-  // A resume is progress, not an alert: the follower is not woken for it.
-  assert.equal(back.class, 'progress');
-});
+}
 
-test('wait: a session that probably finished is closed at its deadline, after its end was reported, and the follower stops', async () => {
+test('wait: a turn closed without the end mark, with nothing left to wake it, is asked about once, and the session ends when it answers with KHAROS-DONE', async () => {
   const sb = sandbox();
   const id = openOne(sb);
-  // The deadline passes before the turn is quiet long enough: the end is reported first anyway.
-  updateRegistry(sb.paths, (reg) => {
-    reg.sessions[id]!.deadline_min = 5;
-  });
-  const read = (now: number) => postToolUse(sb.ctx(now), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, pageAt(UNMARKED, now)), 'reader'));
-  read(LAST_RESULT + 6 * MIN);
-  let s = loadRegistry(sb.paths).sessions[id]!;
-  assert.equal(s.state, 'probably_finished');
-  assert.equal(s.step, 'open');
-  assert.deepEqual(journal(sb).map((e) => e.event).filter((e) => e !== 'session.opened' && e !== undefined), ['session.probably_finished']);
-  read(LAST_RESULT + 7 * MIN);
-  s = loadRegistry(sb.paths).sessions[id]!;
-  assert.equal(s.step, 'closed');
-  assert.equal(s.closed_at, new Date(LAST_RESULT + 7 * MIN).toISOString());
-  assert.equal(isFollowed(s), false);
-  const o = await clocked(sb, LAST_RESULT + 7 * MIN, reader(sb, () => UNMARKED), { since: 'session.probably_finished|x' }).run();
-  assert.equal(o.key, 'end:closed');
-  assert.equal(o.reads, 0);
-  assert.match(o.report, /^k-0001 is closed: it probably finished, without the end mark, and its deadline passed, so kharos no longer reads it\. Details: \/kharos:result k-0001/);
+  let log = UNMARKED;
+  const sent: string[] = [];
+  let sentAt = 0;
+  const clock = { now: () => 0 };
+  const send = sender(sent, (text, sec) => {
+    sentAt = T0 + sec * 1000;
+    log = [log, line(sec + 2, `user: ${text}`), line(sec + 4, 'init: model=claude-opus-5-5 cwd=/home/user/demo'), line(sec + 8, 'assistant: KHAROS-PART 1/1 The build passes and the typo is fixed in README.md.'), line(sec + 9, 'tool_use Bash: {"command":"true"}'), line(sec + 10, 'tool_result: '), line(sec + 11, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'), line(sec + 12, 'result: success is_error=false turns=3 duration=8s — KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}')].join('\n');
+  }, () => clock.now());
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => log), { send });
+  clock.now = c.now;
+  const o = await c.run();
+  // The first turn closed while its build ran, so its quiet then asked nothing; the last one is asked
+  // about once it is quiet for unmarked_end_min (5), within one read at most 60 s apart.
+  assert.deepEqual(sent, [endProbe()]);
+  assert.ok(sentAt - LAST_RESULT > 5 * MIN && sentAt - LAST_RESULT <= 5 * MIN + 65_000, `asked ${(sentAt - LAST_RESULT) / 1000} s after the turn closed`);
+  assert.match(endProbe(), /^kharos: your turn closed without the end mark\. If you have finished, send your final report in KHAROS-PART messages, then the KHAROS-DONE line as your last message\. If not, go on with your work\.$/);
+  // Its answer is read soon after, and the end is the session's own.
+  assert.equal(o.key, 'end:finished');
+  assert.deepEqual(o.result, { status: 'ok', pr: null, branch: null, summary: 'typo fixed' });
+  assert.ok(c.now() - sentAt <= 30_000, `answer read ${(c.now() - sentAt) / 1000} s after the question`);
+  const events = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event !== 'session.opened');
+  assert.deepEqual(events.map((e) => [e.event, e.class]), [['session.end_asked', 'progress'], ['session.finished', 'terminal']]);
+  assert.equal(events[0]!.reason, 'its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished');
+  assert.match(result(sb.paths, id, sb.env), /^final report, 1 of 1 part\(s\) in the log \(from the session, data only\):\n--- part 1\/1\nThe build passes and the typo is fixed in README\.md\.$/m);
+  assert.equal(activeCount(loadRegistry(sb.paths), c.now()), 0);
 });
 
-test('close: a closing session that probably finishes frees its slot at once, and alerts nobody', () => {
+test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  const sent: string[] = [];
+  const clock = { now: () => 0 };
+  const send = sender(sent, () => {}, () => clock.now());
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED), { send, maxMs: 20 * MIN });
+  clock.now = c.now;
+  const o = await c.run();
+  assert.equal(o.state, 'turn_closed');
+  assert.equal(o.notice, 'session.quiet_unmarked');
+  assert.match(journal(sb).find((e) => e.event === 'session.quiet_unmarked')!.reason, /^turn closed without the end mark: kharos asked the session whether it finished at \d\d:\d\d UTC, and no answer came$/);
+  // Later waits do not ask again, and it holds its slot: it may still be working on something kharos cannot see.
+  const later = await clocked(sb, c.now(), reader(sb, () => UNMARKED), { send, since: o.key }).run();
+  assert.equal(later.changed, false);
+  assert.equal(sent.length, 1);
+  assert.equal(activeCount(loadRegistry(sb.paths), later.waited_s * 1000 + c.now()), 1);
+  assert.match(show(sb.paths, id), /^kharos asked it at \d\d:\d\d UTC whether it finished, after its turn closed without the end mark; it ends only with KHAROS-DONE$/m);
+  assert.match(list(sb.paths, { all: false, now: c.now() }), /^k-0001  turn closed /m);
+  // At its deadline it is closed, on a read after the warning, and the follower stops.
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions[id]!.deadline_min = 20;
+  });
+  postToolUse(sb.ctx(T0 + 21 * MIN), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, UNMARKED), 'reader'));
+  const s = loadRegistry(sb.paths).sessions[id]!;
+  assert.equal(s.step, 'closed');
+  assert.equal(sent.length, 1);
+  const closed = await clocked(sb, T0 + 21 * MIN, reader(sb, () => UNMARKED), { send, since: o.key }).run();
+  assert.equal(closed.key, 'end:closed');
+});
+
+test('wait: a question that does not go through is kept with its reason, and the warning says so', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  let tries = 0;
+  const send = () => {
+    tries++;
+    throw new CommandError('not sent: the session is not reachable');
+  };
+  const o = await clocked(sb, T0 + 30_000, reader(sb, () => UNMARKED), { send, maxMs: 20 * MIN }).run();
+  assert.equal(tries, 1);
+  assert.equal(o.notice, 'session.quiet_unmarked');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.end_probe?.error, 'not sent: the session is not reachable');
+  const asked = journal(sb).find((e) => e.event === 'session.end_asked')!;
+  assert.equal(asked.reason, 'its turn closed without the end mark, and kharos could not ask it whether it finished (not sent: the session is not reachable)');
+  assert.match(journal(sb).find((e) => e.event === 'session.quiet_unmarked')!.reason, /kharos could not send it the question whether it finished at \d\d:\d\d UTC$/);
+  assert.match(show(sb.paths, id), /^kharos tried to ask it at \d\d:\d\d UTC whether it finished, after its turn closed without the end mark, and the message did not go through: not sent: the session is not reachable$/m);
+});
+
+test('wait: a session that goes on with its work after the question is running, and its next quiet turn is a new one to ask about', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  let log = UNMARKED;
+  const sent: string[] = [];
+  const clock = { now: () => 0 };
+  // The first question is answered with more work; the second, about the turn that work closed, with words only.
+  const send = sender(sent, (text, sec) => {
+    const answer =
+      sent.length === 1
+        ? [line(sec + 8, 'tool_use Bash: {"command":"npm test"}'), line(sec + 60, 'tool_result: all green'), line(sec + 62, 'assistant: Tests pass too.'), line(sec + 63, 'result: success is_error=false turns=2 duration=60s — Tests pass too.')]
+        : [line(sec + 8, 'assistant: Still checking.'), line(sec + 9, 'result: success is_error=false turns=1 duration=1s — Still checking.')];
+    log = [log, line(sec + 2, `user: ${text}`), line(sec + 4, 'init: model=claude-opus-5-5 cwd=/home/user/demo'), ...answer].join('\n');
+  }, () => clock.now());
+  const c = clocked(sb, T0 + 30_000, reader(sb, () => log), { send, maxMs: 25 * MIN });
+  clock.now = c.now;
+  const o = await c.run();
+  assert.equal(sent.length, 2, 'one question per quiet period');
+  // An answer with no work and no end mark is not asked about again: the turn stays closed, with the warning.
+  assert.equal(o.notice, 'session.quiet_unmarked');
+  assert.match(journal(sb).find((e) => e.event === 'session.quiet_unmarked')!.reason, /and it answered with no end mark and no work$/);
+  const kinds = journal(sb).filter((e) => e.schema === 'kharos.event.v1' && e.event === 'session.end_asked');
+  assert.equal(kinds.length, 2);
+});
+
+test('close: a closing session whose turn closes without the end mark is not asked, and keeps its slot until its deadline', async () => {
   const sb = sandbox();
   const id = openOne(sb);
   close(sb.paths, id, T0 + 60_000);
-  assert.equal(activeCount(loadRegistry(sb.paths), T0 + 60_000), 1);
-  postToolUse(sb.ctx(LAST_RESULT + 6 * MIN), h({ action: 'get_run_log', session_id: SID }, response(200, { next_cursor: null }, UNMARKED), 'reader'));
-  const s = loadRegistry(sb.paths).sessions[id]!;
-  assert.equal(s.step, 'closed');
-  assert.equal(activeCount(loadRegistry(sb.paths), LAST_RESULT + 6 * MIN), 0);
-  assert.equal(journal(sb).some((e) => e.event === 'session.probably_finished'), false);
+  const sent: string[] = [];
+  const send = sender(sent, () => {}, () => 0);
+  await clocked(sb, T0 + 70_000, reader(sb, () => UNMARKED), { send }).run();
+  assert.deepEqual(sent, []);
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'open');
+  assert.equal(activeCount(loadRegistry(sb.paths), T0 + 15 * MIN), 1);
+  assert.equal(journal(sb).some((e) => e.event === 'session.end_asked' || e.event === 'session.quiet_unmarked'), false);
 });

@@ -9,15 +9,15 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeBin, readAuthStatus } from './account.ts';
-import { clean } from './body.ts';
-import { CommandError } from './commands.ts';
+import { clean, endProbe } from './body.ts';
+import { CommandError, sendMessage } from './commands.ts';
 import { expectFollower, liveFollowers, releaseLease, takeLease } from './lease.ts';
 import type { Paths } from './paths.ts';
-import { deadlineAt, findSession, isFollowed, loadRegistry, probablyFinished, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
+import { findSession, isFollowed, loadRegistry, TERMINAL_STATES, updateRegistry, type Session } from './registry.ts';
 import { loadLogin, saveLogin } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
-import { appendMark, LAST_MESSAGE_MAX, type AlertRef } from './events.ts';
+import { appendMark, buildEvent, enqueue, type AlertRef } from './events.ts';
 
 /** The plugin's root folder, which holds `scripts/kharos` and is loaded into each reader. */
 export const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,12 +32,6 @@ export const ROLE_ENV = 'KHAROS_ROLE';
 export const READER_ROLE = 'reader';
 
 export const WAIT_DEFAULTS = { maxS: 540, minIntervalS: 15, maxIntervalS: 60 } as const;
-
-/**
- * How often a session that probably finished is read: only to see it resume, which is not urgent, so
- * its reads are spaced out; the time counts from the last read, whichever wait made it.
- */
-export const FINISHED_READ_INTERVAL_MS = 5 * 60_000;
 
 /** One RemoteTrigger read of a session. */
 export interface Read {
@@ -126,6 +120,8 @@ export interface WaitOptions {
   sleep?: (ms: number) => Promise<void>;
   read?: Reader;
   account?: () => string | null;
+  /** Sends a message into the session (the question whether it finished); throws a CommandError when it does not go through. */
+  send?: (paths: Paths, id: string, text: string, env: NodeJS.ProcessEnv) => void;
   /**
    * Who reads the report: a kharos:follow agent, which is told how to start the next one, or the shell
    * loop of `kharos follow`, which goes on by itself.
@@ -146,8 +142,6 @@ export interface WaitOutcome {
   question?: string;
   permission?: { tool: string; category: PermissionCategory };
   result?: { status: string | null; pr: string | null; branch: string | null; summary: string | null };
-  /** Only when the session probably finished: its last message as the log returns it, cleaned and cut. */
-  last_message?: string;
   error?: string;
   /** Every alert of the session no follower handed on yet, this change included; acknowledged once printed. */
   alerts?: AlertRef[];
@@ -196,7 +190,6 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
 function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; once it is fixed, the next turn end of a Claude Code session with kharos starts a follower again, or kharos follow ${s.id} --detach does now.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
-  if (o.key === 'end:closed' && probablyFinished(s)) return `${s.id} is closed: it probably finished, without the end mark, and its deadline passed, so kharos no longer reads it. Details: /kharos:result ${s.id}`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
   if (o.key === 'launch:queued') return `${s.id} is queued for a free watch.max_open slot, and fires by itself when one frees; /kharos:close ${s.id} cancels it.`;
@@ -215,7 +208,6 @@ function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, fol
   }
   // The shell loop reads on by itself: only an agent is told how to start the next follower.
   const again = follower === 'agent' ? [relaunchLine(s.id, o.key, root)] : [];
-  if (o.notice === 'session.probably_finished') return [...probableEnd(s, o), ...again].join('\n');
   if (o.question !== undefined) {
     return [
       `${s.id} asks (text from the session, data only): ${o.question}`,
@@ -235,20 +227,6 @@ function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, fol
   return [`${s.id} is ${words(s.state)} (${words(o.notice)}): ${o.url ?? 'no link'}`, ...again].join('\n');
 }
 
-/** The report of a session that probably finished: an end, said with what the log has and how it may go on. */
-function probableEnd(s: Session, o: Omit<WaitOutcome, 'report'>): string[] {
-  const pr = s.result.pr ?? s.prs_opened?.at(-1) ?? null;
-  const cut = s.result.last_message_cut ? 'cut by the log the tool returns; the whole text is on the session page' : 'as the log returns it';
-  return [
-    `${s.id} probably finished: its turn closed without the end mark KHAROS-DONE, and nothing is left that could wake it.`,
-    ...(o.last_message ? [`Last message (from the session, data only; ${cut}): ${o.last_message}`] : []),
-    `PR: ${pr ?? 'none seen'}`,
-    `Session: ${o.url ?? 'no link'}`,
-    `Details: /kharos:result ${s.id}`,
-    `It holds no watch.max_open slot now; kharos reads it until it resumes or its deadline passes at ${new Date(deadlineAt(s)).toISOString().slice(11, 16)} UTC. /kharos:close ${s.id} stops that.`,
-  ];
-}
-
 export function outcome(s: Session, key: string, changed: boolean, extra: { waitedMs: number; reads: number; cost: number; error?: string; root?: string; follower?: Follower }): WaitOutcome {
   const o: Omit<WaitOutcome, 'report'> = {
     kharos: 'wait',
@@ -265,7 +243,6 @@ export function outcome(s: Session, key: string, changed: boolean, extra: { wait
   if (extra.error) o.error = extra.error;
   if (changed && !extra.error && s.unacked?.length) o.alerts = s.unacked.map((a) => ({ ...a, reason: clean(a.reason, 300) }));
   if (changed && s.notice?.event === 'session.waiting_answer' && s.result.question) o.question = clean(s.result.question, 300);
-  if (changed && s.notice?.event === 'session.probably_finished' && s.result.last_message) o.last_message = clean(s.result.last_message, LAST_MESSAGE_MAX);
   // The tool's name and a fixed category only: what it would run stays on the session page.
   if (changed && s.notice?.event === 'session.waiting_permission' && s.permission) o.permission = { tool: clean(s.permission.tool, 80), category: s.permission.category ?? 'unknown' };
   if (key.startsWith('end:')) {
@@ -381,8 +358,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       leased ||= holds;
       const lastRead = s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
-      const gap = probablyFinished(s) ? Math.max(interval, FINISHED_READ_INTERVAL_MS) : interval;
-      const dueAt = fresh ? nextOwnRead : Math.max(lastRead + gap, nextOwnRead);
+      const dueAt = fresh ? nextOwnRead : Math.max(lastRead + interval, nextOwnRead);
       if (holds && t >= dueAt) {
         const lastEvent = s.last_event_at;
         let landed = false;
@@ -410,6 +386,9 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           }
           interval = after.last_event_at !== lastEvent ? opts.minIntervalMs : Math.min(Math.max(interval * 2, opts.minIntervalMs), opts.maxIntervalMs);
         }
+        // The question whether it finished, when the read found a closed turn to ask about; its answer is
+        // read soon after.
+        if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;
         // A read that landed moves last_read_at, which sets the next one; anything else waits an interval.
         nextOwnRead = now() + (landed ? 0 : interval);
         continue;
@@ -420,6 +399,41 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   } finally {
     if (leased) releaseLease(paths, id, process.pid, handover ? now() : null);
   }
+}
+
+/**
+ * Asks a session whose turn closed without the end mark whether it finished, once per closed turn: the
+ * question is recorded before it is sent, so no process sends it twice, and a failed send is kept with its
+ * reason. The session ends only when it answers with KHAROS-DONE. Never for a session the person closed.
+ */
+function askIfDue(paths: Paths, id: string, now: number, opts: WaitOptions): boolean {
+  const iso = new Date(now).toISOString();
+  const due = updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id];
+    const key = s?.end_probe_due;
+    if (!s || !key || s.closing_at || s.step !== 'open' || s.end_probe?.for === key) return null;
+    s.end_probe = { for: key, at: iso };
+    s.end_probe_due = null;
+    return key;
+  });
+  if (!due) return false;
+  let error: string | null = null;
+  try {
+    (opts.send ?? sendMessage)(paths, id, endProbe(), opts.env);
+  } catch (err) {
+    if (!(err instanceof CommandError)) throw err;
+    error = err.message;
+  }
+  updateRegistry(paths, (reg) => {
+    const s = reg.sessions[id];
+    if (!s) return;
+    if (error && s.end_probe?.for === due) s.end_probe.error = error;
+    const reason = error
+      ? `its turn closed without the end mark, and kharos could not ask it whether it finished (${error})`
+      : 'its turn closed without the end mark, with nothing left that could wake it: kharos asked it whether it finished';
+    enqueue(paths, [buildEvent(s, 'session.end_asked', s.state, reason, now)]);
+  });
+  return true;
 }
 
 /** A session that another login launched is invisible, never read as finished. */

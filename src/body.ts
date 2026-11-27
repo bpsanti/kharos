@@ -39,6 +39,14 @@ export function reportLines(push: boolean): string[] {
   ];
 }
 
+/** How the message starts that asks a session whose turn closed without the end mark whether it finished; the log shows it so. */
+export const END_PROBE_MARK = 'kharos: your turn closed without the end mark.';
+
+/** The one message kharos sends a session whose turn closed without the end mark, quiet, with nothing left to wake it. */
+export function endProbe(): string {
+  return `${END_PROBE_MARK} If you have finished, send your final report in ${PART_MARK} messages, then the ${DONE_MARK} line as your last message. If not, go on with your work.`;
+}
+
 /** The footer line a `--no-push` launch leaves out. */
 export const PUSH_LINE = '- Commit and push work in progress at least every 30 minutes: an idle cloud machine can be paused and reclaimed.';
 

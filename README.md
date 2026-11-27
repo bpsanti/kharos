@@ -142,7 +142,6 @@ Its report reaches your session like the result of any background subagent:
 - a question from the session, which you answer with `/kharos:send <id> "<answer>"`;
 - a permission prompt, with the tool's name, a fixed category of why it asks, and the link to the session page, where you answer it;
 - the end, with the status, the summary, the pull request and the branch;
-- a probable end: the turn closed without `KHAROS-DONE` and nothing is left that could wake it, with the last message as the log returns it;
 - a failure, a usage limit, or another notice, with the link.
 
 After a report that is not the end, your session starts the follower again at once, and an answer you send does not wake it before the next real change.
@@ -178,10 +177,11 @@ See [docs/follow.md](docs/follow.md) for how it works and its limits.
 
 ### What a follower reports
 
-Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `probably_finished`, `finished`, `failed`.
-Only the session's own `KHAROS-DONE` mark is a sure end, and "could not read" is never taken for "finished".
-A session that forgets the mark is `probably_finished` once its turn has been closed and quiet for `watch.unmarked_end_min` (5 minutes), with no background task left that could wake it: every task it started (a background command, a `Monitor`, a background agent) has ended, by its notice of the end, a wait on its output that saw it end, or a stop that worked.
-That is reported as an end at once, with the last message, and frees its `watch.max_open` slot; kharos goes on reading it every five minutes, so a session that resumes is `running` again (`session.back`) and takes a slot again, until its deadline, when it is closed.
+Each read is classified by code, not by the model: `running`, `turn_closed`, `silent`, `waiting_answer`, `waiting_permission`, `looping`, `overdue`, `usage_limit`, `invisible`, `finished`, `failed`.
+Only the session's own `KHAROS-DONE` mark ends it, and "could not read" is never taken for "finished".
+When a turn closes without the mark and stays quiet for `watch.unmarked_end_min` (5 minutes), with no background task left that could wake it (every task it started, a background command, a `Monitor` or a background agent, has ended, by its notice of the end, a wait on its output that saw it end, or a stop that worked), the follower asks the session once whether it finished: one short message that asks for the final report in `KHAROS-PART` messages and the `KHAROS-DONE` line, or to go on with its work.
+The session ends when it answers with `KHAROS-DONE`, and is `running` again when it goes on working; with no answer, or an answer with neither, it stays `turn_closed` with the `session.quiet_unmarked` warning, keeps its `watch.max_open` slot, and is closed at its deadline.
+It is asked once per quiet period, never past its deadline, and never once you closed it.
 While a task it started may still wake it, a closed turn is only a warning after `watch.quiet_end_min` (40 minutes).
 A session waiting at a permission prompt raises a notice that names the tool and a fixed category of why it asks (an ask rule of the organization, an ask rule of the repository, a check of Claude Code itself that no rule can allow, the auto mode classifier after blocked calls, or a reason kharos cannot tell), with the link to the session, where a person answers it.
 Only the tool name and a fixed category leave the machine: what the tool would run never does.

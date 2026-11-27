@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { endProbe } from '../src/body.ts';
 import { classify, normalizeError, sameErrorRun, type Verdict } from '../src/classify.ts';
 import { DEFAULT_WATCH } from '../src/config.ts';
 import { transition } from '../src/events.ts';
@@ -65,18 +66,51 @@ test('classify: a ten-minute foreground command is quiet, not silent', () => {
   assert.equal(at(events.slice(0, 4), 130 + 46 * 60).notice, 'silent_severe');
 });
 
-test('classify: a closed turn with nothing left to wake it is probably finished after unmarked_end_min', () => {
-  const events = log([...START, [200, 'assistant', null, 'all done'], [201, 'result', null, 'success is_error=false turns=9 — all done']]);
+test('classify: a closed turn with nothing left to wake it is asked about once after unmarked_end_min, and ends only with KHAROS-DONE', () => {
+  const rows: [number, string, string | null, string][] = [...START, [200, 'assistant', null, 'all done'], [201, 'result', null, 'success is_error=false turns=9 — all done']];
+  const events = log(rows);
+  const closedKey = events.at(-1)!.key;
   assert.deepEqual(at(events, 201 + 4 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed' });
   assert.deepEqual(at(events, 201 + 6 * 60), {
-    state: 'probably_finished',
-    notice: 'probably_finished',
-    reason: 'turn closed without the end mark KHAROS-DONE, quiet for 6 min, with no background task left that could wake it',
+    state: 'turn_closed',
+    notice: null,
+    reason: 'turn closed without the end mark, quiet for 6 min, with no background task left that could wake it; kharos asks the session whether it finished',
+    ask: closedKey,
   });
-  // Reversible: anything new after it reads as running again.
+  // Asked: no second question about the same turn; no answer within unmarked_end_min is a warning, not an end.
+  const sent = { for: closedKey, at: BASE + (201 + 6 * 60) * 1000, failed: false };
+  assert.deepEqual(at(events, 201 + 8 * 60, { asked: sent }), { state: 'turn_closed', notice: null, reason: 'turn closed without the end mark; kharos asked the session whether it finished' });
+  assert.deepEqual(at(events, 201 + 12 * 60, { asked: sent }), {
+    state: 'turn_closed',
+    notice: 'quiet_unmarked',
+    unanswered: true,
+    reason: 'turn closed without the end mark: kharos asked the session whether it finished at 18:00 UTC, and no answer came',
+  });
+  assert.match(at(events, 201 + 12 * 60, { asked: { ...sent, failed: true } }).reason, /kharos could not send it the question whether it finished at 18:00 UTC$/);
+  // It answers with the end mark: finished.
+  const probe: [number, string, string | null, string] = [570, 'user', null, `${endProbe()}`];
+  const done = log([...rows, probe, [572, 'init', null, 'model=x'], [580, 'assistant', null, 'KHAROS-PART 1/1 All done.'], [582, 'assistant', null, 'KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'], [583, 'result', null, 'success is_error=false']]);
+  assert.equal(at(done, 600, { asked: sent }).state, 'finished');
+  // It answers with words only: the turn stays closed, with the warning, and it is not asked again.
+  const words = log([...rows, probe, [572, 'init', null, 'model=x'], [580, 'assistant', null, 'I have not finished yet.'], [581, 'result', null, 'success is_error=false']]);
+  assert.deepEqual(at(words, 581 + 6 * 60, { asked: sent }), {
+    state: 'turn_closed',
+    notice: 'quiet_unmarked',
+    unanswered: true,
+    reason: 'turn closed without the end mark: kharos asked the session whether it finished, and it answered with no end mark and no work',
+  });
+  // It goes on with its work: running; when that turn closes and goes quiet, it is a new quiet period, asked about again.
+  const work = [...rows, probe, [572, 'init', null, 'model=x'], [580, 'tool_use', 'Bash', '{"command":"npm test"}'], [590, 'tool_result', null, 'ok']] as [number, string, string | null, string][];
+  assert.equal(at(log(work), 600, { asked: sent }).state, 'running');
+  const again = log([...work, [600, 'assistant', null, 'Tests pass.'], [601, 'result', null, 'success is_error=false']]);
+  assert.equal(at(again, 601 + 6 * 60, { asked: sent }).ask, again.at(-1)!.key);
+  // Past the deadline nothing is sent: the turn stays closed with the warning.
+  assert.match(at(events, 201 + 6 * 60, { deadlineMin: 5 }).reason, /past the deadline: kharos does not ask a session whose time is up$/);
+  assert.equal(at(events, 201 + 6 * 60, { deadlineMin: 5 }).ask, undefined);
+  // Anything new after the closed turn reads as running again.
   const woke = log([...START, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success is_error=false'], [828, 'init', null, 'model=x']]);
   assert.equal(at(woke, 830).state, 'running');
-  // A closed turn that asked a question or ended with an error is not an end.
+  // A closed turn that asked a question or ended with an error is not asked about.
   const asked = log([...START, [200, 'assistant', null, 'KHAROS-QUESTION {"question":"Which one?"}'], [201, 'result', null, 'success is_error=false']]);
   assert.equal(at(asked, 201 + 30 * 60).state, 'waiting_answer');
   const error = log([...START, [201, 'result', null, 'error_during_execution is_error=true']]);
@@ -95,7 +129,7 @@ test('classify: a turn that closed while a background task it started may wake i
     const events = log([...START, [149, 'tool_use', 'Bash', '{"command":"cargo build","run_in_background":true}'], started, [200, 'assistant', null, 'The server is still compiling'], [201, 'result', null, 'success is_error=false']]);
     assert.deepEqual(at(events, 201 + 10 * 60), { state: 'turn_closed', notice: null, reason: 'turn closed; a background task it started may wake it' }, started[3]);
     // A Monitor that expires in 30 minutes wakes nothing after that; the others may run on.
-    if (/^Monitor/.test(started[3])) assert.equal(at(events, 201 + 41 * 60).state, 'probably_finished');
+    if (/^Monitor/.test(started[3])) assert.equal(typeof at(events, 201 + 41 * 60).ask, 'string');
     else {
       assert.equal(at(events, 201 + 41 * 60).notice, 'quiet_unmarked');
       assert.match(at(events, 201 + 41 * 60).reason, /a background task it started may still wake it$/);
@@ -109,17 +143,17 @@ test('classify: a turn that closed while a background task it started may wake i
   assert.equal(at(unnamed, 201 + 10 * 60).state, 'turn_closed');
 });
 
-test('classify: once every background task it started has ended, a closed quiet turn is probably finished', () => {
+test('classify: once every background task it started has ended, a closed quiet turn is asked about', () => {
   const ended = (status: string): [number, string, string | null, string] => [190, 'user', null, `<task-notification> <task-id>b01</task-id> <tool-use-id>toolu_01</tool-use-id> <output-file>/tmp/b01.output</output-file> <status>${status}</status> <summary>Background command "build" completed (exit code 0)</summary> </task-notification>`];
   for (const started of STARTS) {
     for (const status of ['completed', 'failed', 'killed']) {
       const events = log([...START, started, ended(status), [200, 'assistant', null, 'Report: all green'], [201, 'result', null, 'success is_error=false']]);
-      assert.equal(at(events, 201 + 6 * 60).state, 'probably_finished', `${started[3]} ${status}`);
+      assert.equal(typeof at(events, 201 + 6 * 60).ask, 'string', `${started[3]} ${status}`);
     }
   }
   // A Monitor's last notice says it expired.
   const expired: [number, string, string | null, string] = [190, 'user', null, '<task-notification> <task-id>b01</task-id> <summary>Monitor event: "wait for the build"</summary> <event>[Monitor expired after 30m with 2 events delivered. Re-arm it if you still need the watch.]</event> </task-notification>'];
-  assert.equal(at(log([...START, STARTS[1]!, expired, [200, 'assistant', null, 'done'], [201, 'result', null, 'success']]), 201 + 6 * 60).state, 'probably_finished');
+  assert.equal(typeof at(log([...START, STARTS[1]!, expired, [200, 'assistant', null, 'done'], [201, 'result', null, 'success']]), 201 + 6 * 60).ask, 'string');
   // A Monitor's event that is not its last leaves it open, and so does the end of another task.
   const event: [number, string, string | null, string] = [190, 'user', null, '<task-notification> <task-id>b01</task-id> <summary>Monitor event: "wait for the build"</summary> <event>compiling 40%</event> </task-notification>'];
   assert.equal(at(log([...START, STARTS[1]!, event, [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]), 201 + 6 * 60).state, 'turn_closed');
@@ -131,7 +165,7 @@ test('classify: once every background task it started has ended, a closed quiet 
   const waited = (status: string, task = 'b01'): [number, string, string | null, string] => [190, 'tool_result', null, `<retrieval_status>success</retrieval_status> <task_id>${task}</task_id> <task_type>local_bash</task_type> <status>${status}</status> <exit_code>0</exit_code> <output>built</output>`];
   for (const status of ['completed', 'failed', 'killed']) {
     const events = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskOutput', '{"task_id":"b01","block":true}'], waited(status), [200, 'assistant', null, 'Report: all green'], [201, 'result', null, 'success is_error=false']]);
-    assert.equal(at(events, 201 + 6 * 60).state, 'probably_finished', status);
+    assert.equal(typeof at(events, 201 + 6 * 60).ask, 'string', status);
   }
   const running = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskOutput', '{"task_id":"b01","block":false}'], waited('running'), [200, 'assistant', null, 'waiting'], [201, 'result', null, 'success']]);
   assert.equal(at(running, 201 + 6 * 60).state, 'turn_closed');
@@ -139,14 +173,14 @@ test('classify: once every background task it started has ended, a closed quiet 
   assert.equal(at(otherWait, 201 + 6 * 60).state, 'turn_closed');
   for (const stopped of ['{"message":"Successfully stopped task: b01 (npm run build)","task_id":"b01"}', '{"message":"Successfully killed shell: b01 (npm run build)","shell_id":"b01"}']) {
     const events = log([...START, STARTS[0]!, [180, 'tool_use', 'TaskStop', '{"task_id":"b01"}'], [181, 'tool_result', null, stopped], [200, 'assistant', null, 'Stopped the build'], [201, 'result', null, 'success is_error=false']]);
-    assert.equal(at(events, 201 + 6 * 60).state, 'probably_finished', stopped);
+    assert.equal(typeof at(events, 201 + 6 * 60).ask, 'string', stopped);
   }
   // A foreground agent returns its report inside the turn, so nothing is left to wake it.
   const foreground = log([...START, [150, 'tool_use', 'Agent', '{"description":"Search the code","prompt":"..."}'], [180, 'tool_result', null, 'The parser lives in src/logparse.ts.'], [200, 'assistant', null, 'Found it'], [201, 'result', null, 'success is_error=false']]);
-  assert.equal(at(foreground, 201 + 6 * 60).state, 'probably_finished');
+  assert.equal(typeof at(foreground, 201 + 6 * 60).ask, 'string');
   // A result that only mentions background work started none.
   const mention = log([...START, [150, 'tool_use', 'Agent', '{"description":"Check the server"}'], [180, 'tool_result', null, 'The dev server is running in the background on port 3000, launched in the background by the setup script.'], [200, 'assistant', null, 'ok'], [201, 'result', null, 'success is_error=false']]);
-  assert.equal(at(mention, 201 + 6 * 60).state, 'probably_finished');
+  assert.equal(typeof at(mention, 201 + 6 * 60).ask, 'string');
 });
 
 test('classify: repeated calls that succeed, or a hook that blocks one, are not a loop', () => {
@@ -372,9 +406,9 @@ test('classify: once the deadline notice was raised and closed, a session reopen
   // It was raised, then closed (the session finished and a message woke it): the later checks apply.
   assert.deepEqual(at(events, 181 * 60, { overdueRaised: true }), { state: 'silent', notice: 'silent_severe', reason: 'no new event for 179 min in an open turn' });
   const closed = log([...START, [200, 'assistant', null, 'done'], [201, 'result', null, 'success is_error=false']]);
-  assert.equal(at(closed, 201 + 6 * 60 + 181 * 60, { overdueRaised: true }).notice, 'probably_finished');
-  // A session that probably finished is not running past its deadline: that notice is not raised for it.
-  assert.equal(at(closed, 201 + 6 * 60 + 181 * 60).notice, 'probably_finished');
+  assert.equal(at(closed, 201 + 6 * 60 + 181 * 60, { overdueRaised: true }).notice, 'quiet_unmarked');
+  // A closed quiet turn past the deadline is not asked about, and is not running past the deadline either.
+  assert.equal(at(closed, 201 + 6 * 60 + 181 * 60).notice, 'quiet_unmarked');
 });
 
 test('classify: the deadline counts from the start it is given', () => {
