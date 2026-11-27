@@ -135,7 +135,7 @@ A session frees its slot by itself in two cases, with nobody running `/kharos:cl
 ### Queued launches
 
 A launch refused because every `watch.max_open` slot is taken can wait instead: `/kharos:run --queue "<instruction>"` runs every check and the permission preflight as usual, stores the routine body, and records the launch as `queued`, with nothing created.
-When a slot frees (a session ends, is closed or is refused, a closing one ends or reaches its deadline, or an idle one is closed once its pull requests ended), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
+When a slot frees (a session ends, is closed or is refused, a closing one ends or reaches its deadline, or an idle one is closed once its pull requests ended), the hook, command or follower that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
 
 - The fire is a paid action with nobody present: a minimal headless Claude Code in auto mode makes the same RemoteTrigger calls `/kharos:run --resume` names, so Claude Code's classifier approves the `run`, and the hook allows one `run` per launch, as always.
   Each headless Claude Code makes one call, the one its user message names: the `create`, then the `run` in a process of its own.
