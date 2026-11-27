@@ -19,6 +19,8 @@ import { appendMark, buildEvent, enqueue, type AlertRef } from './events.ts';
 import { headlessRead, JOIN_AHEAD_MS, PLUGIN_ROOT, readInRound, roundOpen, type Read, type Reader } from './round.ts';
 import { pullRequestReader, realGh, type PullRequestReader } from './forge.ts';
 import { closeIfPrEnded } from './pr-close.ts';
+import { kickQueue } from './queue.ts';
+import type { Spawner } from './follow.ts';
 
 export { headlessRead, PLUGIN_ROOT, READER_ROLE, ROLE_ENV, type Read, type Reader, type ReaderRun } from './round.ts';
 
@@ -93,6 +95,8 @@ export interface WaitOptions {
   send?: (paths: Paths, id: string, text: string, env: NodeJS.ProcessEnv) => void;
   /** Reads where a pull request the session opened stands; GitHub through gh by default. */
   pullRequest?: PullRequestReader;
+  /** Starts the dispatcher of queued launches; detached by default. */
+  spawner?: Spawner;
   /**
    * Who reads the report: a kharos:follow agent, which is told how to start the next one, or the shell
    * loop of `kharos follow`, which goes on by itself.
@@ -321,7 +325,15 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           interval = after.last_event_at !== lastEvent ? opts.minIntervalMs : Math.min(Math.max(interval * 2, opts.minIntervalMs), opts.maxIntervalMs);
         }
         // An idle session whose pull requests ended is closed rather than asked whether it finished.
-        if (landed && closeIfPrEnded(paths, id, now(), watchConfig(paths), opts.pullRequest ?? pullRequestReader(realGh(opts.env, PR_READ_TIMEOUT_MS)))) continue;
+        if (landed && closeIfPrEnded(paths, id, now(), watchConfig(paths), opts.pullRequest ?? pullRequestReader(realGh(opts.env, PR_READ_TIMEOUT_MS)))) {
+          // Its slot is free for a queued launch.
+          try {
+            kickQueue(paths, now(), opts.env, opts.spawner);
+          } catch {
+            // the next hook or command tries again
+          }
+          continue;
+        }
         // The question whether it finished, when the read found a closed turn to ask about; its answer is
         // read soon after.
         if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;

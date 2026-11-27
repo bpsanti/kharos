@@ -882,6 +882,19 @@ test('pr close: an idle session whose pull request was merged is closed with a t
   assert.match(show(sb.paths, id), /^kharos closed it at \d\d:\d\d UTC: it sat idle once the pull requests it opened ended \(https:\/\/github\.com\/example\/demo\/pull\/7 merged\)$/m);
 });
 
+test('pr close: the slot an auto-close frees starts the dispatcher of a launch queued for it', async () => {
+  const sb = sandbox();
+  const id = openOne(sb);
+  writeConfig(sb, { watch: { max_open: 1 } });
+  const queued = prepare(sb.paths, { instruction: 'Fix the other typo.', claude_session: 'launcher', queue: true, now: T0 + 10_000, env: sb.env, heads: () => HEADS_OK }).id;
+  assert.equal(loadRegistry(sb.paths).sessions[queued]!.step, 'queued');
+  const spawned: string[][] = [];
+  const o = await clocked(sb, T0 + 40_000, reader(sb, () => PR_OPENED), { send: () => {}, pullRequest: prReader(() => 'merged'), spawner: (args) => (spawned.push(args), process.pid), maxMs: 10 * MIN }).run();
+  assert.equal(o.key, 'end:closed');
+  assert.equal(loadRegistry(sb.paths).sessions[id]!.step, 'closed');
+  assert.deepEqual(spawned, [['dispatch']]);
+});
+
 test('pr close: a session the person closed while it ran is closed quietly once it sits idle with its pull request merged', async () => {
   const sb = sandbox();
   const id = openOne(sb);
