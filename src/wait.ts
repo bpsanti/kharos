@@ -16,7 +16,7 @@ import { loadLogin, saveLogin } from './state.ts';
 import { settle, watchConfig } from './track.ts';
 import { categoryText, type PermissionCategory } from './permission-request.ts';
 import { appendMark, buildEvent, enqueue, type AlertRef } from './events.ts';
-import { headlessRead, PLUGIN_ROOT, readInRound, type Read, type Reader } from './round.ts';
+import { headlessRead, JOIN_AHEAD_MS, PLUGIN_ROOT, readInRound, roundOpen, type Read, type Reader } from './round.ts';
 
 export { headlessRead, PLUGIN_ROOT, READER_ROLE, ROLE_ENV, type Read, type Reader, type ReaderRun } from './round.ts';
 
@@ -45,19 +45,10 @@ export function currentAccount(paths: Paths, now: number, env: NodeJS.ProcessEnv
   return account;
 }
 
-/**
- * When the next read is due after the answer of one came at `last`: the first moment on the grid of the
- * interval that is an interval after it, less one shortest interval but never less than the shortest
- * interval. The followers at the same interval, whose grids the shorter intervals divide, then read in one
- * round, and a read never comes sooner than the shortest interval after the last answer.
- */
-export function dueAfter(last: number, interval: number, minInterval: number): number {
-  const gap = Math.max(interval - minInterval, minInterval);
-  return interval > 0 ? Math.ceil((last + gap) / interval) * interval : last + gap;
-}
-
 /** How often a wait looks at the registry between its own reads, to see what another process recorded. */
 const SLICE_MS = 5_000;
+/** How often a wait whose read is due within JOIN_AHEAD_MS looks for a round it may join. */
+const JOIN_POLL_MS = 500;
 /** Reads in a row that did not reach the registry before the wait gives up and says why. */
 const MAX_READER_FAILURES = 3;
 
@@ -263,10 +254,6 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
   let cost = 0;
   let failures = 0;
   let lastError = '';
-  // When the round of this wait's last read that landed ended, and the last_read_at it left: while that read
-  // is still the last, the next one is counted from the round's end, the same for all its followers, rather
-  // than from when this session's own answer came.
-  let anchor: { ended: number; landed: string | null } | null = null;
   let leased = false;
   // A wait that returns for the next one to go on hands its lease over; an end or an error gives it back.
   let handover = false;
@@ -285,13 +272,14 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       // The lease says this wait follows the session from its first look, not only from its first read.
       const holds = takeLease(paths, id, t, process.pid, opts.follower ?? 'agent');
       leased ||= holds;
-      const lastRead = anchor && anchor.landed === s.last_read_at ? anchor.ended : s.last_read_at ? Date.parse(s.last_read_at) : 0;
+      const lastRead = s.last_read_at ? Date.parse(s.last_read_at) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
-      const dueAt = fresh ? nextOwnRead : Math.max(dueAfter(lastRead, interval, opts.minIntervalMs), nextOwnRead);
-      if (holds && t >= dueAt) {
+      const dueAt = fresh ? nextOwnRead : Math.max(lastRead + interval, nextOwnRead);
+      // A read due within JOIN_AHEAD_MS joins a round another follower opened, rather than open its own after it.
+      const soon = t < dueAt && dueAt - t <= JOIN_AHEAD_MS;
+      if (holds && (t >= dueAt || (soon && roundOpen(paths, opts.env, t)))) {
         const lastEvent = s.last_event_at;
         let landed = false;
-        let ended: number | null = null;
         if (!switchedAccount(paths, s, t, opts)) {
           const planned = readsFor(s);
           let ran = false;
@@ -305,7 +293,6 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
             if (ran) reads += planned.length;
             cost += part.run.cost_usd ?? 0;
             if (!part.run.ok) lastError = part.run.error ?? 'the reader failed';
-            ended = part.ended;
           }
           const after = find();
           // A read that never reached the hook leaves last_read_at as it was.
@@ -317,20 +304,19 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           } else {
             failures = 0;
             landed = true;
-            anchor = ended === null ? null : { ended, landed: after.last_read_at };
           }
           interval = after.last_event_at !== lastEvent ? opts.minIntervalMs : Math.min(Math.max(interval * 2, opts.minIntervalMs), opts.maxIntervalMs);
         }
         // The question whether it finished, when the read found a closed turn to ask about; its answer is
         // read soon after.
         if (landed && askIfDue(paths, id, now(), opts)) interval = opts.minIntervalMs;
-        // A read that landed moves last_read_at, which sets the next one; anything else waits an interval,
-        // to the grid's next round.
-        nextOwnRead = landed ? now() : dueAfter(ended ?? now(), interval, opts.minIntervalMs);
+        // A read that landed moves last_read_at, which sets the next one; anything else waits an interval.
+        nextOwnRead = now() + (landed ? 0 : interval);
         continue;
       }
       const left = opts.maxMs - (now() - start);
-      await sleep(Math.max(0, Math.min(t >= dueAt ? SLICE_MS : dueAt - t, SLICE_MS, left)));
+      const step = soon && holds ? JOIN_POLL_MS : SLICE_MS;
+      await sleep(Math.max(0, Math.min(t >= dueAt ? SLICE_MS : dueAt - t, step, left)));
     }
   } finally {
     if (leased) releaseLease(paths, id, process.pid, handover ? now() : null);

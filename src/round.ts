@@ -175,12 +175,19 @@ export interface RoundCtx {
 
 export interface RoundPart {
   run: ReaderRun;
-  /** When the round's reader ended, the same for every follower of the round, or when this follower gave it up. */
-  ended: number;
   /** The sessions the round read, this one included. */
   sessions: number;
   /** Whether the round's reader was started: a round lost, or cut by the wait's deadline before it started, made no read. */
   ran: boolean;
+}
+
+/** How long before its read is due a follower joins a round another follower opened: its read comes that much sooner at most. */
+export const JOIN_AHEAD_MS = 5_000;
+
+/** Whether a round of this reader group is open now for one more follower to join. */
+export function roundOpen(paths: Paths, env: NodeJS.ProcessEnv, now: number): boolean {
+  const group = readerGroup(env);
+  return loadRounds(paths).rounds.some((r) => r.group === group && r.state === 'forming' && r.starts > now && r.members.length < ROUND_MAX_SESSIONS && r.members.some((m) => pidAlive(m.pid)));
 }
 
 /**
@@ -228,20 +235,19 @@ async function takePart(paths: Paths, id: string, me: Member, ctx: RoundCtx): Pr
   let lastBeat = ctx.now();
   let sessions = 1;
   let ran = false;
-  const part = (run: ReaderRun, ended = ctx.now()): RoundPart => ({ run, ended, sessions, ran });
+  const part = (run: ReaderRun): RoundPart => ({ run, sessions, ran });
   for (;;) {
     const t = ctx.now();
     const r = loadRounds(paths).rounds.find((x) => x.id === id);
     if (!r) return part(failed('the read round was lost before it ended'));
     sessions = r.members.length;
     ran = r.state !== 'forming';
-    if (r.state === 'done') return part(r.results?.[me.session] ?? failed(`the read round gave no result for ${me.session}`), r.ended ?? t);
+    if (r.state === 'done') return part(r.results?.[me.session] ?? failed(`the read round gave no result for ${me.session}`));
     if (r.state === 'forming' && t >= r.starts) {
       const claimed = claim(paths, id, me, t);
       if (claimed) {
         ran = true;
-        const out = await run(paths, claimed, me, ctx);
-        return part(out.run, out.ended);
+        return part(await run(paths, claimed, me, ctx));
       }
     }
     if (r.state === 'running') {
@@ -278,7 +284,7 @@ function claim(paths: Paths, id: string, me: Member, t: number): Round | null {
  * Runs the round's reader, then writes each member's result: its session was read when its last_read_at
  * moved, and its share of the cost follows its share of the reads.
  */
-async function run(paths: Paths, r: Round, me: Member, ctx: RoundCtx): Promise<{ run: ReaderRun; ended: number }> {
+async function run(paths: Paths, r: Round, me: Member, ctx: RoundCtx): Promise<ReaderRun> {
   const reads = r.members.flatMap((m) => m.reads);
   let out: ReaderRun;
   try {
@@ -306,7 +312,7 @@ async function run(paths: Paths, r: Round, me: Member, ctx: RoundCtx): Promise<{
     cur.cost_usd = out.cost_usd;
     cur.error = out.error;
   });
-  return { run: results[me.session] ?? failed(`the read round gave no result for ${me.session}`), ended: t };
+  return results[me.session] ?? failed(`the read round gave no result for ${me.session}`);
 }
 
 const READER_PROMPT =

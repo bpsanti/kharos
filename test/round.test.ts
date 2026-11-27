@@ -134,8 +134,8 @@ test('round: the followers due at the same moment read in one reader process, an
   // Every round read all three sessions, in one process each time.
   assert.ok(calls.length >= 3, `${calls.length} rounds`);
   for (const c of calls) assert.deepEqual(c.sessions, ids);
-  // After the first read, each round is on the grid the followers share, and the next is counted from it.
-  for (const c of calls.slice(1)) assert.equal((c.at - 2_000) % STEP, 0, `a round at ${(c.at - START) / 1000} s`);
+  // Each round is at least the shortest interval after the one before it.
+  for (let i = 1; i < calls.length; i++) assert.ok(calls[i]!.at - calls[i - 1]!.at >= STEP, `a round at ${(calls[i]!.at - START) / 1000} s`);
   const reg = loadRegistry(sb.paths).sessions;
   for (const id of ids) {
     assert.equal(reg[id]!.state, 'running');
@@ -195,12 +195,9 @@ test('round: a session the reader made no call for is a failed read for that ses
   assert.match(byId['k-0002']!.error ?? '', /^3 reads in a row did not reach the session \(the reader made no RemoteTrigger call for k-0002\)$/);
   assert.equal(byId['k-0001']!.error, undefined);
   assert.equal(byId['k-0003']!.error, undefined);
-  // Its retry at the same interval as the others went with their round, not in a process of its own; its
-  // last one, at the longest interval while theirs was shorter, waited for its own grid moment.
+  // Its retries are an interval apart, as a failed read alone waited.
   const withIt = calls.filter((c) => c.sessions.includes('k-0002'));
   assert.equal(withIt.length, 3);
-  for (const c of withIt.slice(0, 2)) assert.deepEqual([...c.sessions].sort(), ids);
-  assert.equal(new Date(withIt[2]!.at - 2_000).getUTCSeconds(), 0);
   const reg = loadRegistry(sb.paths).sessions;
   assert.equal(reg['k-0002']!.last_read_at, null);
   assert.equal(reg['k-0001']!.read_failures, 0);
@@ -217,64 +214,26 @@ test('round: more followers than a round holds split into two reader processes i
   assert.deepEqual(first.flatMap((c) => c.sessions).sort(), ids);
 });
 
-test('round: idle followers whose intervals doubled at different moments read in one reader once both are at 60 s', async () => {
+test('round: a read due within 5 s joins the round another follower opened, and one due later opens its own', async () => {
   const sb = sandbox();
-  const ids = openMany(sb, 2);
+  const ids = openMany(sb, 3);
+  // The last answers came so that k-0001 is due at START, k-0002 3 s later and k-0003 7 s later.
+  updateRegistry(sb.paths, (reg) => {
+    for (const [id, dueIn] of [['k-0001', 0], ['k-0002', 3_000], ['k-0003', 7_000]] as const) {
+      reg.sessions[id]!.reads = 1;
+      reg.sessions[id]!.last_read_at = new Date(START - STEP + dueIn).toISOString();
+    }
+  });
   const clock = virtualClock(START);
   const calls: Call[] = [];
-  // k-0002 writes once more after its first read, so its interval starts doubling one round after k-0001's.
-  const more = [page(2), `[${new Date(START + 10_000).toISOString()}] assistant: Still on typo 2.`].join('\n');
-  const read = roundReader(sb, clock, calls, (r) => (r.session === 'k-0002' && r.action === 'get_run_log' && clock.now() > START + 10_000 ? response(200, { session_id: r.params.session_id, next_cursor: null }, more) : undefined));
-  const out = await followAll(sb, ids, clock, read, () => ({ maxMs: 8 * MIN }));
-  for (const o of out) assert.equal(o.error, undefined);
-  // The doubling went apart: some round read one session alone.
-  assert.ok(calls.some((c) => c.sessions.length === 1));
-  // From the fourth minute both read every 60 s, on the minute, in one process.
-  const late = calls.filter((c) => c.at >= START + 4 * MIN);
-  assert.ok(late.length >= 3, `${late.length} late rounds`);
-  for (const c of late) assert.deepEqual([...c.sessions].sort(), ids, `a round at ${(c.at - START) / 1000} s`);
-  for (let i = 1; i < late.length; i++) assert.equal(late[i]!.at - late[i - 1]!.at, MIN);
-});
-
-test('round: a follower that joins just after a grid moment a round opened before it counts from when the round ended, with no second read at once', async () => {
-  const sb = sandbox();
-  const ids = openMany(sb, 2);
-  const G = START - 3_000;
-  // k-0002's last answer came one shortest interval before G, so it is due at G.
-  updateRegistry(sb.paths, (reg) => {
-    reg.sessions['k-0002']!.reads = 1;
-    reg.sessions['k-0002']!.last_read_at = new Date(G - STEP).toISOString();
-  });
-  // k-0001's follower opened a round a second before G, for the grid moment before it.
-  fs.writeFileSync(
-    sb.paths.rounds,
-    JSON.stringify({
-      rounds: [
-        {
-          id: 'r-early',
-          group: readerGroup(sb.env),
-          opened: G - 1_000,
-          starts: G + 1_000,
-          leader: 'early',
-          state: 'forming',
-          started: null,
-          timeout: null,
-          members: [{ token: 'early', pid: process.pid, session: 'k-0001', reads: [{ session: 'k-0001', action: 'get_run_log', params: { session_id: sid(1) } }], seen: null, deadline: G + 30_000 }],
-          results: null,
-          ended: null,
-          cost_usd: null,
-          error: null,
-        },
-      ],
-    }),
-  );
-  const clock = virtualClock(G + 100);
-  const calls: Call[] = [];
-  takeLease(sb.paths, ids[0]!, G, process.pid, 'shell');
-  await followAll(sb, [ids[1]!], clock, roundReader(sb, clock, calls), () => ({ maxMs: 14_000 }));
-  // It joined the round, and its next read is on the grid an interval after the round ended, past the end of this wait.
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0]!.sessions, ['k-0001', 'k-0002']);
+  await followAll(sb, ids, clock, roundReader(sb, clock, calls), () => ({ maxMs: 12_000 }));
+  // k-0001 opens a round that starts 2 s later; k-0002, due 3 s after START, joins it 1 s early.
+  assert.deepEqual(calls[0], { ...calls[0]!, at: START + 2_000 });
+  assert.deepEqual([...calls[0]!.sessions].sort(), ['k-0001', 'k-0002']);
+  // k-0003 is due more than 5 s after that round started, so it reads in its own, never before it is due.
+  assert.deepEqual(calls[1]!.sessions, ['k-0003']);
+  assert.ok(calls[1]!.at >= START + 7_000, `k-0003 read at ${(calls[1]!.at - START) / 1000} s`);
+  assert.equal(calls.length, 2);
 });
 
 test('round: a round the wait has to leave before its reader starts counts no read', async () => {
@@ -366,9 +325,6 @@ test('round: the follower whose wait ends last runs the reader, and a round whos
   assert.equal(short!.ran, true);
   assert.equal(long!.ran, true);
   assert.equal(long!.sessions, 2);
-  // Both count their next read from when the round's reader ended: it started at START + 2 s and took 4 s.
-  assert.equal(short!.ended, START + 6_000);
-  assert.equal(long!.ended, START + 6_000);
   assert.equal(JSON.parse(fs.readFileSync(sb.paths.rounds, 'utf8')).rounds.some((r: { id: string }) => r.id === 'r-gone'), false);
 });
 
