@@ -1,14 +1,14 @@
 // What one read changes in a session record: store the result marks, classify, and queue the events.
 
 import { recordHookDecisions } from './approvals.ts';
-import { readDoneMark, readQuestionMark } from './body.ts';
+import { clean, readDoneMark, readQuestionMark } from './body.ts';
 import { classify, CONFIRM_TWICE, type Verdict } from './classify.ts';
 import { ConfigError, DEFAULT_WATCH, loadConfig, type WatchConfig } from './config.ts';
 import { buildEvent, enqueue, transition, type KharosEvent } from './events.ts';
-import type { LogEvent, LogPage, MergeResult } from './logparse.ts';
+import { lastMessage, lastMessageText, type LogEvent, type LogPage, type MergeResult } from './logparse.ts';
 import type { Paths } from './paths.ts';
 import type { LogHeader } from './remote.ts';
-import { releaseClosing, startedAt, type Session } from './registry.ts';
+import { deadlineAt, LAST_MESSAGE_KEEP, probablyFinished, releaseClosing, startedAt, type Session } from './registry.ts';
 import { readAccountPolicy } from './org-confirmations.ts';
 import type { AskRules } from './permission-request.ts';
 
@@ -96,8 +96,16 @@ export function settle(ctx: TrackCtx, s: Session, verdict: Verdict, watch: Watch
     return [];
   }
   const confirm = CONFIRM_TWICE.has(verdict.state) || hookMayAnswer(s, verdict);
+  const before = s.state;
   const events = transition(s, verdict, ctx.now, watch.renotify_min, confirm);
   enqueue(ctx.paths, events);
+  // A session that probably finished is read until its deadline, as a closing one is; then it is closed.
+  // Never on the read that found it, so its end is reported first.
+  if (before === 'probably_finished' && probablyFinished(s) && s.step === 'open' && ctx.now >= deadlineAt(s)) {
+    s.step = 'closed';
+    s.closed_at = new Date(ctx.now).toISOString();
+    s.notice = null;
+  }
   return events;
 }
 
@@ -156,6 +164,9 @@ export function applyRead(ctx: TrackCtx, s: Session, merged: MergeResult, header
     s.result = { ...s.result, status: null, pr: null, branch: null, summary: null, sheet: null };
   }
   s.result.question = marks.question;
+  const said = lastMessage(events);
+  s.result.last_message = said ? clean(lastMessageText(said), LAST_MESSAGE_KEEP) : null;
+  s.result.last_message_cut = said?.truncated ?? false;
   for (const pr of openedPullRequests(merged.added, events)) {
     if (s.prs_opened?.includes(pr)) continue;
     s.prs_opened = [...(s.prs_opened ?? []), pr];

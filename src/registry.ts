@@ -27,6 +27,7 @@ export type State =
   | 'invisible'
   | 'failed'
   | 'finished'
+  | 'probably_finished'
   | 'waiting_permission'
   | 'waiting_answer'
   | 'usage_limit'
@@ -40,6 +41,20 @@ export type State =
 
 export const TERMINAL_STATES: ReadonlySet<State> = new Set(['finished', 'failed', 'ended_unmarked']);
 
+/**
+ * A session whose turn closed without the end mark and that nothing is left to wake: it holds no slot,
+ * like an end, but kharos goes on reading it, since a later event (a message, a pull request event) can
+ * wake it, until it resumes, really ends, or its deadline passes.
+ */
+export function probablyFinished(s: Pick<Session, 'state'>): boolean {
+  return s.state === 'probably_finished';
+}
+
+/** A session that ended or probably finished: its watch.max_open slot is free. */
+function ended(s: Session): boolean {
+  return TERMINAL_STATES.has(s.state) || probablyFinished(s);
+}
+
 export interface Notice {
   event: string;
   at: string;
@@ -52,7 +67,14 @@ export interface Result {
   summary: string | null;
   question: string | null;
   sheet?: string | null;
+  /** The session's last message as the log returns it (cleaned, cut at LAST_MESSAGE_KEEP), for an end without the end mark. */
+  last_message?: string | null;
+  /** The log the tool returns cut that message: the rest is only on the session page. */
+  last_message_cut?: boolean;
 }
+
+/** The most of a last message kept in the registry. */
+export const LAST_MESSAGE_KEEP = 4000;
 
 export interface Session {
   id: string;
@@ -218,9 +240,9 @@ export function deadlineAt(s: Pick<Session, 'opened_at' | 'fired_at' | 'created_
   return startedAt(s) + s.deadline_min * 60_000;
 }
 
-/** A session the person closed while it ran, that ended or reached its deadline: its slot is free now. */
+/** A session the person closed while it ran, that ended (or probably finished) or reached its deadline: its slot is free now. */
 export function closingDone(s: Session, now: number): boolean {
-  return typeof s.closing_at === 'string' && s.step === 'open' && (TERMINAL_STATES.has(s.state) || now >= deadlineAt(s));
+  return typeof s.closing_at === 'string' && s.step === 'open' && (ended(s) || now >= deadlineAt(s));
 }
 
 /** Closes a closing session whose slot is free now; true when it did. */
@@ -232,9 +254,12 @@ export function releaseClosing(s: Session, now: number): boolean {
   return true;
 }
 
-/** A launch that holds a slot against max_open: anything that may run and is not finished; a queued launch waits for one. */
+/**
+ * A launch that holds a slot against max_open: anything that may run and is not finished, or probably
+ * finished; a queued launch waits for one. One that probably finished takes its slot again when it resumes.
+ */
 function holdsSlot(s: Session, now: number): boolean {
-  return s.step !== 'closed' && s.step !== 'refused' && s.step !== 'queued' && !TERMINAL_STATES.has(s.state) && !closingDone(s, now);
+  return s.step !== 'closed' && s.step !== 'refused' && s.step !== 'queued' && !ended(s) && !closingDone(s, now);
 }
 
 export function activeCount(reg: Pick<Registry, 'sessions'>, now: number = Date.now()): number {

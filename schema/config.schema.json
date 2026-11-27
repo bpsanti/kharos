@@ -151,12 +151,14 @@
         "quiet_end_min": {
           "type": "integer",
           "minimum": 1,
-          "default": 40
+          "default": 40,
+          "description": "Minutes of quiet after a turn closed without an end mark, while a background task it started may still wake it, before kharos warns (session.quiet_unmarked)."
         },
         "unmarked_end_min": {
           "type": "integer",
           "minimum": 1,
-          "default": 5
+          "default": 3,
+          "description": "Minutes of quiet after a turn closed without an end mark, with no background task left that could wake it, before kharos reports the session as probably finished (session.probably_finished)."
         },
         "loop_failures": {
           "type": "integer",

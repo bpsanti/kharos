@@ -1,5 +1,5 @@
 ---
-description: Show the result of a cloud session that kharos follows - its end mark, pull request and branch - and how to bring the work here.
+description: Show the result of a cloud session that kharos follows - its end mark, pull request and branch, its final report put together from its numbered parts - and how to bring the work here.
 disable-model-invocation: true
 argument-hint: '<id>'
 allowed-tools: Bash(/bin/sh "${CLAUDE_PLUGIN_ROOT}/scripts/kharos" result:*)

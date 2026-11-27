@@ -39,6 +39,8 @@ export interface KharosEvent {
   question?: string;
   /** Only on session.finished: the summary the session wrote, cleaned and cut. */
   summary?: string;
+  /** Only on session.probably_finished: the session's last message as the log returns it, cleaned and cut. */
+  last_message?: string;
   /** Only on session.finished of a launch reported to a dedicated firstmate task. */
   sheet?: string;
   /** Only on session.waiting_permission: the tool the open prompt is for, and the fixed category of why it asks. */
@@ -47,11 +49,20 @@ export interface KharosEvent {
 
 const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
 
+/**
+ * The end kharos infers when the session wrote no end mark: an end for whoever is told (class terminal),
+ * but a notice that stays open, raised once, since the session can still resume.
+ */
+const INFERRED_END = 'probably_finished';
+
+/** The longest last message an event carries: about what the log keeps of one message. */
+export const LAST_MESSAGE_MAX = 2000;
+
 export function classOf(name: EventName): EventClass {
   const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened';
   if (kind === 'opened' || kind === 'back' || kind === 'queued' || kind === 'pr_opened') return 'progress';
   if (kind === 'unfollowed' || kind === 'not_fired') return 'needs_you';
-  return TERMINAL.has(kind) ? 'terminal' : 'needs_you';
+  return TERMINAL.has(kind) || kind === INFERRED_END ? 'terminal' : 'needs_you';
 }
 
 export function isTerminalNotice(n: NoticeKind | null): boolean {
@@ -82,6 +93,7 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
   if (name === 'session.waiting_answer' && s.result.question) ev.question = clean(s.result.question, 300);
   if (name === 'session.finished' && s.result.summary) ev.summary = clean(s.result.summary, 200);
   if (name === 'session.finished' && s.result.sheet) ev.sheet = clean(s.result.sheet, SHEET_MAX);
+  if (name === 'session.probably_finished' && s.result.last_message) ev.last_message = clean(s.result.last_message, LAST_MESSAGE_MAX);
   if (name === 'session.waiting_permission' && s.permission) ev.permission = { tool: s.permission.tool, category: s.permission.category ?? 'unknown' };
   return ev;
 }
@@ -90,7 +102,8 @@ export function buildEvent(s: Session, name: EventName, previousState: string, r
  * Applies a verdict to a session and returns the events it causes. A verdict that needs a second read
  * (`confirm`) only counts when the previous read saw the same state, and for a permission prompt the
  * same prompt. A permission prompt is reported once, again after renotify_min while it stays open, and
- * as soon as it counts when it replaces another.
+ * as soon as it counts when it replaces another. A probable end is reported once, and its notice stays
+ * open, so the session resuming says `session.back`.
  */
 export function transition(s: Session, verdict: Verdict, now: number, renotifyMin: number, confirm: boolean): KharosEvent[] {
   const prompt = verdict.permission ?? null;
@@ -114,7 +127,7 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
   if (verdict.notice) {
     const name = `session.${verdict.notice}` as EventName;
     const repeat = (open?.event === name && !newPrompt) || (isTerminalNotice(verdict.notice) && s.last_notice?.event === name);
-    const due = repeat && open !== null && !isTerminalNotice(verdict.notice) && now - Date.parse(open.at) >= renotifyMin * 60_000;
+    const due = repeat && open !== null && !isTerminalNotice(verdict.notice) && verdict.notice !== INFERRED_END && now - Date.parse(open.at) >= renotifyMin * 60_000;
     if (!repeat || due) {
       out.push(buildEvent(s, name, previous, verdict.reason, now));
       s.notice = isTerminalNotice(verdict.notice) ? null : { event: name, at: iso };
@@ -123,7 +136,8 @@ export function transition(s: Session, verdict: Verdict, now: number, renotifyMi
     }
     if (isTerminalNotice(verdict.notice)) s.notice = null;
   } else if (open) {
-    out.push(buildEvent(s, 'session.back', previous, 'back to normal after a notice', now));
+    const why = open.event === `session.${INFERRED_END}` ? 'the session resumed after it seemed finished' : 'back to normal after a notice';
+    out.push(buildEvent(s, 'session.back', previous, why, now));
     s.notice = null;
     s.last_notice = { event: 'session.back', at: iso };
   }
