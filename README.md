@@ -249,6 +249,7 @@ See [docs/outputs.md](docs/outputs.md).
 | `~/.local/state/kharos/preflight.jsonl` | What automatic preflight applied at each launch: session, side branch, commit, rules |
 | `~/.local/state/kharos/org-confirmations.json` | Your confirmation of the unblock preset, with the fingerprint of the managed settings it holds for |
 | `~/.local/state/kharos/release.json` | The latest kharos release, as the last daily read found it, and when its notice was last shown |
+| `~/.local/state/kharos/npm.json` | The version of a `kharos` installed globally from npm, as npm last answered, so the doctor asks npm at most once a day while it is current |
 
 Each Claude account has its own files: with a `CLAUDE_CONFIG_DIR` other than `~/.claude`, they are under `accounts/<folder>-<hash>/` of both folders, and the first `/kharos:setup` there moves that account's profiles and sessions out of the files every account shared before.
 `KHAROS_HOME` puts everything under one folder of your choice instead.
