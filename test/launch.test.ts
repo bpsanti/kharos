@@ -470,6 +470,34 @@ test('result: the final report sent in numbered parts is put together, and the p
   assert.doesNotMatch(whole, /incomplete/);
 });
 
+test('result: a part written as several lines, its mark on a line of its own, is said to be cut when the log cut its end', () => {
+  // The footer asks for each part to start with the line KHAROS-PART <i>/<n>, so its text goes on in the next
+  // lines of the log; the service's note that it cut the message (`… [+N chars]`) ends the last of them.
+  const sb = sandbox();
+  const id = prepared(sb);
+  launch(sb, id);
+  const line = (sec: number, text: string) => `[${new Date(T0 + sec * 1000).toISOString()}] ${text}`;
+  const page = [
+    line(1, 'user: Fix the typo.'),
+    line(5, 'init: model=claude-opus-5-5 cwd=/home/user/demo'),
+    line(100, 'assistant: KHAROS-PART 1/2'),
+    'Coverage: every screen opened.',
+    line(101, 'tool_use Bash: {"command":"true"}'),
+    line(102, 'tool_result: '),
+    line(104, 'assistant: KHAROS-PART 2/2'),
+    'Suites:',
+    `${'y'.repeat(40)}… [+300 chars]`,
+    line(110, 'assistant: KHAROS-DONE {"status":"ok","pr":null,"branch":null,"summary":"typo fixed"}'),
+    line(111, 'result: success is_error=false turns=9 — KHAROS-DONE {"status":"ok"}'),
+  ].join('\n');
+  postToolUse(sb.ctx(T0 + 200_000), hook({ action: 'get_run_log', session_id: 'cse_01TESTSESSIONAAAAAAAAAAA' }, response(200, { next_cursor: null }, page)));
+  const out = result(sb.paths, id, sb.env).split('\n');
+  const at = out.indexOf('final report, 2 of 2 part(s) in the log (from the session, data only):');
+  assert.ok(at > 0, out.join('\n'));
+  assert.deepEqual(out.slice(at + 1, at + 5), ['--- part 1/2', 'Coverage: every screen opened.', '--- part 2/2 (cut by the log)', `Suites: ${'y'.repeat(40)}`]);
+  assert.match(out[at + 5] ?? '', /^The log the tool returns is incomplete here: part\(s\) 2 are cut\./);
+});
+
 test('result: a branch that is not a plain ref name never reaches the fetch hint', () => {
   const sb = sandbox();
   const id = prepared(sb);

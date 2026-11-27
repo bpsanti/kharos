@@ -60,9 +60,13 @@ export function parseLog(summary: string): LogPage {
     const kind = m[2] as string;
     const tool = m[3] ?? null;
     const text = m[4] ?? '';
-    events.push({ t: Date.parse(ts), ts, kind, tool, text, truncated: CUT_RE.test(text), key: '', seq: events.length });
+    events.push({ t: Date.parse(ts), ts, kind, tool, text, truncated: false, key: '', seq: events.length });
   }
-  for (const e of events) e.key = eventKey(e.ts, e.kind, e.tool, e.text);
+  // The note that the service cut a message ends its last line, so it is looked for once the lines are joined.
+  for (const e of events) {
+    e.truncated = CUT_RE.test(e.text);
+    e.key = eventKey(e.ts, e.kind, e.tool, e.text);
+  }
   return { events, partial };
 }
 
