@@ -112,8 +112,7 @@ interface Member {
 interface Round {
   id: string;
   group: string;
-  /** The moment on the grid the round is for: its followers count their next read from it. Epoch milliseconds, as every time here. */
-  tick: number;
+  /** Epoch milliseconds, as every time here. */
   opened: number;
   starts: number;
   /** The token of the member that runs the reader: the one whose wait ends last, so the reader is cut by no other deadline. */
@@ -187,7 +186,7 @@ export interface RoundCtx {
 
 export interface RoundPart {
   run: ReaderRun;
-  /** The moment the round is for, which the follower counts its next read from. */
+  /** The moment on the grid at or before this follower asked for its read, which it counts its next read from. */
   tick: number;
   /** The sessions the round read, this one included. */
   sessions: number;
@@ -218,7 +217,6 @@ export async function readInRound(paths: Paths, req: RoundRequest, ctx: RoundCtx
     const r: Round = {
       id: crypto.randomUUID(),
       group,
-      tick: onGrid(t, req.stepMs),
       opened: t,
       starts: t + gather,
       leader: member.token,
@@ -234,12 +232,11 @@ export async function readInRound(paths: Paths, req: RoundRequest, ctx: RoundCtx
     f.rounds.push(r);
     return r.id;
   });
-  return takePart(paths, id, member, ctx);
+  return takePart(paths, id, member, onGrid(t, req.stepMs), ctx);
 }
 
-async function takePart(paths: Paths, id: string, me: Member, ctx: RoundCtx): Promise<RoundPart> {
+async function takePart(paths: Paths, id: string, me: Member, tick: number, ctx: RoundCtx): Promise<RoundPart> {
   let lastBeat = ctx.now();
-  let tick = lastBeat;
   let sessions = 1;
   let ran = false;
   const part = (run: ReaderRun): RoundPart => ({ run, tick, sessions, ran });
@@ -247,7 +244,6 @@ async function takePart(paths: Paths, id: string, me: Member, ctx: RoundCtx): Pr
     const t = ctx.now();
     const r = loadRounds(paths).rounds.find((x) => x.id === id);
     if (!r) return part(failed('the read round was lost before it ended'));
-    tick = r.tick;
     sessions = r.members.length;
     ran = r.state !== 'forming';
     if (r.state === 'done') return part(r.results?.[me.session] ?? failed(`the read round gave no result for ${me.session}`));

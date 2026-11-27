@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { takeLease } from '../src/lease.ts';
-import { loadRegistry } from '../src/registry.ts';
+import { loadRegistry, updateRegistry } from '../src/registry.ts';
 import { headlessRead, onGrid, readerAsk, readerGroup, readInRound, ROUND_MAX_SESSIONS, roundTimeout, type Read, type Reader } from '../src/round.ts';
 import { wait, type WaitOptions, type WaitOutcome } from '../src/wait.ts';
 import { HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
@@ -234,6 +234,47 @@ test('round: idle followers whose intervals doubled at different moments read in
   for (let i = 1; i < late.length; i++) assert.equal(late[i]!.at - late[i - 1]!.at, MIN);
 });
 
+test('round: a follower that joins just after a grid moment a round opened before it counts from its own moment, with no second read at once', async () => {
+  const sb = sandbox();
+  const ids = openMany(sb, 2);
+  const G = START - 3_000;
+  // k-0002 was last read one shortest interval before G, so it is due at G.
+  updateRegistry(sb.paths, (reg) => {
+    reg.sessions['k-0002']!.reads = 1;
+    reg.sessions['k-0002']!.last_read_at = new Date(G - STEP + 2_000).toISOString();
+  });
+  // k-0001's follower opened a round a second before G, for the grid moment before it.
+  fs.writeFileSync(
+    sb.paths.rounds,
+    JSON.stringify({
+      rounds: [
+        {
+          id: 'r-early',
+          group: readerGroup(sb.env),
+          opened: G - 1_000,
+          starts: G + 1_000,
+          leader: 'early',
+          state: 'forming',
+          started: null,
+          timeout: null,
+          members: [{ token: 'early', pid: process.pid, session: 'k-0001', reads: [{ session: 'k-0001', action: 'get_run_log', params: { session_id: sid(1) } }], seen: null, deadline: G + 30_000 }],
+          results: null,
+          ended: null,
+          cost_usd: null,
+          error: null,
+        },
+      ],
+    }),
+  );
+  const clock = virtualClock(G + 100);
+  const calls: Call[] = [];
+  takeLease(sb.paths, ids[0]!, G, process.pid, 'shell');
+  await followAll(sb, [ids[1]!], clock, roundReader(sb, clock, calls), () => ({ maxMs: 14_000 }));
+  // It joined the round, and its next read is an interval after G, past the end of this wait.
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.sessions, ['k-0001', 'k-0002']);
+});
+
 test('round: a round the wait has to leave before its reader starts counts no read', async () => {
   const sb = sandbox();
   const ids = openMany(sb, 2);
@@ -294,7 +335,6 @@ test('round: the follower whose wait ends last runs the reader, and a round whos
         {
           id: 'r-gone',
           group: readerGroup(sb.env),
-          tick: START,
           opened: START,
           starts: START + 2_000,
           leader: 'gone',
@@ -341,7 +381,6 @@ test('round: a round its leader does not start is started by another of its foll
         {
           id: 'r-stuck',
           group: readerGroup(sb.env),
-          tick: START,
           opened: START,
           starts: START + 2_000,
           leader: 'stuck',
