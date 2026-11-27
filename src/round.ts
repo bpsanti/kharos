@@ -79,11 +79,12 @@ export function roundTimeout(reads: number): number {
 }
 
 /**
- * The moment nearest to `t` on the grid of `stepMs`, counted from the epoch. Followers schedule their reads
- * on this shared grid, so the ones whose sessions are due about the same time are due at the same moment.
+ * The moment at or before `t` on the grid of `stepMs`, counted from the epoch: the moment a read that began
+ * or landed at `t` counts from. Followers schedule their reads on this shared grid, so the ones whose sessions
+ * are due about the same time are due at the same moment, and a read is never counted from after it began.
  */
 export function onGrid(t: number, stepMs: number): number {
-  return stepMs > 0 ? Math.round(t / stepMs) * stepMs : t;
+  return stepMs > 0 ? Math.floor(t / stepMs) * stepMs : t;
 }
 
 /**

@@ -57,11 +57,6 @@ export function dueAfter(last: number, interval: number, minInterval: number): n
   return on - last >= minInterval || minInterval <= 0 ? on : Math.ceil((last + minInterval) / minInterval) * minInterval;
 }
 
-/** The moment at or before `t` on the grid of `stepMs`: a read's answer lands after the moment its round was for. */
-function floorGrid(t: number, stepMs: number): number {
-  return stepMs > 0 ? Math.floor(t / stepMs) * stepMs : t;
-}
-
 /** How often a wait looks at the registry between its own reads, to see what another process recorded. */
 const SLICE_MS = 5_000;
 /** Reads in a row that did not reach the registry before the wait gives up and says why. */
@@ -290,7 +285,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
       // The lease says this wait follows the session from its first look, not only from its first read.
       const holds = takeLease(paths, id, t, process.pid, opts.follower ?? 'agent');
       leased ||= holds;
-      const lastRead = anchor && anchor.landed === s.last_read_at ? anchor.tick : s.last_read_at ? floorGrid(Date.parse(s.last_read_at), opts.minIntervalMs) : 0;
+      const lastRead = anchor && anchor.landed === s.last_read_at ? anchor.tick : s.last_read_at ? onGrid(Date.parse(s.last_read_at), opts.minIntervalMs) : 0;
       const fresh = !s.last_read_at || (s.session_id !== null && s.reads === 0) || s.pending_cursor !== null;
       const dueAt = fresh ? nextOwnRead : Math.max(dueAfter(lastRead, interval, opts.minIntervalMs), nextOwnRead);
       if (holds && t >= dueAt) {

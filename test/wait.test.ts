@@ -659,6 +659,21 @@ test('wait: a session seen archived in the round its quiet turn becomes due for 
   assert.deepEqual(events.map((e) => e.event), ['session.ended_unmarked']);
 });
 
+test('wait: a first read off the grid is followed by the next one no later than the shortest interval', async () => {
+  const sb = sandbox();
+  openOne(sb);
+  const starts: number[] = [];
+  const inner = reader(sb, () => fixture('log-foreground-command.txt'));
+  const read: Reader = async (p, rs, env, now, ms) => {
+    starts.push(now - 4_000);
+    return inner(p, rs, env, now, ms);
+  };
+  // The session was never read, so the wait reads at once, 8 s after a 15 s mark.
+  await clocked(sb, at('2026-11-25T19:01:08Z'), read, { since: 'ok', maxMs: 20_000 }).run();
+  assert.equal(starts[0], at('2026-11-25T19:01:08Z'));
+  assert.equal(starts[1], at('2026-11-25T19:01:15Z'));
+});
+
 test('wait: a new wait reads an interval after the round of the last read, not after its answer came', async () => {
   const sb = sandbox();
   openOne(sb);
