@@ -172,7 +172,7 @@ function words(v: string): string {
 /** The alerts a report names besides the change it is about: the ones raised while no follower handed them on. */
 function earlier(s: Session, o: Omit<WaitOutcome, 'report'>): string[] {
   const current = s.notice;
-  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && a.event === `session.${s.state}`));
+  const rest = (o.alerts ?? []).filter((a) => !(current && a.event === current.event && a.at === current.at) && !(o.key.startsWith('end:') && (a.event === `session.${s.state}` || a.event === 'session.deadline_closed')));
   if (rest.length === 0) return [];
   return [`Raised earlier, while no follower handed it on (${rest.length}): ${rest.map((a) => `${a.at.slice(11, 16)} UTC ${words(a.event)}: ${a.reason}`).join('; ')}`];
 }
@@ -190,6 +190,7 @@ function buildReport(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, f
 function buildMain(s: Session, o: Omit<WaitOutcome, 'report'>, root: string, follower: Follower): string {
   if (o.error) return [`kharos wait could not follow ${s.id}: ${o.error}`, `Show this to the person; once it is fixed, the next turn end of a Claude Code session with kharos starts a follower again, or kharos follow ${s.id} --detach does now.`].join('\n');
   if (!o.changed) return `${s.id}: no change in ${o.waited_s} s (key ${o.key}).`;
+  if (o.key === 'end:closed' && s.last_notice?.event === 'session.deadline_closed') return `${s.id} was ${clean(s.unacked?.findLast((a) => a.event === 'session.deadline_closed')?.reason ?? 'closed at its deadline', 400)}\nkharos no longer follows it. Session: ${o.url ?? 'no link'}`;
   if (o.key === 'end:closed') return `${s.id} is closed: kharos no longer follows it.`;
   if (o.key === 'end:refused') return `${s.id} was refused (${s.error ?? 'no detail'}); nothing runs.`;
   if (o.key === 'launch:queued') return `${s.id} is queued for a free watch.max_open slot, and fires by itself when one frees; /kharos:close ${s.id} cancels it.`;

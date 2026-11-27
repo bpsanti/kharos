@@ -45,7 +45,7 @@ export interface KharosEvent {
   permission?: { tool: string; category: PermissionCategory };
 }
 
-const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked']);
+const TERMINAL: ReadonlySet<NoticeKind> = new Set(['finished', 'failed', 'ended_unmarked', 'deadline_closed']);
 
 export function classOf(name: EventName): EventClass {
   const kind = name.slice('session.'.length) as NoticeKind | 'opened' | 'back' | 'unfollowed' | 'queued' | 'not_fired' | 'pr_opened' | 'end_asked';

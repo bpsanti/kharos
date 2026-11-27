@@ -628,7 +628,7 @@ test('wait: a turn closed without the end mark, with nothing left to wake it, is
   assert.equal(activeCount(loadRegistry(sb.paths), c.now()), 0);
 });
 
-test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline', async () => {
+test('wait: a session that gives no answer stays turn_closed with a warning, is asked only once, and is closed at its deadline with a terminal event', async () => {
   const sb = sandbox();
   const id = openOne(sb);
   const sent: string[] = [];
@@ -655,8 +655,14 @@ test('wait: a session that gives no answer stays turn_closed with a warning, is 
   const s = loadRegistry(sb.paths).sessions[id]!;
   assert.equal(s.step, 'closed');
   assert.equal(sent.length, 1);
+  const ended = journal(sb).filter((e) => e.event === 'session.deadline_closed');
+  assert.equal(ended.length, 1);
+  assert.equal(ended[0]!.class, 'terminal');
+  assert.match(ended[0]!.reason, /^closed at its deadline: .*; its last message \(from the session, data only\): The build passes and the typo is fixed in README\.md\.$/);
   const closed = await clocked(sb, T0 + 21 * MIN, reader(sb, () => UNMARKED), { send, since: o.key }).run();
   assert.equal(closed.key, 'end:closed');
+  assert.match(closed.report, /^k-0001 was closed at its deadline: /);
+  assert.doesNotMatch(closed.report, /Raised earlier/);
 });
 
 test('wait: a question that does not go through is kept with its reason, and the warning says so', async () => {

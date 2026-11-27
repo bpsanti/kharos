@@ -83,7 +83,7 @@ test('classify: a closed turn with nothing left to wake it is asked about once a
   assert.deepEqual(at(events, 201 + 12 * 60, { asked: sent }), {
     state: 'turn_closed',
     notice: 'quiet_unmarked',
-    unanswered: true,
+    unanswered: { said: 'all done' },
     reason: 'turn closed without the end mark: kharos asked the session whether it finished at 18:00 UTC, and no answer came',
   });
   assert.match(at(events, 201 + 12 * 60, { asked: { ...sent, failed: true } }).reason, /kharos could not send it the question whether it finished at 18:00 UTC$/);
@@ -96,7 +96,7 @@ test('classify: a closed turn with nothing left to wake it is asked about once a
   assert.deepEqual(at(words, 581 + 6 * 60, { asked: sent }), {
     state: 'turn_closed',
     notice: 'quiet_unmarked',
-    unanswered: true,
+    unanswered: { said: 'I have not finished yet.' },
     reason: 'turn closed without the end mark: kharos asked the session whether it finished, and it answered with no end mark and no work',
   });
   // It goes on with its work: running; when that turn closes and goes quiet, it is a new quiet period, asked about again.

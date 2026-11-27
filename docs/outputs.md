@@ -63,7 +63,7 @@ The adapter writes one line per event to one status file, given at launch and ne
 | end_asked | `note`: kharos asked the session whether it finished | same |
 | back | `resolved [key=...]` | same |
 | finished | `resolved [key=...]` if a notice was open, otherwise `note`, with the pull request | `done` with the summary, the pull request and the session sheet |
-| failed, ended_unmarked | `blocked [key=...]` | `failed` |
+| failed, ended_unmarked, deadline_closed | `blocked [key=...]` | `failed` |
 
 - `shared` is for a task that has a local worker owning its status file: the adapter never writes `done` or `failed`, because a cloud session ending is not the task ending.
 - `dedicated` is for a status file that exists only for the cloud session.

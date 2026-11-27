@@ -54,7 +54,7 @@ The question whether it finished:
 - is sent once per quiet period: about a turn the question itself started only when the session worked in it;
 - is never sent past the deadline, which would wake a session whose time is up, nor to a session the person closed, which is read only to free its slot;
 - ends the session only through its answer: `KHAROS-DONE` is `finished`, work is `running`, and an answer with neither, or none within `unmarked_end_min`, leaves the turn closed with `quiet_unmarked`, holding its slot;
-- leaves such a session to its deadline, when it is closed, on a read after the one that raised the warning, so the warning goes out first.
+- leaves such a session to its deadline, when it is closed with `session.deadline_closed` (`terminal`), which carries its last message, on a read after the one that raised the warning, so the warning goes out first.
 
 ## Why these numbers
 
@@ -94,7 +94,7 @@ An event is a one-line JSON object, `kharos.event.v1`:
  "permission":{"tool":"Bash","category":"org_ask_rule"}}
 ```
 
-- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`); `session.end_asked` (`progress`) says kharos asked a session whose turn closed without the end mark whether it finished.
+- `class` is `progress` (`session.opened`, `session.back`, `session.queued`, `session.pr_opened`), `needs_you` (every warning), or `terminal` (`session.finished`, `session.failed`, `session.ended_unmarked`, `session.deadline_closed`); `session.end_asked` (`progress`) says kharos asked a session whose turn closed without the end mark whether it finished.
 - `session.queued` (`progress`) says a launch made with `--queue` waits for a slot; `session.not_fired` (`needs_you`) says kharos did not fire a queued launch by itself (another account is logged in, a refusal, or fires that did not go through) and the person decides.
 - `session.pr_opened` (`progress`) says the session opened a pull request, with its URL in `pr`, as soon as a read shows the result of the call that created it (`gh pr create`, or a GitHub tool that creates one); once per pull request.
 - `session.unfollowed` (`needs_you`) comes from a follower process that stops because reads keep failing: nobody reads the session until a follower starts again.

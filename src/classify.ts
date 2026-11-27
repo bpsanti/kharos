@@ -26,6 +26,7 @@ export type NoticeKind =
   | 'silent'
   | 'silent_severe'
   | 'quiet_unmarked'
+  | 'deadline_closed'
   | 'turn_error';
 
 export interface Verdict {
@@ -39,8 +40,11 @@ export interface Verdict {
    * the key of its result, so kharos asks the session once whether it finished.
    */
   ask?: string;
-  /** kharos asked about the closed turn (or may not, past the deadline) and no end mark came: closed at the deadline. */
-  unanswered?: boolean;
+  /**
+   * kharos asked about the closed turn (or may not, past the deadline) and no end mark came: closed at
+   * the deadline, with the last message the session wrote.
+   */
+  unanswered?: { said: string | null };
 }
 
 export interface ClassifyInput {
@@ -202,7 +206,7 @@ function endCheck(input: ClassifyInput, last: LogEvent, idleMin: number): Verdic
   const { events, now, watch } = input;
   if (last.kind !== 'result' || idleMin <= watch.unmarked_end_min) return null;
   if (openBackgroundTasks(events, now) > 0) return null;
-  const closed = { state: 'turn_closed', notice: 'quiet_unmarked', unanswered: true } as const;
+  const closed = { state: 'turn_closed', notice: 'quiet_unmarked', unanswered: { said: events.findLast((e) => e.kind === 'assistant')?.text ?? null } } as const;
   const person = events.findLastIndex((e) => e.kind === 'user' && !isSystemUser(e));
   if (person >= 0 && isEndProbe(events[person] as LogEvent) && !events.slice(person + 1).some((e) => e.kind === 'tool_use')) {
     return { ...closed, reason: 'turn closed without the end mark: kharos asked the session whether it finished, and it answered with no end mark and no work' };

@@ -74,6 +74,7 @@ export function statusLine(ev: KharosEvent, mode: FirstmateMode, now: number, sh
     }
     case 'failed':
     case 'ended_unmarked':
+    case 'deadline_closed':
       if (mode === 'dedicated') return `failed ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
       return `blocked ${key} ${at}: ${text(`kharos ${ev.session} ${ev.reason}`)}${where}`;
     default:
