@@ -129,6 +129,8 @@ A launch refused because every `watch.max_open` slot is taken can wait instead: 
 When a slot frees (a session ends, is closed or is refused, or a closing one ends or reaches its deadline), the hook or command that sees it starts a dispatcher, which fires the oldest queued launch it can fire now, then the next while slots are free:
 
 - The fire is a paid action with nobody present: a minimal headless Claude Code in auto mode makes the same RemoteTrigger calls `/kharos:run --resume` names, so Claude Code's classifier approves the `run`, and the hook allows one `run` per launch, as always.
+  Each headless Claude Code makes one call, the one its user message names: the `create`, then the `run` in a process of its own.
+- A fire that does not go through says why in `kharos list`, in `logs/dispatch.log` of the state folder (one timed line per fire) and in the `session.not_fired` event: the error, the classifier's refusal, a call Claude Code denied, or what the model answered instead of the call.
 - Only the Claude account that queued a launch fires it; under another login it stays queued, and an event says so.
 - The session it opens gets a follower process, and its events go to the outputs.
 - A fire that does not go through is tried again 10 minutes later, 3 times in all; then a `session.not_fired` event asks the person, and `/kharos:run --resume <id>` fires it with the person present.

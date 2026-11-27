@@ -276,7 +276,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env,
         return 0;
       case 'dispatch':
         // Started detached by kharos itself when a queued launch fits in a free slot.
-        out((await dispatchQueued(paths, { env })).join('\n') || 'dispatch: nothing to fire');
+        // Each line as it happens, with its time: the dispatcher's log is read after the fact.
+        if ((await dispatchQueued(paths, { env, say: (line) => out(`${new Date().toISOString()} ${line}`) })).length === 0) out('dispatch: nothing to fire');
         return 0;
       case 'environments':
         addIntent(paths, { kind: 'environments', claude_session: flag(args, 'session') ?? '', account: readAuthStatus(env)?.account ?? null, repo: flag(args, 'repo') ?? null }, now);
