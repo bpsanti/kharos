@@ -6,7 +6,7 @@ import { postToolUse, preToolUse, type HookInput } from '../src/hook.ts';
 import { prepare } from '../src/launch.ts';
 import { takeLease } from '../src/lease.ts';
 import { loadRegistry } from '../src/registry.ts';
-import { headlessRead, onGrid, readerAsk, readerGroup, readInRound, roundTimeout, type Read, type Reader } from '../src/round.ts';
+import { headlessRead, onGrid, readerAsk, readerGroup, readInRound, ROUND_MAX_SESSIONS, roundTimeout, type Read, type Reader } from '../src/round.ts';
 import { wait, type WaitOptions, type WaitOutcome } from '../src/wait.ts';
 import { HEADS_OK, response, sandbox, T0, writeConfig, type Sandbox } from './helpers.ts';
 
@@ -204,15 +204,29 @@ test('round: a session the reader made no call for is a failed read for that ses
   assert.equal(reg['k-0001']!.read_failures, 0);
 });
 
-test('round: more followers than reader_batch split into a few reader processes in the same round', async () => {
+test('round: more followers than a round holds split into two reader processes in the same round', async () => {
   const sb = sandbox();
-  const ids = openMany(sb, 5, { reader_batch: 2 });
+  const ids = openMany(sb, ROUND_MAX_SESSIONS + 1, { max_open: ROUND_MAX_SESSIONS + 5 });
   const clock = virtualClock(START);
   const calls: Call[] = [];
   await followAll(sb, ids, clock, roundReader(sb, clock, calls), () => ({ maxMs: 20_000 }));
   const first = calls.filter((c) => c.at === calls[0]!.at);
-  assert.deepEqual(first.map((c) => c.sessions.length).sort(), [1, 2, 2]);
+  assert.deepEqual(first.map((c) => c.sessions.length).sort((a, b) => a - b), [1, ROUND_MAX_SESSIONS]);
   assert.deepEqual(first.flatMap((c) => c.sessions).sort(), ids);
+});
+
+test('round: a round the wait has to leave before its reader starts counts no read', async () => {
+  const sb = sandbox();
+  const ids = openMany(sb, 2);
+  const clock = virtualClock(START);
+  const calls: Call[] = [];
+  // Two followers: the round waits two seconds for the other, longer than either wait may last.
+  const out = await followAll(sb, ids, clock, roundReader(sb, clock, calls), () => ({ maxMs: 1_000 }));
+  assert.equal(calls.length, 0);
+  for (const o of out) {
+    assert.equal(o.reads, 0);
+    assert.equal(o.error, undefined);
+  }
 });
 
 test('round: followers of two accounts in the same moment get a reader each, with its own CLAUDE_CONFIG_DIR', async () => {
@@ -288,6 +302,8 @@ test('round: the follower whose wait ends last runs the reader, and a round whos
   assert.ok(timeouts[0]! > START + 40_000 - (START + 2_000));
   assert.equal(short!.run.ok, true);
   assert.equal(long!.run.ok, true);
+  assert.equal(short!.ran, true);
+  assert.equal(long!.ran, true);
   assert.equal(long!.sessions, 2);
   assert.equal(short!.tick, onGrid(START, STEP));
   assert.equal(JSON.parse(fs.readFileSync(sb.paths.rounds, 'utf8')).rounds.some((r: { id: string }) => r.id === 'r-gone'), false);
@@ -331,16 +347,21 @@ test('round: a round its leader does not start is started by another of its foll
   assert.ok(calls[0]!.at >= START + 7_000 && calls[0]!.at < START + 8_000, `started at ${(calls[0]!.at - START) / 1000} s`);
 });
 
-test('round: the reader gets one call to make, or the numbered list of the round', async () => {
+test('round: the reader gets one call to make, or the numbered list of the round with each archive check after the logs', async () => {
   const one: Read[] = [{ session: 'k-0001', action: 'get_run_log', params: { session_id: sid(1) } }];
   assert.equal(readerAsk(one), `Call RemoteTrigger with action "get_run_log" and session_id "${sid(1)}".`);
-  const many: Read[] = [...one, { session: 'k-0002', action: 'get_run_log', params: { session_id: sid(2), cursor: 'c1' } }, { session: 'k-0002', action: 'list_runs', params: { trigger_id: trig(2) } }];
+  const logs: Read[] = [...one, { session: 'k-0003', action: 'list_runs', params: { trigger_id: trig(3) } }];
+  assert.equal(readerAsk(logs), ['Make these 2 RemoteTrigger calls:', `1. action "get_run_log" and session_id "${sid(1)}"`, `2. action "list_runs" and trigger_id "${trig(3)}"`].join('\n'));
+  // k-0002's sixth read: its archive check must not be answered before its log, or an end mark in that log
+  // would be settled as an archive without one.
+  const many: Read[] = [{ session: 'k-0002', action: 'get_run_log', params: { session_id: sid(2), cursor: 'c1' } }, { session: 'k-0002', action: 'list_runs', params: { trigger_id: trig(2) } }, ...one];
   assert.equal(
     readerAsk(many),
     [
-      'Make these 3 RemoteTrigger calls:',
-      `1. action "get_run_log" and session_id "${sid(1)}"`,
-      `2. action "get_run_log" and session_id "${sid(2)}" and cursor "c1"`,
+      'Make these 2 RemoteTrigger calls:',
+      `1. action "get_run_log" and session_id "${sid(2)}" and cursor "c1"`,
+      `2. action "get_run_log" and session_id "${sid(1)}"`,
+      'Once all of them have answered, make these:',
       `3. action "list_runs" and trigger_id "${trig(2)}"`,
     ].join('\n'),
   );

@@ -77,11 +77,6 @@ export interface WatchConfig {
   loop_failures: number;
   renotify_min: number;
   max_open: number;
-  /**
-   * The most sessions one reader process reads in a round: the followers due at the same moment share a
-   * reader, and more of them than this split into a few.
-   */
-  reader_batch: number;
 }
 
 export type EventFilter = string[];
@@ -135,7 +130,6 @@ export const DEFAULT_WATCH: WatchConfig = {
   loop_failures: 4,
   renotify_min: 60,
   max_open: 10,
-  reader_batch: 10,
 };
 
 /**

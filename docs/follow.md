@@ -53,8 +53,9 @@ It is counted from when a read began, on a 15 second grid that every follower sh
 Each reader is a whole Claude Code process, so the followers due at the same moment share one, in a read round:
 
 1. The first follower that is due opens a round (`rounds.json` in the state folder) and waits two seconds for the others; a follower alone reads at once.
-2. Each follower due then joins it with its reads, up to `watch.reader_batch` sessions (10 by default); more followers open another round, so many sessions split into a few readers.
+2. Each follower due then joins it with its reads, up to 20 sessions; more followers open another round.
 3. The follower whose wait ends last runs one reader for the whole round, asked for the numbered list of its calls, so no other follower's deadline cuts it.
+   A session's archive check (`list_runs`) comes in a second list, made only once the log reads have answered, so its log is stored first, as when the reads were made one by one.
 4. The hook stores and classifies each answer exactly as for a read alone, and each follower knows from the registry whether its own session was read.
 
 A round is for one Claude account: only followers that would start the same reader (the same `CLAUDE_CONFIG_DIR` and the same `claude` binary) share one, and the reader runs with that account's folder.
@@ -131,4 +132,4 @@ kharos never sets that variable itself.
 - A follower agent lives as long as the Claude Code session that started it.
   A headless Claude Code (`claude -p`, the Agent SDK) stops its background agents 10 minutes after its last turn (`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`), so there kharos starts no agent and follows each session with a process of its own (see [Headless launches](#headless-launches)).
 - In the `default` permission mode, the first `kharos wait` asks for approval in your session, because a plugin agent cannot carry its own permission mode; approve it for the session, or add an allow rule for `Bash(/bin/sh <plugin folder>/scripts/kharos wait:*)` (the folder changes when the plugin is updated).
-- Each open session has its own follower; `watch.max_open` still caps the open sessions, and the followers due at the same moment share one reader process for up to `watch.reader_batch` sessions ([Read rounds](#read-rounds)).
+- Each open session has its own follower; `watch.max_open` still caps the open sessions, and the followers due at the same moment share one reader process for up to 20 sessions ([Read rounds](#read-rounds)).

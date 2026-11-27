@@ -175,12 +175,6 @@
           "minimum": 1,
           "default": 10,
           "description": "How many launches may be open at once; /kharos:setup asks it once. Each open session spends plan usage, and the service publishes no limit of its own."
-        },
-        "reader_batch": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 10,
-          "description": "The most sessions one reader process reads at once. The followers of an account that are due at the same moment share one headless claude -p; more of them than this split into a few."
         }
       }
     },

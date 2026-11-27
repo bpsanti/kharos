@@ -137,7 +137,7 @@ The instruction gets a short footer: the session ends with a `KHAROS-DONE {...}`
 
 By default, `/kharos:run` ends by starting the plugin's `kharos:follow` agent in the background, one per session, and you go on working.
 The follower is a small Haiku agent that sits inside `kharos wait <id>`, which reads the session's log every 15 to 60 seconds and returns only when its state changes.
-The followers due at the same moment read together, in one reader process per round of up to `watch.reader_batch` sessions (10 by default).
+The followers due at the same moment read together, in one reader process per round of up to 20 sessions.
 Its report reaches your session like the result of any background subagent:
 
 - a question from the session, which you answer with `/kharos:send <id> "<answer>"`;

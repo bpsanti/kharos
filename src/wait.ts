@@ -284,13 +284,15 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
         if (!switchedAccount(paths, s, t, opts)) {
           const planned = readsFor(s);
           let tick: number | null = null;
+          let ran = false;
           if (planned.length > 0) {
             const part = await readInRound(
               paths,
               { session: id, reads: planned, seen: s.last_read_at, deadline: start + opts.maxMs, stepMs: opts.minIntervalMs },
               { env: opts.env, now, sleep, read, beat: (at) => takeLease(paths, id, at, process.pid, opts.follower ?? 'agent') },
             );
-            reads += planned.length;
+            ran = part.ran;
+            if (ran) reads += planned.length;
             cost += part.run.cost_usd ?? 0;
             if (!part.run.ok) lastError = part.run.error ?? 'the reader failed';
             tick = part.tick;
@@ -298,8 +300,7 @@ export async function wait(paths: Paths, opts: WaitOptions): Promise<WaitOutcome
           const after = find();
           // A read that never reached the hook leaves last_read_at as it was.
           if (after.last_read_at === s.last_read_at && planned.length > 0) {
-            failures++;
-            if (failures >= MAX_READER_FAILURES) {
+            if (ran && ++failures >= MAX_READER_FAILURES) {
               s = after;
               return done(stopKey(after), false, `${failures} reads in a row did not reach the session (${lastError || 'the reader made no RemoteTrigger call'})`);
             }
